@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/00_Docs/">
+    <File Path="database_features_notes.md" />
+  </Folder>
+  <Project Path="src/SproutDB.DevBench/SproutDB.DevBench.csproj" Id="ec3cae56-be4f-4c60-b022-19de65f57573" />
+  <Project Path="src/SproutDB.Engine/SproutDB.Engine.csproj" Id="cd9b632d-24ff-45e6-949c-b2c54960057a" />
+</Solution>
