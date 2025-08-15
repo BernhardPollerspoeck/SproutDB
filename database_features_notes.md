@@ -281,6 +281,60 @@ list branches protected
 - `protected`: Kritische Branches (main, prod, customer-*/*)
 - Permissions können getrennt vergeben werden
 
+# Branch Aliases
+
+## Konzept
+
+- **Branch Aliases** sind alternative Namen für Branches, pro Datenbank.
+- Aliases sind optional und können überall verwendet werden, wo Branch-Namen erlaubt sind (read/write/query).
+- Jeder Alias zeigt immer auf einen gültigen Branch; wird der Branch gelöscht, wird der Alias ebenfalls entfernt.
+
+## Kommandos
+
+- **Alias erstellen:**  
+  `create alias <alias-name> for branch <branch-name>`
+- **Alias aktualisieren:**  
+  `update alias <alias-name> to branch <branch-name>`
+- **Alias löschen:**  
+  `delete alias <alias-name>`
+- **Aliases auflisten:**  
+  `list aliases`
+- **Verwendung in Queries:**  
+  `get users on branch <alias-name>`  
+  `upsert users on branch <alias-name>`
+
+## Namensgebung & Scope
+
+- Alias-Namen folgen den Branch-Namensregeln.
+- Aliases sind pro Datenbank.
+- Keine Wildcards, keine Multi-Targets.
+
+## Merge-Verhalten
+
+- **Standard:**  
+  `merge <source> into <target>`  
+  → Nur Branches werden gemerged, Aliases bleiben unverändert.
+- **Mit Alias-Move:**  
+  `merge <source> into <target> with alias`  
+  → Alle Aliases, die auf `<source>` zeigen, werden nach dem Merge auf `<target>` verschoben.
+
+## Rechte
+
+- Alias-Erstellung, -Aktualisierung und -Löschung erfordern passende Berechtigungen (z.B. `alias` oder `branch`).
+
+## Audit & Events
+
+- Alle Alias-Operationen werden audit-geloggt.
+- Alias-Änderungen lösen Echtzeit-Benachrichtigungen für abonnierte Clients aus.
+
+## Edge Cases
+
+- Aliases, die auf gelöschte Branches zeigen, werden automatisch entfernt.
+- Mehrere Aliases können auf denselben Branch zeigen.
+
+---
+
+
 ## Auth & Permissions
 
 ### Auth Methods
