@@ -4,7 +4,6 @@ namespace SproutDB.Engine.Execution;
 
 public interface IQueryExecutor
 {
-    void Execute(Node root);
+    ExecutionResult Execute(IStatement statement);
+    ExecutionResult Execute(IStatement statement, ExecutionContext context);
 }
-
-

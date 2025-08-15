@@ -4,7 +4,6 @@ namespace SproutDB.Engine.Compilation;
 
 public interface IQueryCompiler
 {
-    Node Compile(IEnumerable<Token> tokens);
+    IStatement Compile(IEnumerable<Token> tokens);
 }
-
 

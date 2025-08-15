@@ -1,7 +1,8 @@
 ﻿namespace SproutDB.Engine.Compilation;
 
-public abstract class Node
+public enum SortDirection
 {
+    Asc,
+    Desc
 }
-
 

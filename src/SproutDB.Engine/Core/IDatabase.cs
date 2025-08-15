@@ -1,4 +1,5 @@
-﻿namespace SproutDB.Engine.Core;
+﻿
+namespace SproutDB.Engine.Core;
 
 public interface IDatabase
 {

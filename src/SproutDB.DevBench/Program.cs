@@ -20,24 +20,15 @@ var parser = app.Services.GetRequiredService<IQueryParser>();
 var compiler = app.Services.GetRequiredService<IQueryCompiler>();
 var executor = app.Services.GetRequiredService<IQueryExecutor>();
 
+var connection = app.Services.GetRequiredService<ISproutConnection>();
 var server = app.Services.GetRequiredService<ISproutDB>();
 
-var createDatabaseQuery = "create database testdb";
-var createDatabaseTokens = parser.Parse(createDatabaseQuery);
-var createDatabaseAst = compiler.Compile(createDatabaseTokens);
-executor.Execute(createDatabaseAst);
 
-var createTableQuery = "create table users";
-var createTableTokens = parser.Parse(createTableQuery);
-var createTableAst = compiler.Compile(createTableTokens);
-executor.Execute(createTableAst);
+connection.Execute("create database testdb");
+connection.Execute("create table users");
+connection.Execute("add column users.name string");
+connection.Execute("add column users.age number");
 
-var addColumnQuery = "add column users.name string";
-var addColumnTokens = parser.Parse(addColumnQuery);
-var addColumnAst = compiler.Compile(addColumnTokens);
-executor.Execute(addColumnAst);
-
-//TODO: parsing improvement to support [TABLE].[COLUMN] syntax (for now after "Column" Token)
-
+connection.Execute("upsert users { name: 'John Doe', age: 30 }");
 
 Console.WriteLine();
