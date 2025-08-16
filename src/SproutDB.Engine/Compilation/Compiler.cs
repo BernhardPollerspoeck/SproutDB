@@ -73,14 +73,17 @@ internal ref struct Compiler
         };
 
         Advance();
+        var (table, implicitSelect) = ParseTableForQuery(operation);
 
-        var table = ParseTableExpression();
         var joins = ParseJoinClauses();
         var where = ParseOptionalWhereClause();
         var groupBy = ParseOptionalGroupByClause();
         var having = ParseOptionalHavingClause();
         var orderBy = ParseOptionalOrderByClause();
-        var select = ParseOptionalSelectClause();
+
+        var explicitSelect = ParseOptionalSelectClause();
+        var select = !explicitSelect.IsEmpty ? explicitSelect : implicitSelect;
+
         var pagination = ParseOptionalPaginationClause();
 
         return new QueryStatement(position, operation, table, joins, where, groupBy, having, orderBy, select, pagination);
@@ -404,6 +407,41 @@ internal ref struct Compiler
         return new MetaStatement(position, operation, target, source);
     }
 
+    private (TableExpression table, ReadOnlyMemory<Expression> implicitSelect) ParseTableForQuery(QueryOperation operation)
+    {
+        // Start with empty implicit selection
+        ReadOnlyMemory<Expression> implicitSelect = ReadOnlyMemory<Expression>.Empty;
+
+        // Get the table name identifier
+        var position = Current.Position;
+        var tableIdentifier = ExpectIdentifier();
+
+        // Check if we have a dot notation for aggregate operations
+        if (IsAggregateOperation(operation) && Current.Type == TokenType.Dot)
+        {
+            // This is an aggregate operation with a field reference (avg users.age)
+            Advance(); // Consume the dot
+            var fieldName = ExpectIdentifier();
+
+            // Create a field path that includes both table and field
+            var segments = new[] { tableIdentifier, fieldName };
+            var fieldPath = Expression.FieldPath(position, segments);
+
+            // Add this as the implicit selected field
+            implicitSelect = new[] { fieldPath }.AsMemory();
+        }
+
+        // Handle table alias if present
+        string? alias = null;
+        if (Current.Type == TokenType.As)
+        {
+            Advance();
+            alias = ExpectIdentifier();
+        }
+
+        return (new TableExpression(position, tableIdentifier, alias), implicitSelect);
+    }
+
     private TableExpression ParseTableExpression()
     {
         var position = Current.Position;
@@ -523,6 +561,13 @@ internal ref struct Compiler
     {
         var left = ParsePrimaryExpression();
 
+        if (left.Type == ExpressionType.FieldPath &&
+            (Current.Type == TokenType.Last || Current.Type == TokenType.This ||
+             Current.Type == TokenType.Before || Current.Type == TokenType.After))
+        {
+            return ParseDateComparisonExpression(left);
+        }
+
         if (IsComparisonOperator(Current.Type))
         {
             var position = Current.Position;
@@ -546,8 +591,84 @@ internal ref struct Compiler
             TokenType.Null => ParseNullLiteral(),
             TokenType.LeftBracket => ParseArrayLiteral(),
             TokenType.LeftParen => ParseParenthesizedExpression(),
+            TokenType.Not => ParseNotExpression(),
             _ => throw new ParseException($"Unexpected token in expression: '{Current.Value}'", Current.Position)
         };
+    }
+    private Expression ParseDateComparisonExpression(Expression dateField)
+    {
+        var position = Current.Position;
+        var dateOperator = Current.Type;
+        Advance();
+
+        switch (dateOperator)
+        {
+            case TokenType.Last:
+                // Handle "last X days/weeks/months/years"
+                var amount = int.Parse(ExpectNumber());
+                var unit = Current.Type switch
+                {
+                    TokenType.Days => "days",
+                    TokenType.Weeks => "weeks",
+                    TokenType.Month => "months", // Handles both singular and plural forms
+                    TokenType.Year => "years",
+                    _ => throw new ParseException($"Expected time unit (days, weeks, month, year) but found '{Current.Value}'", Current.Position)
+                };
+                Advance(); // Consume the time unit token
+
+                // Create a date range comparison
+                return Expression.Comparison(
+                    position,
+                    ComparisonOperator.GreaterThanOrEqual,
+                    dateField,
+                    Expression.Literal(position, LiteralType.Date, $"now-{amount}-{unit}")
+                );
+
+            case TokenType.This:
+                // Handle "this month/year/week"
+                var period = Current.Type switch
+                {
+                    TokenType.Month => "month",
+                    TokenType.Year => "year",
+                    TokenType.Weeks => "week", // Assuming the token is the same for singular/plural
+                    TokenType.Days => "day",
+                    _ => throw new ParseException($"Expected time period (month, year, week, day) but found '{Current.Value}'", Current.Position)
+                };
+                Advance(); // Consume the period token
+
+                // Create a period-based comparison
+                return Expression.Comparison(
+                    position,
+                    ComparisonOperator.GreaterThanOrEqual,
+                    dateField,
+                    Expression.Literal(position, LiteralType.Date, $"this-{period}")
+                );
+
+            case TokenType.Before:
+                // Handle "before 'date'"
+                var beforeDate = ParsePrimaryExpression();
+
+                return Expression.Comparison(
+                    position,
+                    ComparisonOperator.LessThan,
+                    dateField,
+                    beforeDate
+                );
+
+            case TokenType.After:
+                // Handle "after 'date'"
+                var afterDate = ParsePrimaryExpression();
+
+                return Expression.Comparison(
+                    position,
+                    ComparisonOperator.GreaterThan,
+                    dateField,
+                    afterDate
+                );
+
+            default:
+                throw new ParseException($"Unexpected date operator: {dateOperator}", position);
+        }
     }
 
     private Expression ParseStringLiteral()
@@ -608,6 +729,13 @@ internal ref struct Compiler
         var expression = ParseOrExpression();
         Expect(TokenType.RightParen);
         return expression;
+    }
+    private Expression ParseNotExpression()
+    {
+        var position = Current.Position;
+        Advance();
+        var operand = ParseComparisonExpression();
+        return Expression.Unary(position, LogicalOperator.Not, operand);
     }
 
     private Expression ParseJsonExpression()
@@ -782,6 +910,15 @@ internal ref struct Compiler
         var size = int.Parse(ExpectNumber());
 
         return new PaginationExpression(position, page, size);
+    }
+
+    private bool IsAggregateOperation(QueryOperation operation)
+    {
+        return operation switch
+        {
+            QueryOperation.Count or QueryOperation.Sum or QueryOperation.Avg => true,
+            _ => false
+        };
     }
 
     // Helper Methods

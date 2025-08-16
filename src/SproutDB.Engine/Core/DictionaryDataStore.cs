@@ -204,6 +204,7 @@ public class DictionaryDataStore(ISproutDB server) : IDataStore
         {
             ExpressionType.Comparison => EvaluateComparison(row, filter),
             ExpressionType.Binary => EvaluateBinary(row, filter),
+            ExpressionType.Unary => EvaluateUnary(row, filter),
             _ => true // Default to include row if we can't evaluate
         };
     }
@@ -227,6 +228,7 @@ public class DictionaryDataStore(ISproutDB server) : IDataStore
             ComparisonOperator.LessThan => CompareValues(leftValue, rightValue) < 0,
             ComparisonOperator.LessThanOrEqual => CompareValues(leftValue, rightValue) <= 0,
             ComparisonOperator.Contains => ContainsValue(leftValue, rightValue),
+            ComparisonOperator.In => InValue(leftValue, rightValue),
             _ => false
         };
     }
@@ -247,16 +249,83 @@ public class DictionaryDataStore(ISproutDB server) : IDataStore
         };
     }
 
+    private bool EvaluateUnary(Row row, Expression unary)
+    {
+        var unData = unary.As<Expression.UnaryData>();
+
+        var result = EvaluateFilter(row, unData.Operand);
+
+        return unData.Operator switch
+        {
+            LogicalOperator.Not => !result,
+            _ => false
+        };
+
+    }
+
+
     private static object? GetFieldValue(Row row, Expression fieldExpr)
     {
         if (fieldExpr.Type == ExpressionType.FieldPath)
         {
             var segments = fieldExpr.As<ReadOnlyMemory<string>>().Span;
-            if (segments.Length > 0)
+            if (segments.Length == 0)
+                return null;
+
+            // Start with the first segment to get the root field
+            if (!row.Fields.TryGetValue(segments[0], out var currentValue))
+                return null;
+
+            // If there's only one segment, return the value
+            if (segments.Length == 1)
+                return currentValue;
+
+            // For nested paths, traverse the object hierarchy
+            for (int i = 1; i < segments.Length; i++)
             {
-                var fieldName = segments[^1]; // Last segment is the field name
-                return row.Fields.TryGetValue(fieldName, out var value) ? value : null;
+                if (currentValue == null)
+                    return null;
+
+                // Handle nested dictionary case
+                if (currentValue is Dictionary<string, object> nestedDict)
+                {
+                    if (!nestedDict.TryGetValue(segments[i], out currentValue))
+                        return null;
+                }
+                // Handle JsonData case - nested within Expression.JsonData
+                else if (currentValue is Expression.JsonData jsonData)
+                {
+                    var jsonValue = jsonData.Value;
+                    if (jsonValue is Dictionary<string, Expression> expressionDict)
+                    {
+                        if (!expressionDict.TryGetValue(segments[i], out var nextExpr))
+                            return null;
+                        
+                        currentValue = nextExpr.Type == ExpressionType.JsonValue
+                            ? (nextExpr.As<Expression.JsonData>().Value)
+                            : nextExpr;
+                    }
+                    else
+                        return null;
+                }
+                // Handle Dictionary<string, Expression> case
+                else if (currentValue is Dictionary<string, Expression> expressionDict)
+                {
+                    if (!expressionDict.TryGetValue(segments[i], out var nextExpr))
+                        return null;
+                    
+                    currentValue = nextExpr.Type == ExpressionType.JsonValue
+                        ? (nextExpr.As<Expression.JsonData>().Value)
+                        : nextExpr;
+                }
+                else
+                {
+                    // If we can't navigate further but still have segments, return null
+                    return null;
+                }
             }
+
+            return currentValue;
         }
         return null;
     }
@@ -280,6 +349,7 @@ public class DictionaryDataStore(ISproutDB server) : IDataStore
             LiteralType.Number => ParseNumber(litData.Value),
             LiteralType.Boolean => bool.Parse(litData.Value),
             LiteralType.Null => null,
+            LiteralType.Date => ParseDate(litData.Value),
             _ => litData.Value
         };
     }
@@ -307,6 +377,57 @@ public class DictionaryDataStore(ISproutDB server) : IDataStore
         return 0;
     }
 
+    private static object ParseDate(string? value)
+    {
+        //possible:
+        //now-7-days  [days, weeks, months, years]
+        //this-month [day, week, month, year]
+        //a date value
+
+        if (string.IsNullOrEmpty(value)) return DateTime.Now;
+
+        if (value.StartsWith("now"))
+        {
+            var parts = value.Split('-');
+            if (parts.Length > 1 && int.TryParse(parts[1], out var amount) && parts.Length > 2)
+            {
+                var timeUnit = parts[2].ToLowerInvariant();
+                return timeUnit switch
+                {
+                    "days" => DateTime.Today.AddDays(-amount),
+                    "weeks" => DateTime.Today.AddDays(-amount * 7),
+                    "months" => DateTime.Today.AddMonths(-amount),
+                    "years" => DateTime.Today.AddYears(-amount),
+                    _ => DateTime.Today
+                };
+            }
+        }
+        else if (value.StartsWith("this-"))
+        {
+            var parts = value.Split('-');
+            if (parts.Length > 1)
+            {
+                var timeUnit = parts[1].ToLowerInvariant();
+                return timeUnit switch
+                {
+                    "day" => DateTime.Today,
+                    "week" => DateTime.Today.AddDays(-(int)DateTime.Today.DayOfWeek),
+                    "month" => new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1),
+                    "year" => new DateTime(DateTime.Today.Year, 1, 1),
+                    _ => DateTime.Today
+                };
+            }
+        }
+        else if (DateTime.TryParse(value, out var dateValue))
+        {
+            return dateValue;
+        }
+        return DateTime.Now; // Default to now if parsing fails
+
+
+    }
+
+
     private static int CompareValues(object? left, object? right)
     {
         if (left == null && right == null) return 0;
@@ -320,6 +441,11 @@ public class DictionaryDataStore(ISproutDB server) : IDataStore
             var rightNum = Convert.ToDouble(right);
             return leftNum.CompareTo(rightNum);
         }
+        //Try DateTime comparison
+        if ((left is DateTime leftDate || left is string leftString && DateTime.TryParse(leftString, out leftDate)) && right is DateTime rightDate)
+        {
+            return leftDate.CompareTo(rightDate);
+        }
 
         // Fall back to string comparison
         return string.Compare(left.ToString(), right.ToString(), StringComparison.OrdinalIgnoreCase);
@@ -330,6 +456,32 @@ public class DictionaryDataStore(ISproutDB server) : IDataStore
         return container is not null
             && value is not null
             && container.ToString()!.Contains(value.ToString()!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool InValue(object? left, object? right)
+    {
+        if (left is null || right is null)
+            return false;
+
+        // Handle the case where right is an array of JsonValue expressions
+        if (right is Expression[] jsonValues)
+        {
+            var leftStr = left.ToString();
+
+            foreach (var expr in jsonValues)
+            {
+                if (expr.Type == ExpressionType.JsonValue)
+                {
+                    var jsonData = expr.As<Expression.JsonData>();
+                    var valueStr = jsonData.Value?.ToString();
+
+                    if (valueStr != null && string.Equals(leftStr, valueStr, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static bool IsNumeric(object value)

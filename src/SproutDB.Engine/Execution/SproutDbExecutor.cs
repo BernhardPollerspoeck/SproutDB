@@ -149,25 +149,188 @@ public class SproutDbExecutor(
 
     private ExecutionResult ExecuteSumQuery(QueryStatement query, ExecutionContext context)
     {
-        // TODO: Implement sum aggregation based on select fields
-        var rows = dataStore.GetRows(query.Table.Name, query.Where);
+        // Get rows based on where clause
+        var rows = dataStore.GetRows(query.Table.Name, query.Where).ToList();
 
-        // For now, return placeholder
+        if (rows.Count == 0)
+        {
+            // No rows to sum, return null
+            return ExecutionResult.CreateOk(
+                data: null,
+                rowsScanned: 0
+            );
+        }
+
+        // If no specific fields are selected, we can't calculate a sum
+        if (query.Select.Length == 0)
+        {
+            return ExecutionResult.CreateError("No field specified for SUM operation");
+        }
+
+        // Extract the field name from the first select expression
+        var fieldName = ExtractFieldName(query.Select.Span[0]);
+
+        if (string.IsNullOrEmpty(fieldName))
+        {
+            return ExecutionResult.CreateError("Invalid field for SUM operation");
+        }
+
+        // Calculate sum in a single pass for performance
+        double sum = 0;
+        var type = typeof(int);
+
+        foreach (var row in rows)
+        {
+            if (row.Fields.TryGetValue(fieldName, out var value) && value != null)
+            {
+                // Try to convert the value to a numeric type
+                if (value is int intValue)
+                {
+                    sum += intValue;
+                    type = typeof(int);
+                }
+                else if (value is double doubleValue)
+                {
+                    sum += doubleValue;
+                    type = typeof(double);
+                }
+                else if (value is long longValue)
+                {
+                    sum += longValue;
+                    type = typeof(long);
+                }
+                else if (value is decimal decimalValue)
+                {
+                    sum += (double)decimalValue;
+                    type = typeof(decimal);
+                }
+                else if (value is float floatValue)
+                {
+                    sum += floatValue;
+                    type = typeof(float);
+                }
+                else if (double.TryParse(value.ToString(), out var parsedValue))
+                {
+                    sum += parsedValue;
+                    type = typeof(double);
+                }
+            }
+        }
+
+        object ConvertWithTypePromotion(double sum, Type baseType)
+        {
+            // Check for overflow and promote types as needed
+            if (baseType == typeof(int))
+            {
+                if (sum > int.MaxValue || sum < int.MinValue)
+                    return (long)sum; // Promote to long
+                return (int)sum;
+            }
+            else if (baseType == typeof(long))
+            {
+                if (sum > long.MaxValue || sum < long.MinValue)
+                    return sum; // Promote to double
+                return (long)sum;
+            }
+            else if (baseType == typeof(float))
+            {
+                if (sum > float.MaxValue || sum < float.MinValue)
+                    return sum; // Promote to double
+                return (float)sum;
+            }
+            else if (baseType == typeof(decimal))
+            {
+                if (sum > (double)decimal.MaxValue || sum < (double)decimal.MinValue)
+                    return sum; // Use double if beyond decimal range
+                return (decimal)sum;
+            }
+
+            // Default to the base type conversion
+            return Convert.ChangeType(sum, baseType);
+        }
+
         return ExecutionResult.CreateOk(
-            data: "SUM operation - not yet implemented",
-            rowsScanned: rows.Count()
+            data: ConvertWithTypePromotion(sum, type),
+            rowsScanned: rows.Count
         );
     }
 
     private ExecutionResult ExecuteAvgQuery(QueryStatement query, ExecutionContext context)
     {
-        // TODO: Implement average aggregation based on select fields
-        var rows = dataStore.GetRows(query.Table.Name, query.Where);
+        // Get rows based on where clause
+        var rows = dataStore.GetRows(query.Table.Name, query.Where).ToList();
 
-        // For now, return placeholder
+        if (rows.Count == 0)
+        {
+            // No rows to average, return null
+            return ExecutionResult.CreateOk(
+                data: null,
+                rowsScanned: 0
+            );
+        }
+
+        // If no specific fields are selected, we can't calculate an average
+        if (query.Select.Length == 0)
+        {
+            return ExecutionResult.CreateError("No field specified for AVG operation");
+        }
+
+        // Extract the field name from the first select expression
+        var fieldName = ExtractFieldName(query.Select.Span[0]);
+
+        if (string.IsNullOrEmpty(fieldName))
+        {
+            return ExecutionResult.CreateError("Invalid field for AVG operation");
+        }
+
+        // Calculate average in a single pass for performance
+        double sum = 0;
+        var count = 0;
+
+        foreach (var row in rows)
+        {
+            if (row.Fields.TryGetValue(fieldName, out var value) && value != null)
+            {
+                // Try to convert the value to a numeric type
+                if (value is int intValue)
+                {
+                    sum += intValue;
+                    count++;
+                }
+                else if (value is double doubleValue)
+                {
+                    sum += doubleValue;
+                    count++;
+                }
+                else if (value is long longValue)
+                {
+                    sum += longValue;
+                    count++;
+                }
+                else if (value is decimal decimalValue)
+                {
+                    sum += (double)decimalValue;
+                    count++;
+                }
+                else if (value is float floatValue)
+                {
+                    sum += floatValue;
+                    count++;
+                }
+                else if (double.TryParse(value.ToString(), out var parsedValue))
+                {
+                    sum += parsedValue;
+                    count++;
+                }
+            }
+        }
+
+        // Return the average
+        double average = count > 0 ? sum / count : 0;
+
         return ExecutionResult.CreateOk(
-            data: "AVG operation - not yet implemented",
-            rowsScanned: rows.Count()
+            data: average,
+            rowsScanned: rows.Count
         );
     }
 

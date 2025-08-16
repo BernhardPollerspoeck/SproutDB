@@ -6,6 +6,7 @@ public enum ExpressionType
     Binary,
     Comparison,
     Literal,
-    JsonValue
+    JsonValue,
+    Unary,
 }
 

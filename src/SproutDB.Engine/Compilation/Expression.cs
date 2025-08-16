@@ -1,4 +1,6 @@
-﻿namespace SproutDB.Engine.Compilation;
+﻿using static SproutDB.Engine.Compilation.Expression;
+
+namespace SproutDB.Engine.Compilation;
 
 public readonly struct Expression
 {
@@ -21,6 +23,9 @@ public readonly struct Expression
     public static Expression Binary(int position, LogicalOperator op, Expression left, Expression right)
         => new(ExpressionType.Binary, position, new BinaryData(op, left, right));
 
+    public static Expression Unary(int position, LogicalOperator op, Expression operand)
+        => new(ExpressionType.Unary, position, new UnaryData(op, operand));
+
     public static Expression Comparison(int position, ComparisonOperator op, Expression left, Expression right)
         => new(ExpressionType.Comparison, position, new ComparisonData(op, left, right));
 
@@ -42,6 +47,17 @@ public readonly struct Expression
             Operator = op;
             Left = left;
             Right = right;
+        }
+    }
+    public readonly struct UnaryData
+    {
+        public LogicalOperator Operator { get; }
+        public Expression Operand { get; }
+
+        public UnaryData(LogicalOperator op, Expression operand)
+        {
+            Operator = op;
+            Operand = operand;
         }
     }
 
