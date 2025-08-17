@@ -74,6 +74,8 @@ SproutDB is currently in active development. We're working hard to bring all the
 
 ## Contribute
 
+- INFO: due to the early stages of the project real contributions dont help much. If you want to help, the docs and unittests would be. great place. if you spot a missed case or any other flaw i am happy to have them pointed out
+
 We welcome contributions of all kinds! Whether you're a database expert, a frontend developer who wants a better database experience, or someone who can help with documentation, there's a place for you in the SproutDB community.
 
 Check our issues for ways to get involved or reach out to discuss features you'd like to see or improvements you'd like to make.
