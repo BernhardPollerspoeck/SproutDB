@@ -90,7 +90,7 @@ public class SumQueries : ISproutConnectionTestsSetup
     }
 
     [TestMethod]
-    public void Test_SumDecimalValues_MaintainsDecimalType()
+    public void Test_SumDoubleValues_MaintainsDoubleType()
     {
         // Arrange
         var createDbResult = _connection.Execute($"create database {TEST_DATABASE}");

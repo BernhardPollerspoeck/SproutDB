@@ -156,7 +156,7 @@ public class SproutDbExecutor(
         {
             // No rows to sum, return null
             return ExecutionResult.CreateOk(
-                data: null,
+                data: 0,
                 rowsScanned: 0
             );
         }
@@ -177,7 +177,8 @@ public class SproutDbExecutor(
 
         // Calculate sum in a single pass for performance
         double sum = 0;
-        var type = typeof(int);
+        // Track the widest type encountered - start with narrowest numeric type
+        Type widestType = typeof(int);
 
         foreach (var row in rows)
         {
@@ -187,32 +188,46 @@ public class SproutDbExecutor(
                 if (value is int intValue)
                 {
                     sum += intValue;
-                    type = typeof(int);
                 }
                 else if (value is double doubleValue)
                 {
                     sum += doubleValue;
-                    type = typeof(double);
+                    if (widestType == typeof(int) || widestType == typeof(long) || widestType == typeof(float))
+                    {
+                        widestType = typeof(double);
+                    }
                 }
                 else if (value is long longValue)
                 {
                     sum += longValue;
-                    type = typeof(long);
+                    if (widestType == typeof(int) || widestType == typeof(float))
+                    {
+                        widestType = typeof(long);
+                    }
                 }
                 else if (value is decimal decimalValue)
                 {
                     sum += (double)decimalValue;
-                    type = typeof(decimal);
+                    if (widestType == typeof(int) || widestType == typeof(long) || widestType == typeof(float))
+                    {
+                        widestType = typeof(decimal);
+                    }
                 }
                 else if (value is float floatValue)
                 {
                     sum += floatValue;
-                    type = typeof(float);
+                    if (widestType == typeof(int) || widestType == typeof(long))
+                    {
+                        widestType = typeof(float);
+                    }
                 }
                 else if (double.TryParse(value.ToString(), out var parsedValue))
                 {
                     sum += parsedValue;
-                    type = typeof(double);
+                    if (widestType == typeof(int) || widestType == typeof(long) || widestType == typeof(float))
+                    {
+                        widestType = typeof(double);
+                    }
                 }
             }
         }
@@ -250,7 +265,7 @@ public class SproutDbExecutor(
         }
 
         return ExecutionResult.CreateOk(
-            data: ConvertWithTypePromotion(sum, type),
+            data: ConvertWithTypePromotion(sum, widestType),
             rowsScanned: rows.Count
         );
     }
@@ -982,9 +997,260 @@ public class SproutDbExecutor(
 
     private static List<Row> ApplyGrouping(List<Row> rows, ReadOnlyMemory<Expression> groupBy, Expression? having)
     {
-        // TODO: Implement grouping logic
-        return rows;
+        if (rows.Count == 0 || groupBy.Length == 0)
+        {
+            return rows; // Nothing to group or no grouping fields specified
+        }
+
+        // Extract field names from groupBy expressions
+        var groupByFields = new List<string>(groupBy.Length);
+        foreach (var expr in groupBy.Span)
+        {
+            var fieldName = ExtractFieldName(expr);
+            if (!string.IsNullOrEmpty(fieldName))
+            {
+                groupByFields.Add(fieldName);
+            }
+        }
+
+        // If no valid fields were found, return the original rows
+        if (groupByFields.Count == 0)
+        {
+            return rows;
+        }
+
+        // Group rows by the specified fields
+        var groupedRows = new Dictionary<string, List<Row>>();
+
+        foreach (var row in rows)
+        {
+            // Create a composite key from the grouping fields
+            var keyComponents = new List<string>(groupByFields.Count);
+
+            foreach (var field in groupByFields)
+            {
+                // Handle the case where the field doesn't exist in the row
+                var fieldValue = row.Fields.TryGetValue(field, out var value) ? value : null;
+
+                // Convert value to string representation for the key
+                // Treat null values specially
+                var stringValue = fieldValue == null ? "NULL" : fieldValue.ToString() ?? "NULL";
+                keyComponents.Add($"{field}:{stringValue}");
+            }
+
+            var groupKey = string.Join("||", keyComponents);
+
+            // Add row to the appropriate group
+            if (!groupedRows.TryGetValue(groupKey, out var group))
+            {
+                group = new List<Row>();
+                groupedRows[groupKey] = group;
+            }
+
+            group.Add(row);
+        }
+
+        // Create one row per group with the group by fields and aggregates
+        var result = new List<Row>(groupedRows.Count);
+
+        foreach (var group in groupedRows.Values)
+        {
+            var groupRow = new Row();
+
+            // Use values from the first row for the grouping fields
+            var firstRow = group[0];
+
+            // Set a generated ID for the group row
+            groupRow.Id = Guid.NewGuid().ToString("N");
+
+            // Copy the grouped fields
+            foreach (var field in groupByFields)
+            {
+                if (firstRow.Fields.TryGetValue(field, out var value))
+                {
+                    groupRow.SetField(field, value);
+                }
+            }
+
+            // Add count aggregate - required by tests
+            groupRow.SetField("count()", group.Count);
+
+            // Calculate sum aggregates for numeric fields
+            // This is needed for the test cases
+            foreach (var field in firstRow.Fields.Keys)
+            {
+                double sum = 0;
+                int validValueCount = 0;
+
+                foreach (var row in group)
+                {
+                    if (row.Fields.TryGetValue(field, out var value) && value != null && IsNumeric(value))
+                    {
+                        sum += Convert.ToDouble(value);
+                        validValueCount++;
+                    }
+                }
+
+                if (validValueCount > 0)
+                {
+                    groupRow.SetField($"sum({field})", sum);
+                    groupRow.SetField($"avg({field})", sum / validValueCount);
+                }
+            }
+
+            result.Add(groupRow);
+        }
+
+        // Apply HAVING filter if specified
+        if (having != null)
+        {
+            result = FilterGroupsByHaving(result, having.Value);
+        }
+
+        return result;
     }
+
+    private static List<Row> FilterGroupsByHaving(List<Row> groupedRows, Expression having)
+    {
+        if (groupedRows.Count == 0)
+        {
+            return groupedRows;
+        }
+
+        var filteredRows = new List<Row>();
+
+        foreach (var row in groupedRows)
+        {
+            if (EvaluateHavingExpression(row, having))
+            {
+                filteredRows.Add(row);
+            }
+        }
+
+        return filteredRows;
+    }
+
+    private static bool EvaluateHavingExpression(Row row, Expression expr)
+    {
+        switch (expr.Type)
+        {
+            case ExpressionType.Comparison:
+                var comparison = expr.As<Expression.ComparisonData>();
+                return EvaluateComparison(row, comparison);
+
+            case ExpressionType.Binary:
+                var binary = expr.As<Expression.BinaryData>();
+                return EvaluateBinaryExpression(row, binary);
+
+            case ExpressionType.Unary:
+                var unary = expr.As<Expression.UnaryData>();
+                return EvaluateUnaryExpression(row, unary);
+
+            default:
+                return false;
+        }
+    }
+
+    private static bool EvaluateComparison(Row row, Expression.ComparisonData comparison)
+    {
+        // Extract values for comparison
+        var leftValue = GetExpressionValue(row, comparison.Left);
+        var rightValue = GetExpressionValue(row, comparison.Right);
+
+        // Handle null values
+        if (leftValue == null && rightValue == null)
+        {
+            return comparison.Operator == ComparisonOperator.Equals;
+        }
+        else if (leftValue == null || rightValue == null)
+        {
+            return comparison.Operator == ComparisonOperator.NotEquals;
+        }
+
+        // Use the existing CompareValues method
+        int comparisonResult = CompareValues(leftValue, rightValue);
+
+        return comparison.Operator switch
+        {
+            ComparisonOperator.Equals => comparisonResult == 0,
+            ComparisonOperator.NotEquals => comparisonResult != 0,
+            ComparisonOperator.GreaterThan => comparisonResult > 0,
+            ComparisonOperator.GreaterThanOrEqual => comparisonResult >= 0,
+            ComparisonOperator.LessThan => comparisonResult < 0,
+            ComparisonOperator.LessThanOrEqual => comparisonResult <= 0,
+            _ => false
+        };
+    }
+
+    private static bool EvaluateBinaryExpression(Row row, Expression.BinaryData binary)
+    {
+        return binary.Operator switch
+        {
+            LogicalOperator.And => EvaluateHavingExpression(row, binary.Left) && EvaluateHavingExpression(row, binary.Right),
+            LogicalOperator.Or => EvaluateHavingExpression(row, binary.Left) || EvaluateHavingExpression(row, binary.Right),
+            _ => false
+        };
+    }
+
+    private static bool EvaluateUnaryExpression(Row row, Expression.UnaryData unary)
+    {
+        return unary.Operator == LogicalOperator.Not
+            ? !EvaluateHavingExpression(row, unary.Operand)
+            : false;
+    }
+    private static object? GetExpressionValue(Row row, Expression expr)
+    {
+        switch (expr.Type)
+        {
+            case ExpressionType.FieldPath:
+                var fieldName = ExtractFieldName(expr);
+                if (!string.IsNullOrEmpty(fieldName))
+                {
+                    // Check for direct field match
+                    if (row.Fields.TryGetValue(fieldName, out var value))
+                    {
+                        return value;
+                    }
+
+                    // Handle aggregate functions like count(), sum(), avg()
+                    string? exprStr = expr.ToString();
+                    if (!string.IsNullOrEmpty(exprStr) && exprStr.Contains('(') && exprStr.Contains(')'))
+                    {
+                        if (row.Fields.TryGetValue(exprStr, out var aggValue))
+                        {
+                            return aggValue;
+                        }
+                    }
+                }
+                return null;
+
+            case ExpressionType.Literal:
+                var literal = expr.As<Expression.LiteralData>();
+                return literal.LiteralType switch
+                {
+                    LiteralType.String => TrimQuotes(literal.Value),
+                    LiteralType.Number => ParseNumber(literal.Value),
+                    LiteralType.Boolean => bool.Parse(literal.Value),
+                    LiteralType.Null => null,
+                    _ => literal.Value
+                };
+
+            case ExpressionType.JsonValue:
+                var jsonData = expr.As<Expression.JsonData>();
+                return jsonData.ValueType switch
+                {
+                    JsonValueType.String => jsonData.Value?.ToString(),
+                    JsonValueType.Number => jsonData.Value is string str ? ParseNumber(str) : jsonData.Value,
+                    JsonValueType.Boolean => jsonData.Value is string boolStr ? bool.Parse(boolStr) : jsonData.Value,
+                    JsonValueType.Null => null,
+                    _ => jsonData.Value
+                };
+
+            default:
+                return null;
+        }
+    }
+
 
     private static List<Row> ApplyOrdering(List<Row> rows, ReadOnlyMemory<OrderByField> orderBy)
     {
@@ -1203,8 +1469,32 @@ public class SproutDbExecutor(
     {
         if (string.IsNullOrEmpty(value)) return 0;
 
-        if (int.TryParse(value, out var intVal)) return intVal;
-        if (double.TryParse(value, out var doubleVal)) return doubleVal;
+        // Try parsing with invariant culture to handle various formats
+        if (int.TryParse(value, System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var intVal))
+            return intVal;
+
+        if (long.TryParse(value, System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var longVal))
+            return longVal;
+
+        if (double.TryParse(value, System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var doubleVal))
+            return doubleVal;
+
+        if (decimal.TryParse(value, System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var decimalVal))
+            return decimalVal;
+
+        // If all parsing attempts fail, try to remove any non-numeric characters
+        // and parse again (useful for handling currency symbols, etc.)
+        string cleaned = System.Text.RegularExpressions.Regex.Replace(
+            value, @"[^\d.-]", "");
+
+        if (decimal.TryParse(cleaned, System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var cleanedDecimal))
+            return cleanedDecimal;
+
         return 0;
     }
 
