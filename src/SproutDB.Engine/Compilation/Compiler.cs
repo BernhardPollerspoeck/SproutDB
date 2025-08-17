@@ -479,7 +479,7 @@ internal ref struct Compiler
 
         var leftPath = ParseFieldPath();
         Expect(TokenType.Arrow);
-        var rightPath = ParseFieldPath();
+        var rightPath = ParseFieldPath(false);
         Expect(TokenType.As);
         var alias = ExpectIdentifier();
 
@@ -497,11 +497,19 @@ internal ref struct Compiler
             Advance();
             Expect(TokenType.RightParen);
         }
+        
+        // Parse ON condition if present
+        Expression? onCondition = null;
+        if (Current.Type == TokenType.On)
+        {
+            Advance();
+            onCondition = ParseComparisonExpression();
+        }
 
-        return new JoinExpression(position, leftPath, rightPath, alias, joinType);
+        return new JoinExpression(position, leftPath, rightPath, alias, joinType, onCondition);
     }
 
-    private Expression ParseFieldPath()
+    private Expression ParseFieldPath(bool processAs = true)
     {
         var position = Current.Position;
 
@@ -548,7 +556,7 @@ internal ref struct Compiler
             var functionFieldPathExpr = Expression.FieldPath(position, functionSegments);
 
             // Check for alias (e.g., "as count")
-            if (Current.Type == TokenType.As)
+            if (processAs && Current.Type == TokenType.As)
             {
                 Advance(); // Consume "as"
 
@@ -586,7 +594,7 @@ internal ref struct Compiler
         var fieldPathExpr = Expression.FieldPath(position, segments.ToArray());
 
         // Check for alias (e.g., "field as alias")
-        if (Current.Type == TokenType.As)
+        if (processAs && Current.Type == TokenType.As)
         {
             Advance(); // Consume "as"
 

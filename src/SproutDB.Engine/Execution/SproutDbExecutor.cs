@@ -183,7 +183,7 @@ public class SproutDbExecutor(
 
         foreach (var row in rows)
         {
-            if (row.Fields.TryGetValue(field.Value.Name, out var value) && value != null)
+            if (row.Fields.TryGetValue(field.Value.FieldNameOnly ?? field.Value.Name, out var value) && value != null)
             {
                 // Try to convert the value to a numeric type
                 if (value is int intValue)
@@ -305,7 +305,7 @@ public class SproutDbExecutor(
 
         foreach (var row in rows)
         {
-            if (row.Fields.TryGetValue(field.Value.Name, out var value) && value != null)
+            if (row.Fields.TryGetValue(field.Value.FieldNameOnly ?? field.Value.Name, out var value) && value != null)
             {
                 // Try to convert the value to a numeric type
                 if (value is int intValue)
@@ -989,11 +989,194 @@ public class SproutDbExecutor(
         );
     }
 
-    // Helper methods
-    private static List<Row> ApplyJoins(List<Row> rows, ReadOnlyMemory<JoinExpression> joins)
+    private List<Row> ApplyJoins(List<Row> rows, ReadOnlyMemory<JoinExpression> joins)
     {
-        // TODO: Implement join logic
-        return rows;
+        if (rows.Count == 0 || joins.IsEmpty)
+        {
+            return rows; // Nothing to join or no rows to process
+        }
+
+        //TODO: preprocess the existing rows: add table/alias.
+        //this way the join apply will work unified. also this would be done on first join anyway
+
+        // Process each join sequentially
+        var result = rows;
+        foreach (var join in joins.Span)
+        {
+            result = ApplySingleJoin(result, join);
+        }
+
+        return result;
+    }
+
+    private List<Row> ApplySingleJoin(List<Row> leftRows, JoinExpression join)
+    {
+        if (leftRows.Count == 0)
+        {
+            return leftRows; // No rows to join
+        }
+
+        // Extract the field names for the join condition
+        var leftFieldInfo = ExtractField(join.LeftPath);
+        var rightFieldInfo = ExtractField(join.RightPath);
+
+        if (!leftFieldInfo.HasValue || !rightFieldInfo.HasValue)
+        {
+            // Invalid join condition, return original rows
+            return leftRows;
+        }
+
+        var leftField = leftFieldInfo.Value.FieldNameOnly ?? leftFieldInfo.Value.Name;
+        var leftTableName = ExtractTableName(join.LeftPath);
+        var rightField = rightFieldInfo.Value.FieldNameOnly ?? rightFieldInfo.Value.Name;
+        var rightTableName = join.Alias;
+
+        // Extract right table name from the right field path
+        string rightTableNameFromPath = ExtractTableName(join.RightPath);
+
+
+        // Get all left rows that have the join field
+        var leftJoinValues = new HashSet<object>();
+        foreach (var row in leftRows)
+        {
+            if (row.Fields.TryGetValue(leftField, out var value) && value != null)
+            {
+                leftJoinValues.Add(value);
+            }
+        }
+
+        var rightTableData = dataStore.GetRows(rightTableNameFromPath);
+
+        // Create an index for quick lookup of right rows by join field value
+        var rightRowIndex = new Dictionary<object, List<Row>>();
+        foreach (var rightRow in rightTableData)
+        {
+            if (rightRow.Fields.TryGetValue(rightField, out var joinValue) && joinValue != null)
+            {
+                if (!rightRowIndex.TryGetValue(joinValue, out var rows))
+                {
+                    rows = new List<Row>();
+                    rightRowIndex[joinValue] = rows;
+                }
+                rows.Add(rightRow);
+            }
+        }
+
+
+        var result = new List<Row>();
+
+        foreach (var leftRow in leftRows)
+        {
+            bool hasMatch = false;
+
+            // Check if left row has the join field value
+            if (leftRow.Fields.TryGetValue(leftField, out var leftJoinValue) && leftJoinValue != null)
+            {
+                // Look for matching right rows
+                if (rightRowIndex.TryGetValue(leftJoinValue, out var matchingRightRows))
+                {
+                    // Create a joined row for each match
+                    foreach (var rightRow in matchingRightRows)
+                    {
+                        // Create new row with left row's ID
+                        var joinedRow = new Row { Id = leftRow.Id };
+
+                        // Copy all fields from left row
+                        foreach (var (key, value) in leftRow.Fields)
+                        {
+                            joinedRow.SetField($"{leftTableName}.{key}", value);
+                        }
+
+                        // Add fields from right row with the alias prefix
+                        foreach (var (key, value) in rightRow.Fields)
+                        {
+                            joinedRow.SetField($"{rightTableName}.{key}", value);
+                        }
+
+                        if (join.OnCondition != null)
+                        {
+                            // Evaluate the condition on the joined row
+                            if (!EvaluateExpression(joinedRow, join.OnCondition.Value))
+                            {
+                                continue; // Skip this row if it doesn't satisfy the ON condition
+                            }
+                        }
+
+                        result.Add(joinedRow);
+                        hasMatch = true;
+                    }
+                }
+            }
+
+            // For LEFT joins, include left rows with no match
+            if (!hasMatch && join.JoinType == JoinType.Left)
+            {
+                var joinedRow = new Row { Id = leftRow.Id };
+
+                // Copy all fields from left row
+                foreach (var (key, value) in leftRow.Fields)
+                {
+                    joinedRow.SetField($"{leftTableName}.{key}", value);
+                }
+
+                // Add null values for all possible right table fields
+                // Determine the fields from the right table schema
+                var rightFields = new HashSet<string>();
+                foreach (var rightRow in rightTableData)
+                {
+                    foreach (var field in rightRow.Fields.Keys)
+                    {
+                        rightFields.Add(field);
+                    }
+
+                    // We only need a sample of fields, don't need to scan all rows
+                    if (rightFields.Count > 0)
+                        break;
+                }
+
+                // Add null for each right field with the correct alias prefix
+                foreach (var field in rightFields)
+                {
+                    joinedRow.SetField($"{rightTableName}.{field}", null);
+                }
+
+                result.Add(joinedRow);
+            }
+        }
+
+        return result;
+
+    }
+    private static string ExtractTableName(Expression fieldExpression)
+    {
+        if (fieldExpression.Type == ExpressionType.FieldPath)
+        {
+            try
+            {
+                var fieldPath = fieldExpression.As<ReadOnlyMemory<string>>();
+                if (fieldPath.Length > 1)
+                {
+                    // First segment should be the table name
+                    return fieldPath.Span[0];
+                }
+            }
+            catch
+            {
+                // If extraction fails, fallback to string parsing
+            }
+
+            // Try string parsing as fallback
+            string? exprStr = fieldExpression.ToString();
+            if (!string.IsNullOrEmpty(exprStr) && exprStr.Contains('.'))
+            {
+                var parts = exprStr.Split('.');
+                if (parts.Length > 1)
+                {
+                    return parts[0];
+                }
+            }
+        }
+        return string.Empty;
     }
 
     private static List<Row> ApplyGrouping(List<Row> rows, ReadOnlyMemory<Expression> groupBy, Expression? having)
@@ -1122,7 +1305,7 @@ public class SproutDbExecutor(
 
         foreach (var row in groupedRows)
         {
-            if (EvaluateHavingExpression(row, having))
+            if (EvaluateExpression(row, having))
             {
                 filteredRows.Add(row);
             }
@@ -1131,7 +1314,7 @@ public class SproutDbExecutor(
         return filteredRows;
     }
 
-    private static bool EvaluateHavingExpression(Row row, Expression expr)
+    private static bool EvaluateExpression(Row row, Expression expr)
     {
         switch (expr.Type)
         {
@@ -1187,8 +1370,8 @@ public class SproutDbExecutor(
     {
         return binary.Operator switch
         {
-            LogicalOperator.And => EvaluateHavingExpression(row, binary.Left) && EvaluateHavingExpression(row, binary.Right),
-            LogicalOperator.Or => EvaluateHavingExpression(row, binary.Left) || EvaluateHavingExpression(row, binary.Right),
+            LogicalOperator.And => EvaluateExpression(row, binary.Left) && EvaluateExpression(row, binary.Right),
+            LogicalOperator.Or => EvaluateExpression(row, binary.Left) || EvaluateExpression(row, binary.Right),
             _ => false
         };
     }
@@ -1196,7 +1379,7 @@ public class SproutDbExecutor(
     private static bool EvaluateUnaryExpression(Row row, Expression.UnaryData unary)
     {
         return unary.Operator == LogicalOperator.Not
-            ? !EvaluateHavingExpression(row, unary.Operand)
+            ? !EvaluateExpression(row, unary.Operand)
             : false;
     }
     private static object? GetExpressionValue(Row row, Expression expr)
@@ -1211,6 +1394,16 @@ public class SproutDbExecutor(
                     if (row.Fields.TryGetValue(field.Value.Name, out var value))
                     {
                         return value;
+                    }
+
+                    // If field has TableAlias and FieldNameOnly components, try the constructed name
+                    if (field.Value.TableAlias != null && field.Value.FieldNameOnly != null)
+                    {
+                        var aliasedFieldName = $"{field.Value.TableAlias}.{field.Value.FieldNameOnly}";
+                        if (row.Fields.TryGetValue(aliasedFieldName, out var aliasedValue))
+                        {
+                            return aliasedValue;
+                        }
                     }
 
                     // Handle aggregate functions like count(), sum(), avg()
@@ -1344,9 +1537,9 @@ public class SproutDbExecutor(
             // Copy only the selected fields
             foreach (var field in selectedFields)
             {
-                if (originalRow.Fields.TryGetValue(field.Name, out var value))
+                if (originalRow.Fields.TryGetValue(field.FieldNameOnly ?? field.Name, out var value))
                 {
-                    projectedRow.SetField(field.Alias ?? field.Name, value);
+                    projectedRow.SetField(field.Alias ?? field.FieldNameOnly ?? field.Name, value);
                 }
             }
 
@@ -1540,10 +1733,26 @@ public class SproutDbExecutor(
                 // If there's a value, use the last segment as the field name
                 if (!fieldPath.IsEmpty)
                 {
-                    var fieldName = fieldPath.Span[fieldPath.Length - 1];
-                    if (!string.IsNullOrEmpty(fieldName))
+                    // Handle multi-segment paths (e.g., "alias.field")
+                    if (fieldPath.Length >= 2)
                     {
-                        return new Field(fieldName, null);
+                        // When we have a path like "alias.field", preserve the full path
+                        // for ON condition evaluation, but also track the last segment as fieldName
+                        var fieldName = fieldPath.Span[fieldPath.Length - 1];
+                        var alias = fieldPath.Span[0];
+
+                        // Use the full path as the name, but also remember the components
+                        var fullPath = string.Join(".", fieldPath.ToArray());
+                        return new Field(fullPath, null, fieldName, alias);
+                    }
+                    else
+                    {
+                        // For a single segment, just use it as the field name
+                        var fieldName = fieldPath.Span[0];
+                        if (!string.IsNullOrEmpty(fieldName))
+                        {
+                            return new Field(fieldName, null);
+                        }
                     }
                 }
 
@@ -1554,7 +1763,15 @@ public class SproutDbExecutor(
                     // Parse the field name from the string representation
                     // Format is typically "table.field" or just "field"
                     var parts = expressionStr.Split('.');
-                    return parts.Length > 0 ? new Field(parts[parts.Length - 1], null) : null;
+                    if (parts.Length >= 2)
+                    {
+                        // When we have a path like "alias.field", preserve the full path
+                        return new Field(expressionStr, null, parts[parts.Length - 1], parts[0]);
+                    }
+                    else if (parts.Length == 1)
+                    {
+                        return new Field(parts[0], null);
+                    }
                 }
             }
             catch
@@ -1598,5 +1815,5 @@ public class SproutDbExecutor(
         return Guid.NewGuid().ToString("N")[..12]; // 12-character commit ID
     }
 
-    private readonly record struct Field(string Name, string? Alias);
+    private readonly record struct Field(string Name, string? Alias, string? FieldNameOnly = null, string? TableAlias = null);
 }
