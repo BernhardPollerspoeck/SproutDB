@@ -63,15 +63,15 @@ public class JoinQueries : ISproutConnectionTestsSetup
         Assert.AreEqual(3, resultRows!.Count); // 2 orders for John, 1 for Jane, 0 for Alice (inner join by default)
         
         // Verify user and order fields are present
-        Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey("id")));
-        Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey(NAME_COLUMN)));
+        Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey("users.id")));
+        Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey($"users.{NAME_COLUMN}")));
         Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey("ordars.id")));
         Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey("ordars.user_id")));
         Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey($"ordars.{TOTAL_COLUMN}")));
         
         // Verify the correct relationships
-        var johnOrders = resultRows.Where(r => (int)r.Fields["id"] == 1).ToList();
-        var janeOrders = resultRows.Where(r => (int)r.Fields["id"] == 2).ToList();
+        var johnOrders = resultRows.Where(r => (int)r.Fields["users.id"] == 1).ToList();
+        var janeOrders = resultRows.Where(r => (int)r.Fields["users.id"] == 2).ToList();
         
         Assert.AreEqual(2, johnOrders.Count);
         Assert.AreEqual(1, janeOrders.Count);
@@ -142,14 +142,14 @@ public class JoinQueries : ISproutConnectionTestsSetup
         Assert.AreEqual(4, resultRows!.Count); // 2 orders for John, 1 for Jane, and 1 for Alice with null order values
         
         // Verify all users are present including those with no orders
-        var userIds = resultRows.Select(r => (int)r.Fields["id"]).Distinct().ToList();
+        var userIds = resultRows.Select(r => (int)r.Fields["users.id"]).Distinct().ToList();
         Assert.AreEqual(3, userIds.Count);
         Assert.IsTrue(userIds.Contains(1)); // John
         Assert.IsTrue(userIds.Contains(2)); // Jane
         Assert.IsTrue(userIds.Contains(3)); // Alice
         
         // Verify Alice has null order values
-        var aliceRow = resultRows.FirstOrDefault(r => (int)r.Fields["id"] == 3);
+        var aliceRow = resultRows.FirstOrDefault(r => (int)r.Fields["users.id"] == 3);
         Assert.IsNotNull(aliceRow);
         Assert.IsNull(aliceRow!.Fields["ordars.id"]);
         Assert.IsNull(aliceRow.Fields["ordars.user_id"]);
@@ -215,7 +215,7 @@ public class JoinQueries : ISproutConnectionTestsSetup
         Assert.AreEqual(3, resultRows!.Count); // 2 orders for John, 1 for Jane, none for Alice
         
         // Verify only users with orders are present
-        var userIds = resultRows.Select(r => (int)r.Fields["id"]).Distinct().ToList();
+        var userIds = resultRows.Select(r => (int)r.Fields["users.id"]).Distinct().ToList();
         Assert.AreEqual(2, userIds.Count);
         Assert.IsTrue(userIds.Contains(1)); // John
         Assert.IsTrue(userIds.Contains(2)); // Jane
@@ -363,8 +363,8 @@ public class JoinQueries : ISproutConnectionTestsSetup
         Assert.AreEqual(3, resultRows!.Count); // 2 items for John's order + 1 item for Jane's order
         
         // Verify that all fields from all tables are present
-        Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey("id")));
-        Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey(NAME_COLUMN)));
+        Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey("users.id")));
+        Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey($"users.{NAME_COLUMN}")));
         Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey("ordars.id")));
         Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey("ordars.user_id")));
         Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey($"ordars.{TOTAL_COLUMN}")));
@@ -374,8 +374,8 @@ public class JoinQueries : ISproutConnectionTestsSetup
         Assert.IsTrue(resultRows.All(r => r.Fields.ContainsKey("itms.price")));
         
         // Verify the correct relationships in the joined data
-        var johnRows = resultRows.Where(r => (int)r.Fields["id"] == 1).ToList();
-        var janeRows = resultRows.Where(r => (int)r.Fields["id"] == 2).ToList();
+        var johnRows = resultRows.Where(r => (int)r.Fields["users.id"] == 1).ToList();
+        var janeRows = resultRows.Where(r => (int)r.Fields["users.id"] == 2).ToList();
         
         Assert.AreEqual(2, johnRows.Count);
         Assert.AreEqual(1, janeRows.Count);
