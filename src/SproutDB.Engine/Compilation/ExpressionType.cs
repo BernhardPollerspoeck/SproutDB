@@ -8,5 +8,6 @@ public enum ExpressionType
     Literal,
     JsonValue,
     Unary,
+    Alias,
 }
 

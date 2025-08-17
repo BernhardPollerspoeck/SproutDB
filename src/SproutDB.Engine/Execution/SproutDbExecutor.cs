@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using SproutDB.Engine.Compilation;
 using SproutDB.Engine.Core;
 using static System.Runtime.InteropServices.JavaScript.JSType;
@@ -168,9 +169,9 @@ public class SproutDbExecutor(
         }
 
         // Extract the field name from the first select expression
-        var fieldName = ExtractFieldName(query.Select.Span[0]);
+        var field = ExtractField(query.Select.Span[0]);
 
-        if (string.IsNullOrEmpty(fieldName))
+        if (!field.HasValue)
         {
             return ExecutionResult.CreateError("Invalid field for SUM operation");
         }
@@ -182,7 +183,7 @@ public class SproutDbExecutor(
 
         foreach (var row in rows)
         {
-            if (row.Fields.TryGetValue(fieldName, out var value) && value != null)
+            if (row.Fields.TryGetValue(field.Value.Name, out var value) && value != null)
             {
                 // Try to convert the value to a numeric type
                 if (value is int intValue)
@@ -291,9 +292,9 @@ public class SproutDbExecutor(
         }
 
         // Extract the field name from the first select expression
-        var fieldName = ExtractFieldName(query.Select.Span[0]);
+        var field = ExtractField(query.Select.Span[0]);
 
-        if (string.IsNullOrEmpty(fieldName))
+        if (!field.HasValue)
         {
             return ExecutionResult.CreateError("Invalid field for AVG operation");
         }
@@ -304,7 +305,7 @@ public class SproutDbExecutor(
 
         foreach (var row in rows)
         {
-            if (row.Fields.TryGetValue(fieldName, out var value) && value != null)
+            if (row.Fields.TryGetValue(field.Value.Name, out var value) && value != null)
             {
                 // Try to convert the value to a numeric type
                 if (value is int intValue)
@@ -1003,13 +1004,13 @@ public class SproutDbExecutor(
         }
 
         // Extract field names from groupBy expressions
-        var groupByFields = new List<string>(groupBy.Length);
+        var groupByFields = new List<Field>(groupBy.Length);
         foreach (var expr in groupBy.Span)
         {
-            var fieldName = ExtractFieldName(expr);
-            if (!string.IsNullOrEmpty(fieldName))
+            var field = ExtractField(expr);
+            if (field.HasValue)
             {
-                groupByFields.Add(fieldName);
+                groupByFields.Add(field.Value);
             }
         }
 
@@ -1030,7 +1031,7 @@ public class SproutDbExecutor(
             foreach (var field in groupByFields)
             {
                 // Handle the case where the field doesn't exist in the row
-                var fieldValue = row.Fields.TryGetValue(field, out var value) ? value : null;
+                var fieldValue = row.Fields.TryGetValue(field.Name, out var value) ? value : null;
 
                 // Convert value to string representation for the key
                 // Treat null values specially
@@ -1066,9 +1067,9 @@ public class SproutDbExecutor(
             // Copy the grouped fields
             foreach (var field in groupByFields)
             {
-                if (firstRow.Fields.TryGetValue(field, out var value))
+                if (firstRow.Fields.TryGetValue(field.Name, out var value))
                 {
-                    groupRow.SetField(field, value);
+                    groupRow.SetField(field.Alias ?? field.Name, value);
                 }
             }
 
@@ -1203,11 +1204,11 @@ public class SproutDbExecutor(
         switch (expr.Type)
         {
             case ExpressionType.FieldPath:
-                var fieldName = ExtractFieldName(expr);
-                if (!string.IsNullOrEmpty(fieldName))
+                var field = ExtractField(expr);
+                if (field.HasValue)
                 {
                     // Check for direct field match
-                    if (row.Fields.TryGetValue(fieldName, out var value))
+                    if (row.Fields.TryGetValue(field.Value.Name, out var value))
                     {
                         return value;
                     }
@@ -1269,16 +1270,16 @@ public class SproutDbExecutor(
             for (int i = 0; i < orderBy.Length; i++)
             {
                 var orderByField = orderBy.Span[i];
-                var fieldName = ExtractFieldName(orderByField.Field);
+                var field = ExtractField(orderByField.Field);
 
-                if (string.IsNullOrEmpty(fieldName))
+                if (!field.HasValue)
                 {
                     continue; // Skip invalid fields
                 }
 
                 // Get field values for comparison
-                var hasValue1 = row1.Fields.TryGetValue(fieldName, out var value1);
-                var hasValue2 = row2.Fields.TryGetValue(fieldName, out var value2);
+                var hasValue1 = row1.Fields.TryGetValue(field.Value.Name, out var value1);
+                var hasValue2 = row2.Fields.TryGetValue(field.Value.Name, out var value2);
 
                 // Handle cases where one or both fields are missing
                 if (!hasValue1 && !hasValue2) continue;      // Both missing, consider equal
@@ -1315,13 +1316,13 @@ public class SproutDbExecutor(
         }
 
         // Extract field names from select expressions
-        var selectedFields = new List<string>(select.Length);
+        var selectedFields = new List<Field>(select.Length);
         foreach (var expr in select.Span)
         {
-            var fieldName = ExtractFieldName(expr);
-            if (!string.IsNullOrEmpty(fieldName))
+            var field = ExtractField(expr);
+            if (field.HasValue)
             {
-                selectedFields.Add(fieldName);
+                selectedFields.Add(field.Value);
             }
         }
 
@@ -1341,11 +1342,11 @@ public class SproutDbExecutor(
             projectedRow.Id = originalRow.Id;
 
             // Copy only the selected fields
-            foreach (var fieldName in selectedFields)
+            foreach (var field in selectedFields)
             {
-                if (originalRow.Fields.TryGetValue(fieldName, out var value))
+                if (originalRow.Fields.TryGetValue(field.Name, out var value))
                 {
-                    projectedRow.SetField(fieldName, value);
+                    projectedRow.SetField(field.Alias ?? field.Name, value);
                 }
             }
 
@@ -1514,8 +1515,21 @@ public class SproutDbExecutor(
     }
 
 
-    private static string? ExtractFieldName(Expression expression)
+    private static Field? ExtractField(Expression expression)
     {
+        if (expression.Type == ExpressionType.Alias)
+        {
+            var aliasData = expression.As<Expression.AliasData>();
+            // Extract the field from the inner expression, then apply our alias
+            var innerField = ExtractField(aliasData.Expression);
+            if (innerField.HasValue)
+            {
+                // Return the field with the alias applied
+                return new Field(innerField.Value.Name, aliasData.Alias);
+            }
+            return null;
+        }
+
         if (expression.Type == ExpressionType.FieldPath)
         {
             // For FieldPath expressions, we need to inspect the raw value
@@ -1529,7 +1543,7 @@ public class SproutDbExecutor(
                     var fieldName = fieldPath.Span[fieldPath.Length - 1];
                     if (!string.IsNullOrEmpty(fieldName))
                     {
-                        return fieldName;
+                        return new Field(fieldName, null);
                     }
                 }
 
@@ -1540,7 +1554,7 @@ public class SproutDbExecutor(
                     // Parse the field name from the string representation
                     // Format is typically "table.field" or just "field"
                     var parts = expressionStr.Split('.');
-                    return parts.Length > 0 ? parts[parts.Length - 1] : null;
+                    return parts.Length > 0 ? new Field(parts[parts.Length - 1], null) : null;
                 }
             }
             catch
@@ -1583,4 +1597,6 @@ public class SproutDbExecutor(
     {
         return Guid.NewGuid().ToString("N")[..12]; // 12-character commit ID
     }
+
+    private readonly record struct Field(string Name, string? Alias);
 }

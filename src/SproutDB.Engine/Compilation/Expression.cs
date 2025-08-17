@@ -1,6 +1,4 @@
-﻿using static SproutDB.Engine.Compilation.Expression;
-
-namespace SproutDB.Engine.Compilation;
+﻿namespace SproutDB.Engine.Compilation;
 
 public readonly struct Expression
 {
@@ -34,6 +32,9 @@ public readonly struct Expression
 
     public static Expression JsonValue(int position, JsonValueType valueType, object value)
         => new(ExpressionType.JsonValue, position, new JsonData(valueType, value));
+    
+    public static Expression Alias(int position, Expression expression, string alias)
+       => new(ExpressionType.Alias, position, new AliasData(expression, alias));
 
     // Helper structs for typed data
     public readonly struct BinaryData
@@ -96,6 +97,18 @@ public readonly struct Expression
         {
             ValueType = valueType;
             Value = value;
+        }
+    }
+
+    public readonly struct AliasData
+    {
+        public Expression Expression { get; }
+        public string Alias { get; }
+
+        public AliasData(Expression expression, string alias)
+        {
+            Expression = expression;
+            Alias = alias;
         }
     }
 }

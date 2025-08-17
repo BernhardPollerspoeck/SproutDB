@@ -4,6 +4,34 @@
     <File Path="sdk.md" />
     <File Path="storage.md" />
   </Folder>
+  <Folder Name="/00_Docs/Syntax/">
+    <File Path="docs/syntax/add_column.md" />
+    <File Path="docs/syntax/backup_database.md" />
+    <File Path="docs/syntax/backup_server.md" />
+    <File Path="docs/syntax/checkout_branch.md" />
+    <File Path="docs/syntax/create_branch.md" />
+    <File Path="docs/syntax/create_index.md" />
+    <File Path="docs/syntax/create_table.md" />
+    <File Path="docs/syntax/create_token.md" />
+    <File Path="docs/syntax/delete.md" />
+    <File Path="docs/syntax/drop_index.md" />
+    <File Path="docs/syntax/drop_table.md" />
+    <File Path="docs/syntax/explain.md" />
+    <File Path="docs/syntax/follow.md" />
+    <File Path="docs/syntax/get.md" />
+    <File Path="docs/syntax/group_by.md" />
+    <File Path="docs/syntax/having.md" />
+    <File Path="docs/syntax/merge.md" />
+    <File Path="docs/syntax/order_by.md" />
+    <File Path="docs/syntax/purge_column.md" />
+    <File Path="docs/syntax/respawn.md" />
+    <File Path="docs/syntax/restore_database.md" />
+    <File Path="docs/syntax/select.md" />
+    <File Path="docs/syntax/subscribe.md" />
+    <File Path="docs/syntax/unsubscribe.md" />
+    <File Path="docs/syntax/upsert.md" />
+    <File Path="docs/syntax/where.md" />
+  </Folder>
   <Project Path="src/SproutDB.DevBench/SproutDB.DevBench.csproj" Id="ec3cae56-be4f-4c60-b022-19de65f57573" />
   <Project Path="src/SproutDB.Engine/SproutDB.Engine.csproj" Id="cd9b632d-24ff-45e6-949c-b2c54960057a" />
   <Project Path="tests/SproutDB.Engine.Tests/SproutDB.Engine.Tests.csproj" Id="60802457-cad6-4653-aca8-8f4ecfaf6c7d" />

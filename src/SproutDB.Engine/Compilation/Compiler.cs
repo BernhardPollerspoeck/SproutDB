@@ -504,6 +504,74 @@ internal ref struct Compiler
     private Expression ParseFieldPath()
     {
         var position = Current.Position;
+
+        // Check if this is an aggregate function reference like count()
+        if ((Current.Type == TokenType.Count ||
+             Current.Type == TokenType.Sum ||
+             Current.Type == TokenType.Avg) &&
+            Peek().Type == TokenType.LeftParen)
+        {
+            // Get function name from the current token
+            var functionName = Current.Value.ToLowerInvariant();
+            Advance(); // Consume function name
+            Advance(); // Consume "("
+
+            // Parse any arguments if present (none for count)
+            var arguments = new List<string>();
+
+            // If there's an argument inside the parentheses
+            if (Current.Type != TokenType.RightParen)
+            {
+                // This would be for functions like sum(fieldname)
+                if (Current.Type == TokenType.Identifier)
+                {
+                    arguments.Add(ExpectIdentifier());
+                }
+            }
+
+            // Expect the closing parenthesis
+            Expect(TokenType.RightParen);
+
+            // Create a field path for the aggregate field
+            // In the executor, these aggregates are stored as "count()", "sum(fieldname)", etc.
+            string fieldName;
+            if (arguments.Count > 0)
+            {
+                fieldName = $"{functionName}({string.Join(",", arguments)})";
+            }
+            else
+            {
+                fieldName = $"{functionName}()";
+            }
+
+            var functionSegments = new[] { fieldName };
+            var functionFieldPathExpr = Expression.FieldPath(position, functionSegments);
+
+            // Check for alias (e.g., "as count")
+            if (Current.Type == TokenType.As)
+            {
+                Advance(); // Consume "as"
+
+                // Get the alias directly from the current token's value
+                if (Current.Type == TokenType.Identifier ||
+                    Current.Type == TokenType.Count ||
+                    Current.Type == TokenType.Sum ||
+                    Current.Type == TokenType.Avg)
+                {
+                    var alias = Current.Value; // Use the token's actual value
+                    Advance();
+                    return Expression.Alias(position, functionFieldPathExpr, alias);
+                }
+                else
+                {
+                    throw new ParseException($"Expected identifier or keyword for alias but found '{Current.Value}'", Current.Position);
+                }
+            }
+
+            return functionFieldPathExpr;
+        }
+
+        // Handle regular field path
         var segments = new List<string>
         {
             ExpectIdentifier()
@@ -515,7 +583,30 @@ internal ref struct Compiler
             segments.Add(ExpectIdentifier());
         }
 
-        return Expression.FieldPath(position, segments.ToArray());
+        var fieldPathExpr = Expression.FieldPath(position, segments.ToArray());
+
+        // Check for alias (e.g., "field as alias")
+        if (Current.Type == TokenType.As)
+        {
+            Advance(); // Consume "as"
+
+            // Get the alias directly from the current token's value
+            if (Current.Type == TokenType.Identifier ||
+                Current.Type == TokenType.Count ||
+                Current.Type == TokenType.Sum ||
+                Current.Type == TokenType.Avg)
+            {
+                var alias = Current.Value; // Use the token's actual value
+                Advance();
+                return Expression.Alias(position, fieldPathExpr, alias);
+            }
+            else
+            {
+                throw new ParseException($"Expected identifier or keyword for alias but found '{Current.Value}'", Current.Position);
+            }
+        }
+
+        return fieldPathExpr;
     }
 
     private Expression? ParseOptionalWhereClause()
@@ -584,6 +675,7 @@ internal ref struct Compiler
     {
         return Current.Type switch
         {
+            TokenType.Count or TokenType.Sum or TokenType.Avg when Peek().Type == TokenType.LeftParen => ParseFieldPath(),
             TokenType.Identifier => ParseFieldPath(),
             TokenType.String => ParseStringLiteral(),
             TokenType.Number => ParseNumberLiteral(),
