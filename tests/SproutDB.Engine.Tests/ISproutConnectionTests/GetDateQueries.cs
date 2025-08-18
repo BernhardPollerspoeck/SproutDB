@@ -135,7 +135,7 @@ public class GetDateQueries : ISproutConnectionTestsSetup
 
         // Check that we got the right order
         Assert.AreEqual(beforeDate, resultRows[0].Fields[DATE_COLUMN]);
-        Assert.AreEqual(100, resultRows[0].Fields[TOTAL_COLUMN]);
+        Assert.AreEqual(100d, resultRows[0].Fields[TOTAL_COLUMN]);
     }
 
     [TestMethod]
@@ -178,7 +178,7 @@ public class GetDateQueries : ISproutConnectionTestsSetup
 
         // Check that we got the right order
         Assert.AreEqual(afterDate, resultRows[0].Fields[DATE_COLUMN]);
-        Assert.AreEqual(200, resultRows[0].Fields[TOTAL_COLUMN]);
+        Assert.AreEqual(200d, resultRows[0].Fields[TOTAL_COLUMN]);
     }
 
     [TestMethod]
@@ -225,7 +225,7 @@ public class GetDateQueries : ISproutConnectionTestsSetup
 
         // Check that we got the right order
         Assert.AreEqual(inRange, resultRows[0].Fields[DATE_COLUMN]);
-        Assert.AreEqual(200, resultRows[0].Fields[TOTAL_COLUMN]);
+        Assert.AreEqual(200d, resultRows[0].Fields[TOTAL_COLUMN]);
     }
 }
 

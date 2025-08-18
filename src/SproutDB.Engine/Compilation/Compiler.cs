@@ -497,7 +497,7 @@ internal ref struct Compiler
             Advance();
             Expect(TokenType.RightParen);
         }
-        
+
         // Parse ON condition if present
         Expression? onCondition = null;
         if (Current.Type == TokenType.On)
@@ -530,11 +530,22 @@ internal ref struct Compiler
             // If there's an argument inside the parentheses
             if (Current.Type != TokenType.RightParen)
             {
-                // This would be for functions like sum(fieldname)
-                if (Current.Type == TokenType.Identifier)
+                var arg = new List<string>();
+                while (Current.Type is TokenType.Identifier or TokenType.Dot)
                 {
-                    arguments.Add(ExpectIdentifier());
+                    // This would be for functions like sum(fieldname)
+                    if (Current.Type == TokenType.Identifier)
+                    {
+                        arg.Add(ExpectIdentifier());
+                    }
+                    else if (Current.Type == TokenType.Dot)
+                    {
+                        arg.Add(".");
+                        Advance();
+                    }
                 }
+                arguments.Add(string.Join(string.Empty, arg));
+
             }
 
             // Expect the closing parenthesis

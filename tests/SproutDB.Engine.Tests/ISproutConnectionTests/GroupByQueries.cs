@@ -214,11 +214,11 @@ public class GroupByQueries : ISproutConnectionTestsSetup
             Assert.IsTrue(row.Fields.ContainsKey("total_spent"));
 
             // Verify sum is correct for each user
-            if ((int)row.Fields["user_id"] == 1)
+            if ((double)row.Fields["user_id"] == 1)
             {
                 Assert.AreEqual(user1ExpectedTotal, (double)row.Fields["total_spent"], 0.001);
             }
-            else if ((int)row.Fields["user_id"] == 2)
+            else if ((double)row.Fields["user_id"] == 2)
             {
                 Assert.AreEqual(user2ExpectedTotal, (double)row.Fields["total_spent"], 0.001);
             }

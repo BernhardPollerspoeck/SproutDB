@@ -28,25 +28,25 @@ public abstract class ISproutConnectionTestsCoreData
 
 	// Constants for user data
 	protected const string ALICE_NAME = "Alice Cooper";
-	protected const int ALICE_AGE = 42;
+	protected const double ALICE_AGE = 42;
 	protected const bool ALICE_ACTIVE = true;
-	protected const int ALICE_UPDATED_AGE = 43;
+	protected const double ALICE_UPDATED_AGE = 43;
 	protected const bool ALICE_UPDATED_ACTIVE = false;
 	protected const string BOB_NAME = "Bob Johnson";
-	protected const int BOB_AGE = 38;
+	protected const double BOB_AGE = 38;
 	protected const bool BOB_ACTIVE = true;
 	protected const string JOHN_NAME = "John Doe";
-	protected const int JOHN_AGE = 30;
+	protected const double JOHN_AGE = 30;
 	protected const bool JOHN_ACTIVE = true;
 	protected const string JANE_NAME = "Jane Smith";
-	protected const int JANE_AGE = 25;
+	protected const double JANE_AGE = 25;
 	protected const bool JANE_ACTIVE = true;
-	protected const int BATCH_BOB_AGE = 40;
+	protected const double BATCH_BOB_AGE = 40;
 	protected const bool BATCH_BOB_ACTIVE = false;
 
 	// Constants for nested object test
 	protected const string ALICE_GREEN_NAME = "Alice Green";
-	protected const int ALICE_GREEN_AGE = 28;
+	protected const double ALICE_GREEN_AGE = 28;
 	protected const bool ALICE_GREEN_ACTIVE = true;
 	protected const string DARK_THEME = "dark";
 	protected const bool NOTIFICATIONS_ENABLED = true;

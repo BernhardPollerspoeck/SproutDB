@@ -43,7 +43,7 @@ public class SumQueries : ISproutConnectionTestsSetup
         // Verify the returned data
         Assert.IsNotNull(result.Data);
         
-        Assert.IsInstanceOfType(result.Data, typeof(int));
+        Assert.IsInstanceOfType(result.Data, typeof(double));
         Assert.AreEqual(expectedSum, result.Data);
     }
 
@@ -85,7 +85,7 @@ public class SumQueries : ISproutConnectionTestsSetup
         // Verify the returned data
         Assert.IsNotNull(result.Data);
         
-        Assert.IsInstanceOfType(result.Data, typeof(int));
+        Assert.IsInstanceOfType(result.Data, typeof(double));
         Assert.AreEqual(expectedSum, result.Data);
     }
 
@@ -149,7 +149,7 @@ public class SumQueries : ISproutConnectionTestsSetup
         Assert.IsTrue(row3Result.Success);
 
         // Calculate expected sum (which exceeds int.MaxValue)
-        long expectedSum = (long)maxInt + maxInt + 10;
+        double expectedSum = (double)maxInt + maxInt + 10;
 
         // Act
         var result = _connection.Execute($"sum {USERS_TABLE}.value");
@@ -161,8 +161,8 @@ public class SumQueries : ISproutConnectionTestsSetup
         // Verify the returned data
         Assert.IsNotNull(result.Data);
         
-        // Result should be promoted to long to handle the overflow
-        Assert.IsInstanceOfType(result.Data, typeof(long));
+        // Result should be promoted to double to handle the overflow
+        Assert.IsInstanceOfType(result.Data, typeof(double));
         Assert.AreEqual(expectedSum, result.Data);
     }
 
@@ -223,7 +223,7 @@ public class SumQueries : ISproutConnectionTestsSetup
         Assert.IsTrue(row3Result.Success);
 
         // Calculate expected sum (ignoring nulls)
-        var expectedSum = 10 + 30;
+        var expectedSum = 10 + 30d;
 
         // Act
         var result = _connection.Execute($"sum {USERS_TABLE}.score");
@@ -236,7 +236,7 @@ public class SumQueries : ISproutConnectionTestsSetup
         Assert.IsNotNull(result.Data);
         
         // Result should exclude null values
-        Assert.IsInstanceOfType(result.Data, typeof(int));
+        Assert.IsInstanceOfType(result.Data, typeof(double));
         Assert.AreEqual(expectedSum, result.Data);
     }
 

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using SproutDB.Engine.Compilation;
 using SproutDB.Engine.Core;
+using System.Text;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace SproutDB.Engine.Execution;
@@ -96,13 +97,18 @@ public class SproutDbExecutor(
     private ExecutionResult ExecuteGetQuery(QueryStatement query, ExecutionContext context)
     {
         // Get base rows with filtering
-        var rows = dataStore.GetRows(query.Table.Name, query.Where, context.MaxRows);
+        var rows = dataStore.GetRows(query.Table.Name, query.Table.Alias, context.MaxRows);
         var rowList = rows.ToList();
 
         // Apply joins if specified
         if (query.Joins.Length > 0)
         {
             rowList = ApplyJoins(rowList, query.Joins);
+        }
+
+        if (query.Where.HasValue)
+        {
+            rowList = ApplyWhere(rowList, query.Where.Value);
         }
 
         // Apply grouping if specified
@@ -151,7 +157,7 @@ public class SproutDbExecutor(
     private ExecutionResult ExecuteSumQuery(QueryStatement query, ExecutionContext context)
     {
         // Get rows based on where clause
-        var rows = dataStore.GetRows(query.Table.Name, query.Where).ToList();
+        var rows = dataStore.GetRows(query.Table.Name, query.Table.Alias).ToList();
 
         if (rows.Count == 0)
         {
@@ -160,6 +166,11 @@ public class SproutDbExecutor(
                 data: 0,
                 rowsScanned: 0
             );
+        }
+
+        if (query.Where.HasValue)
+        {
+            rows = ApplyWhere(rows, query.Where.Value);
         }
 
         // If no specific fields are selected, we can't calculate a sum
@@ -233,48 +244,48 @@ public class SproutDbExecutor(
             }
         }
 
-        object ConvertWithTypePromotion(double sum, Type baseType)
-        {
-            // Check for overflow and promote types as needed
-            if (baseType == typeof(int))
-            {
-                if (sum > int.MaxValue || sum < int.MinValue)
-                    return (long)sum; // Promote to long
-                return (int)sum;
-            }
-            else if (baseType == typeof(long))
-            {
-                if (sum > long.MaxValue || sum < long.MinValue)
-                    return sum; // Promote to double
-                return (long)sum;
-            }
-            else if (baseType == typeof(float))
-            {
-                if (sum > float.MaxValue || sum < float.MinValue)
-                    return sum; // Promote to double
-                return (float)sum;
-            }
-            else if (baseType == typeof(decimal))
-            {
-                if (sum > (double)decimal.MaxValue || sum < (double)decimal.MinValue)
-                    return sum; // Use double if beyond decimal range
-                return (decimal)sum;
-            }
-
-            // Default to the base type conversion
-            return Convert.ChangeType(sum, baseType);
-        }
-
         return ExecutionResult.CreateOk(
             data: ConvertWithTypePromotion(sum, widestType),
             rowsScanned: rows.Count
         );
     }
 
+    private static object ConvertWithTypePromotion(double sum, Type baseType)
+    {
+        // Check for overflow and promote types as needed
+        if (baseType == typeof(int))
+        {
+            if (sum > int.MaxValue || sum < int.MinValue)
+                return (long)sum; // Promote to long
+            return (int)sum;
+        }
+        else if (baseType == typeof(long))
+        {
+            if (sum > long.MaxValue || sum < long.MinValue)
+                return sum; // Promote to double
+            return (long)sum;
+        }
+        else if (baseType == typeof(float))
+        {
+            if (sum > float.MaxValue || sum < float.MinValue)
+                return sum; // Promote to double
+            return (float)sum;
+        }
+        else if (baseType == typeof(decimal))
+        {
+            if (sum > (double)decimal.MaxValue || sum < (double)decimal.MinValue)
+                return sum; // Use double if beyond decimal range
+            return (decimal)sum;
+        }
+
+        // Default to the base type conversion
+        return Convert.ChangeType(sum, baseType);
+    }
+
     private ExecutionResult ExecuteAvgQuery(QueryStatement query, ExecutionContext context)
     {
         // Get rows based on where clause
-        var rows = dataStore.GetRows(query.Table.Name, query.Where).ToList();
+        var rows = dataStore.GetRows(query.Table.Name, query.Table.Alias).ToList();
 
         if (rows.Count == 0)
         {
@@ -283,6 +294,11 @@ public class SproutDbExecutor(
                 data: null,
                 rowsScanned: 0
             );
+        }
+
+        if (query.Where.HasValue)
+        {
+            rows = ApplyWhere(rows, query.Where.Value);
         }
 
         // If no specific fields are selected, we can't calculate an average
@@ -996,9 +1012,6 @@ public class SproutDbExecutor(
             return rows; // Nothing to join or no rows to process
         }
 
-        //TODO: preprocess the existing rows: add table/alias.
-        //this way the join apply will work unified. also this would be done on first join anyway
-
         // Process each join sequentially
         var result = rows;
         foreach (var join in joins.Span)
@@ -1032,20 +1045,20 @@ public class SproutDbExecutor(
         var rightTableName = join.Alias;
 
         // Extract right table name from the right field path
-        string rightTableNameFromPath = ExtractTableName(join.RightPath);
+        var rightTableNameFromPath = ExtractTableName(join.RightPath);
 
 
         // Get all left rows that have the join field
         var leftJoinValues = new HashSet<object>();
         foreach (var row in leftRows)
         {
-            if (row.Fields.TryGetValue(leftField, out var value) && value != null)
+            if ((row.Fields.TryGetValue(leftField, out var value) || row.Fields.TryGetValue($"{leftTableName}.{leftField}", out value)) && value != null)
             {
                 leftJoinValues.Add(value);
             }
         }
 
-        var rightTableData = dataStore.GetRows(rightTableNameFromPath);
+        var rightTableData = dataStore.GetRows(rightTableNameFromPath, null);
 
         // Create an index for quick lookup of right rows by join field value
         var rightRowIndex = new Dictionary<object, List<Row>>();
@@ -1055,7 +1068,7 @@ public class SproutDbExecutor(
             {
                 if (!rightRowIndex.TryGetValue(joinValue, out var rows))
                 {
-                    rows = new List<Row>();
+                    rows = [];
                     rightRowIndex[joinValue] = rows;
                 }
                 rows.Add(rightRow);
@@ -1067,10 +1080,10 @@ public class SproutDbExecutor(
 
         foreach (var leftRow in leftRows)
         {
-            bool hasMatch = false;
+            var hasMatch = false;
 
             // Check if left row has the join field value
-            if (leftRow.Fields.TryGetValue(leftField, out var leftJoinValue) && leftJoinValue != null)
+            if ((leftRow.Fields.TryGetValue(leftField, out var leftJoinValue) || leftRow.Fields.TryGetValue($"{leftTableName}.{leftField}", out leftJoinValue)) && leftJoinValue != null)
             {
                 // Look for matching right rows
                 if (rightRowIndex.TryGetValue(leftJoinValue, out var matchingRightRows))
@@ -1084,13 +1097,15 @@ public class SproutDbExecutor(
                         // Copy all fields from left row
                         foreach (var (key, value) in leftRow.Fields)
                         {
-                            joinedRow.SetField($"{leftTableName}.{key}", value);
+                            var lrTmpTable = key.Contains('.') ? key : $"{leftTableName}.{key}";
+                            joinedRow.SetField(lrTmpTable, value);
                         }
 
                         // Add fields from right row with the alias prefix
                         foreach (var (key, value) in rightRow.Fields)
                         {
-                            joinedRow.SetField($"{rightTableName}.{key}", value);
+                            var rrTmpTable = key.Contains('.') ? key : $"{rightTableName}.{key}";
+                            joinedRow.SetField(rrTmpTable, value);
                         }
 
                         if (join.OnCondition != null)
@@ -1166,7 +1181,7 @@ public class SproutDbExecutor(
             }
 
             // Try string parsing as fallback
-            string? exprStr = fieldExpression.ToString();
+            var exprStr = fieldExpression.ToString();
             if (!string.IsNullOrEmpty(exprStr) && exprStr.Contains('.'))
             {
                 var parts = exprStr.Split('.');
@@ -1177,6 +1192,24 @@ public class SproutDbExecutor(
             }
         }
         return string.Empty;
+    }
+
+    private static List<Row> ApplyWhere(List<Row> rows, Expression? where)
+    {
+        if (rows.Count == 0 || where == null)
+        {
+            return rows; // No rows to filter or no WHERE condition
+        }
+
+        var filteredRows = new List<Row>();
+        foreach (var row in rows)
+        {
+            if (EvaluateExpression(row, where.Value))
+            {
+                filteredRows.Add(row);
+            }
+        }
+        return filteredRows;
     }
 
     private static List<Row> ApplyGrouping(List<Row> rows, ReadOnlyMemory<Expression> groupBy, Expression? having)
@@ -1219,7 +1252,7 @@ public class SproutDbExecutor(
                 // Convert value to string representation for the key
                 // Treat null values specially
                 var stringValue = fieldValue == null ? "NULL" : fieldValue.ToString() ?? "NULL";
-                keyComponents.Add($"{field}:{stringValue}");
+                keyComponents.Add($"{field.Name}:{stringValue}");
             }
 
             var groupKey = string.Join("||", keyComponents);
@@ -1227,7 +1260,7 @@ public class SproutDbExecutor(
             // Add row to the appropriate group
             if (!groupedRows.TryGetValue(groupKey, out var group))
             {
-                group = new List<Row>();
+                group = [];
                 groupedRows[groupKey] = group;
             }
 
@@ -1264,7 +1297,7 @@ public class SproutDbExecutor(
             foreach (var field in firstRow.Fields.Keys)
             {
                 double sum = 0;
-                int validValueCount = 0;
+                var validValueCount = 0;
 
                 foreach (var row in group)
                 {
@@ -1279,6 +1312,7 @@ public class SproutDbExecutor(
                 {
                     groupRow.SetField($"sum({field})", sum);
                     groupRow.SetField($"avg({field})", sum / validValueCount);
+                    groupRow.SetField($"count({field})", validValueCount);
                 }
             }
 
@@ -1352,7 +1386,7 @@ public class SproutDbExecutor(
         }
 
         // Use the existing CompareValues method
-        int comparisonResult = CompareValues(leftValue, rightValue);
+        var comparisonResult = CompareValues(leftValue, rightValue, comparison.Operator);
 
         return comparison.Operator switch
         {
@@ -1362,6 +1396,8 @@ public class SproutDbExecutor(
             ComparisonOperator.GreaterThanOrEqual => comparisonResult >= 0,
             ComparisonOperator.LessThan => comparisonResult < 0,
             ComparisonOperator.LessThanOrEqual => comparisonResult <= 0,
+            ComparisonOperator.Contains => comparisonResult == 1,
+            ComparisonOperator.In => comparisonResult == 1,
             _ => false
         };
     }
@@ -1396,6 +1432,65 @@ public class SproutDbExecutor(
                         return value;
                     }
 
+                    // Handle aggregate functions like count(), sum(), avg()
+                    var exprStr = expr.ToString();
+                    if (!string.IsNullOrEmpty(exprStr) && exprStr.Contains('(') && exprStr.Contains(')'))
+                    {
+                        if (row.Fields.TryGetValue(exprStr, out var aggValue))
+                        {
+                            return aggValue;
+                        }
+                    }
+
+                    if (row.Fields.TryGetValue(field.Value.Segments[0], out value))
+                    {
+                        for (var i = 1; i < field.Value.Segments.Length; i++)
+                        {
+                            if (value is Dictionary<string, object> nestedDict)
+                            {
+                                if (!nestedDict.TryGetValue(field.Value.Segments[i], out value))
+                                {
+                                    return null;
+                                }
+                            }
+                            if (value is Expression.JsonData jsonSegmentData)
+                            {
+                                var jsonValue = jsonSegmentData.Value;
+                                if (jsonValue is Dictionary<string, Expression> expressionDict)
+                                {
+                                    if (!expressionDict.TryGetValue(field.Value.Segments[i], out var nextExpr))
+                                        return null;
+
+                                    value = nextExpr.Type == ExpressionType.JsonValue
+                                        ? (nextExpr.As<Expression.JsonData>().Value)
+                                        : nextExpr;
+                                }
+                                else
+                                    return null;
+                            }
+                            else if (value is Dictionary<string, Expression> expressionDict)
+                            {
+                                if (!expressionDict.TryGetValue(field.Value.Segments[i], out var nextExpr))
+                                    return null;
+
+                                value = nextExpr.Type == ExpressionType.JsonValue
+                                    ? (nextExpr.As<Expression.JsonData>().Value)
+                                    : nextExpr;
+                            }
+                            else
+                            {
+                                return null;
+                            }
+                        }
+
+                        if (value is not null)
+                        {
+                            return value;
+                        }
+                    }
+
+
+
                     // If field has TableAlias and FieldNameOnly components, try the constructed name
                     if (field.Value.TableAlias != null && field.Value.FieldNameOnly != null)
                     {
@@ -1406,15 +1501,7 @@ public class SproutDbExecutor(
                         }
                     }
 
-                    // Handle aggregate functions like count(), sum(), avg()
-                    string? exprStr = expr.ToString();
-                    if (!string.IsNullOrEmpty(exprStr) && exprStr.Contains('(') && exprStr.Contains(')'))
-                    {
-                        if (row.Fields.TryGetValue(exprStr, out var aggValue))
-                        {
-                            return aggValue;
-                        }
-                    }
+
                 }
                 return null;
 
@@ -1426,6 +1513,7 @@ public class SproutDbExecutor(
                     LiteralType.Number => ParseNumber(literal.Value),
                     LiteralType.Boolean => bool.Parse(literal.Value),
                     LiteralType.Null => null,
+                    LiteralType.Date => ParseDate(literal.Value),
                     _ => literal.Value
                 };
 
@@ -1460,7 +1548,7 @@ public class SproutDbExecutor(
         sortedRows.Sort((row1, row2) =>
         {
             // Compare based on each order-by field in sequence
-            for (int i = 0; i < orderBy.Length; i++)
+            for (var i = 0; i < orderBy.Length; i++)
             {
                 var orderByField = orderBy.Span[i];
                 var field = ExtractField(orderByField.Field);
@@ -1485,7 +1573,7 @@ public class SproutDbExecutor(
                 if (value2 == null) return orderByField.Direction == SortDirection.Asc ? 1 : -1;
 
                 // Compare the values based on their types
-                int comparison = CompareValues(value1, value2);
+                var comparison = CompareValues(value1, value2, ComparisonOperator.GreaterThan);
 
                 // Apply sort direction
                 if (comparison != 0)
@@ -1537,9 +1625,9 @@ public class SproutDbExecutor(
             // Copy only the selected fields
             foreach (var field in selectedFields)
             {
-                if (originalRow.Fields.TryGetValue(field.FieldNameOnly ?? field.Name, out var value))
+                if (originalRow.Fields.TryGetValue(field.Name, out var value))
                 {
-                    projectedRow.SetField(field.Alias ?? field.FieldNameOnly ?? field.Name, value);
+                    projectedRow.SetField(field.Alias ?? field.Name, value);
                 }
             }
 
@@ -1664,25 +1752,25 @@ public class SproutDbExecutor(
         if (string.IsNullOrEmpty(value)) return 0;
 
         // Try parsing with invariant culture to handle various formats
-        if (int.TryParse(value, System.Globalization.NumberStyles.Any,
-            System.Globalization.CultureInfo.InvariantCulture, out var intVal))
-            return intVal;
+        //if (int.TryParse(value, System.Globalization.NumberStyles.Any,
+        //    System.Globalization.CultureInfo.InvariantCulture, out var intVal))
+        //    return intVal;
 
-        if (long.TryParse(value, System.Globalization.NumberStyles.Any,
-            System.Globalization.CultureInfo.InvariantCulture, out var longVal))
-            return longVal;
+        //if (long.TryParse(value, System.Globalization.NumberStyles.Any,
+        //    System.Globalization.CultureInfo.InvariantCulture, out var longVal))
+        //    return longVal;
 
         if (double.TryParse(value, System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out var doubleVal))
             return doubleVal;
 
-        if (decimal.TryParse(value, System.Globalization.NumberStyles.Any,
-            System.Globalization.CultureInfo.InvariantCulture, out var decimalVal))
-            return decimalVal;
+        //if (decimal.TryParse(value, System.Globalization.NumberStyles.Any,
+        //    System.Globalization.CultureInfo.InvariantCulture, out var decimalVal))
+        //    return decimalVal;
 
         // If all parsing attempts fail, try to remove any non-numeric characters
         // and parse again (useful for handling currency symbols, etc.)
-        string cleaned = System.Text.RegularExpressions.Regex.Replace(
+        var cleaned = System.Text.RegularExpressions.Regex.Replace(
             value, @"[^\d.-]", "");
 
         if (decimal.TryParse(cleaned, System.Globalization.NumberStyles.Any,
@@ -1690,6 +1778,56 @@ public class SproutDbExecutor(
             return cleanedDecimal;
 
         return 0;
+    }
+
+    private static object ParseDate(string? value)
+    {
+        //possible:
+        //now-7-days  [days, weeks, months, years]
+        //this-month [day, week, month, year]
+        //a date value
+
+        if (string.IsNullOrEmpty(value)) return DateTime.Now;
+
+        if (value.StartsWith("now"))
+        {
+            var parts = value.Split('-');
+            if (parts.Length > 1 && int.TryParse(parts[1], out var amount) && parts.Length > 2)
+            {
+                var timeUnit = parts[2].ToLowerInvariant();
+                return timeUnit switch
+                {
+                    "days" => DateTime.Today.AddDays(-amount),
+                    "weeks" => DateTime.Today.AddDays(-amount * 7),
+                    "months" => DateTime.Today.AddMonths(-amount),
+                    "years" => DateTime.Today.AddYears(-amount),
+                    _ => DateTime.Today
+                };
+            }
+        }
+        else if (value.StartsWith("this-"))
+        {
+            var parts = value.Split('-');
+            if (parts.Length > 1)
+            {
+                var timeUnit = parts[1].ToLowerInvariant();
+                return timeUnit switch
+                {
+                    "day" => DateTime.Today,
+                    "week" => DateTime.Today.AddDays(-(int)DateTime.Today.DayOfWeek),
+                    "month" => new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1),
+                    "year" => new DateTime(DateTime.Today.Year, 1, 1),
+                    _ => DateTime.Today
+                };
+            }
+        }
+        else if (DateTime.TryParse(value, out var dateValue))
+        {
+            return dateValue;
+        }
+        return DateTime.Now; // Default to now if parsing fails
+
+
     }
 
     private static EColumnType ParseColumnType(string? dataType)
@@ -1718,7 +1856,7 @@ public class SproutDbExecutor(
             if (innerField.HasValue)
             {
                 // Return the field with the alias applied
-                return new Field(innerField.Value.Name, aliasData.Alias);
+                return new Field(innerField.Value.Name, [innerField.Value.Name], aliasData.Alias);
             }
             return null;
         }
@@ -1736,14 +1874,17 @@ public class SproutDbExecutor(
                     // Handle multi-segment paths (e.g., "alias.field")
                     if (fieldPath.Length >= 2)
                     {
-                        // When we have a path like "alias.field", preserve the full path
-                        // for ON condition evaluation, but also track the last segment as fieldName
-                        var fieldName = fieldPath.Span[fieldPath.Length - 1];
-                        var alias = fieldPath.Span[0];
-
-                        // Use the full path as the name, but also remember the components
-                        var fullPath = string.Join(".", fieldPath.ToArray());
-                        return new Field(fullPath, null, fieldName, alias);
+                        var fullPath = new StringBuilder();
+                        for (var i = 0; i < fieldPath.Length; i++)
+                        {
+                            var pathSegment = fieldPath.Span[i];
+                            if (i > 0)
+                            {
+                                fullPath.Append('.');
+                            }
+                            fullPath.Append(pathSegment);
+                        }
+                        return new Field(fullPath.ToString(), fieldPath.ToArray(), null, fieldPath.Span[fieldPath.Length - 1], fieldPath.Span[0]);
                     }
                     else
                     {
@@ -1751,7 +1892,7 @@ public class SproutDbExecutor(
                         var fieldName = fieldPath.Span[0];
                         if (!string.IsNullOrEmpty(fieldName))
                         {
-                            return new Field(fieldName, null);
+                            return new Field(fieldName, [fieldName], null);
                         }
                     }
                 }
@@ -1766,11 +1907,11 @@ public class SproutDbExecutor(
                     if (parts.Length >= 2)
                     {
                         // When we have a path like "alias.field", preserve the full path
-                        return new Field(expressionStr, null, parts[parts.Length - 1], parts[0]);
+                        return new Field(expressionStr, parts, null, parts[parts.Length - 1], parts[0]);
                     }
                     else if (parts.Length == 1)
                     {
-                        return new Field(parts[0], null);
+                        return new Field(parts[0], parts, null);
                     }
                 }
             }
@@ -1783,12 +1924,23 @@ public class SproutDbExecutor(
 
         return null;
     }
-    private static int CompareValues(object value1, object value2)
+    private static int CompareValues(object value1, object value2, ComparisonOperator @operator)
     {
+        //Try DateTime comparison
+        if ((value1 is DateTime leftDate || value1 is string leftString && DateTime.TryParse(leftString, out leftDate)) && value2 is DateTime rightDate)
+        {
+            return leftDate.CompareTo(rightDate);
+        }
+
         // If both values are of the same comparable type, use direct comparison
         if (value1 is IComparable comparable1 && value2.GetType() == value1.GetType())
         {
-            return comparable1.CompareTo(value2);
+            return @operator switch
+            {
+                ComparisonOperator.Contains => value1.ToString()!.Contains(value2.ToString()!, StringComparison.OrdinalIgnoreCase) ? 1 : 0,
+
+                _ => comparable1.CompareTo(value2)
+            };
         }
 
         // Handle numeric types
@@ -1798,6 +1950,25 @@ public class SproutDbExecutor(
             var num2 = Convert.ToDouble(value2);
             return num1.CompareTo(num2);
         }
+
+        if (value2 is Expression[] jsonValues)
+        {
+            var leftStr = value1.ToString();
+
+            foreach (var expr in jsonValues)
+            {
+                if (expr.Type == ExpressionType.JsonValue)
+                {
+                    var jsonData = expr.As<Expression.JsonData>();
+                    var valueStr = jsonData.Value?.ToString();
+
+                    if (valueStr != null && string.Equals(leftStr, valueStr, StringComparison.OrdinalIgnoreCase))
+                        return 1;
+                }
+            }
+            return 0;
+        }
+
 
         // Handle string comparison
         var str1 = value1.ToString();
@@ -1815,5 +1986,5 @@ public class SproutDbExecutor(
         return Guid.NewGuid().ToString("N")[..12]; // 12-character commit ID
     }
 
-    private readonly record struct Field(string Name, string? Alias, string? FieldNameOnly = null, string? TableAlias = null);
+    private readonly record struct Field(string Name, string[] Segments, string? Alias, string? FieldNameOnly = null, string? TableAlias = null);
 }

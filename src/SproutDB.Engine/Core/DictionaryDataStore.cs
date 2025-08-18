@@ -10,7 +10,7 @@ public class DictionaryDataStore(ISproutDB server) : IDataStore
 
     #region Table Operations
 
-    public IEnumerable<Row> GetRows(string tableName, Expression? filter = null, int? limit = null)
+    public IEnumerable<Row> GetRows(string tableName, string? tableAlias, int? limit = null)
     {
         var database = server.GetCurrentDatabase() ?? throw new InvalidOperationException("No current database selected");
         if (!database.Tables.TryGetValue(tableName, out var table))
@@ -20,21 +20,22 @@ public class DictionaryDataStore(ISproutDB server) : IDataStore
 
         var rows = table.Rows.Values.AsEnumerable();
 
-        // Apply filter if provided
-        if (filter != null)
+        if (tableAlias != null)
         {
-            rows = rows.Where(row => EvaluateFilter(row, filter.Value));
+            rows = rows.Select(r =>
+            {
+                r.Fields = r.Fields.ToDictionary(k => $"{tableAlias}.{k.Key}", v => v.Value);
+                return r;
+            });
         }
 
-        // Apply limit if provided
+        // Apply limit if provided - this is for now a server ram guard
         if (limit.HasValue)
         {
             rows = rows.Take(limit.Value);
         }
 
-#pragma warning disable IDE0305 // Simplify collection initialization
-        return rows.ToList(); // Materialize to avoid multiple enumeration
-#pragma warning restore IDE0305 // Simplify collection initialization
+        return rows;
     }
 
     public Row? GetRow(string tableName, object id)
@@ -300,7 +301,7 @@ public class DictionaryDataStore(ISproutDB server) : IDataStore
                     {
                         if (!expressionDict.TryGetValue(segments[i], out var nextExpr))
                             return null;
-                        
+
                         currentValue = nextExpr.Type == ExpressionType.JsonValue
                             ? (nextExpr.As<Expression.JsonData>().Value)
                             : nextExpr;
@@ -313,7 +314,7 @@ public class DictionaryDataStore(ISproutDB server) : IDataStore
                 {
                     if (!expressionDict.TryGetValue(segments[i], out var nextExpr))
                         return null;
-                    
+
                     currentValue = nextExpr.Type == ExpressionType.JsonValue
                         ? (nextExpr.As<Expression.JsonData>().Value)
                         : nextExpr;

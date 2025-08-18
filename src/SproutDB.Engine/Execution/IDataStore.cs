@@ -7,7 +7,7 @@ namespace SproutDB.Engine.Execution;
 public interface IDataStore
 {
     // Table operations
-    IEnumerable<Row> GetRows(string tableName, Expression? filter = null, int? limit = null);
+    IEnumerable<Row> GetRows(string tableName, string? alias, int? limit = null);
     Row? GetRow(string tableName, object id);
     string UpsertRow(string tableName, Row row, string? onField = null);
     int DeleteRows(string tableName, Expression? filter = null);

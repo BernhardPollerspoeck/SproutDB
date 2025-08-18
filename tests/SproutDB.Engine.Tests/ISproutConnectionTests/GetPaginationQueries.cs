@@ -93,7 +93,7 @@ public class GetPaginationQueries : ISproutConnectionTestsSetup
 
         // Verify that we have the second page of users sorted by age in descending order
         // We should have users with ages: 45, 40, 35, 30, 25
-        var expectedAges = new[] { 45, 40, 35, 30, 25 };
+        var expectedAges = new[] { 45d, 40d, 35d, 30d, 25d };
         
         for (var i = 0; i < resultRows.Count; i++)
         {

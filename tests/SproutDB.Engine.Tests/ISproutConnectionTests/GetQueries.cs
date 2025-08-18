@@ -139,19 +139,19 @@ public class GetQueries : ISproutConnectionTestsSetup
 
         // Verify only requested columns are present
         var firstRow = resultRows[0];
-        Assert.IsTrue(firstRow.Fields.ContainsKey(NAME_COLUMN));
-        Assert.IsTrue(firstRow.Fields.ContainsKey(AGE_COLUMN));
-        Assert.IsFalse(firstRow.Fields.ContainsKey(ACTIVE_COLUMN));
+        Assert.IsTrue(firstRow.Fields.ContainsKey($"u.{NAME_COLUMN}"));
+        Assert.IsTrue(firstRow.Fields.ContainsKey($"u.{AGE_COLUMN}"));
+        Assert.IsFalse(firstRow.Fields.ContainsKey($"u.{ACTIVE_COLUMN}"));
 
         // Verify Alice's data is present with correct columns
-        var aliceRow = resultRows.FirstOrDefault(r => r.Fields[NAME_COLUMN]?.Equals(ALICE_NAME) is true);
+        var aliceRow = resultRows.FirstOrDefault(r => r.Fields[$"u.{NAME_COLUMN}"]?.Equals(ALICE_NAME) is true);
         Assert.IsNotNull(aliceRow);
-        Assert.AreEqual(ALICE_AGE, aliceRow.Fields[AGE_COLUMN]);
+        Assert.AreEqual(ALICE_AGE, aliceRow.Fields[$"u.{AGE_COLUMN}"]);
 
         // Verify Bob's data is present with correct columns
-        var bobRow = resultRows.FirstOrDefault(r => r.Fields[NAME_COLUMN]?.Equals(BOB_NAME) is true);
+        var bobRow = resultRows.FirstOrDefault(r => r.Fields[$"u.{NAME_COLUMN}"]?.Equals(BOB_NAME) is true);
         Assert.IsNotNull(bobRow);
-        Assert.AreEqual(BOB_AGE, bobRow.Fields[AGE_COLUMN]);
+        Assert.AreEqual(BOB_AGE, bobRow.Fields[$"u.{AGE_COLUMN}"]);
     }
 
     [TestMethod]
@@ -367,7 +367,7 @@ public class GetQueries : ISproutConnectionTestsSetup
         // Verify all returned users have age > 25
         foreach (var row in resultRows)
         {
-            Assert.IsTrue((int)row.Fields[AGE_COLUMN]! > 25);
+            Assert.IsTrue((double)row.Fields[AGE_COLUMN]! > 25);
         }
     }
 
@@ -414,7 +414,7 @@ public class GetQueries : ISproutConnectionTestsSetup
         // Verify all returned users have age >= 30
         foreach (var row in resultRows)
         {
-            Assert.IsTrue((int)row.Fields[AGE_COLUMN]! >= 30);
+            Assert.IsTrue((double)row.Fields[AGE_COLUMN]! >= 30);
         }
 
         // Check specifically for expected users
@@ -468,7 +468,7 @@ public class GetQueries : ISproutConnectionTestsSetup
         // Verify all returned users have age < 40
         foreach (var row in resultRows)
         {
-            Assert.IsTrue((int)row.Fields[AGE_COLUMN]! < 40);
+            Assert.IsTrue((double)row.Fields[AGE_COLUMN]! < 40);
         }
 
         // Check specifically for expected users
@@ -522,7 +522,7 @@ public class GetQueries : ISproutConnectionTestsSetup
         // Verify all returned users have age <= 35
         foreach (var row in resultRows)
         {
-            Assert.IsTrue((int)row.Fields[AGE_COLUMN]! <= 35);
+            Assert.IsTrue((double)row.Fields[AGE_COLUMN]! <= 35);
         }
 
         // Check specifically for expected users
@@ -665,7 +665,7 @@ public class GetQueries : ISproutConnectionTestsSetup
         // Verify all returned users have age > 25 and are active
         foreach (var row in resultRows)
         {
-            Assert.IsTrue((int)row.Fields[AGE_COLUMN]! > 25);
+            Assert.IsTrue((double)row.Fields[AGE_COLUMN]! > 25);
             Assert.IsTrue((bool)row.Fields[ACTIVE_COLUMN]!);
         }
 
