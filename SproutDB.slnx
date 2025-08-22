@@ -2,6 +2,7 @@
   <Folder Name="/00_Docs/">
     <File Path="database_features_notes.md" />
     <File Path="sdk.md" />
+    <File Path="Storage Format.md" />
     <File Path="storage.md" />
   </Folder>
   <Folder Name="/00_Docs/Syntax/">
