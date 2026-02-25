@@ -4,7 +4,7 @@ internal sealed class TableHandle : IDisposable
 {
     private readonly string _tablePath;
     private readonly string _schemaPath;
-    private readonly Dictionary<string, ColumnHandle> _columns = new();
+    private readonly Dictionary<string, ColumnHandle> _columns = [];
 
     public TableSchema Schema { get; private set; }
     public IndexHandle Index { get; }

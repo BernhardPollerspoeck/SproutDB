@@ -24,6 +24,9 @@ internal static class QueryParser
         if (ctx.MatchKeyword("create"))
             return ParseCreate(ctx);
 
+        if (ctx.MatchKeyword("get"))
+            return GetParser.Parse(ctx);
+
         if (ctx.MatchKeyword("upsert"))
             return UpsertParser.Parse(ctx);
 

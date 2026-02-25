@@ -11,7 +11,7 @@ namespace SproutDB.Core;
 public sealed class SproutEngine : IDisposable
 {
     private readonly string _dataDirectory;
-    private readonly Dictionary<string, TableHandle> _tables = new();
+    private readonly Dictionary<string, TableHandle> _tables = [];
 
     public SproutEngine(string dataDirectory)
     {
@@ -45,10 +45,9 @@ public sealed class SproutEngine : IDisposable
         {
             CreateDatabaseQuery => CreateDatabaseExecutor.Execute(query, dbName, dbPath),
             CreateTableQuery q => CreateTableExecutor.Execute(query, dbName, dbPath, q),
-            UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table,
-                table => UpsertExecutor.Execute(query, table, q)),
-            AddColumnQuery q => ExecuteWithTable(query, dbPath, q.Table,
-                table => AddColumnExecutor.Execute(query, table, q)),
+            GetQuery q => ExecuteWithTable(query, dbPath, q.Table, table => GetExecutor.Execute(query, table, q)),
+            UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table, table => UpsertExecutor.Execute(query, table, q)),
+            AddColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => AddColumnExecutor.Execute(query, table, q)),
             _ => ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, "operation not supported"),
         };
     }
