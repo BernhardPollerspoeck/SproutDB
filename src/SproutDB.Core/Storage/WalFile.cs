@@ -5,8 +5,10 @@ namespace SproutDB.Core.Storage;
 
 internal sealed class WalFile : IDisposable
 {
+    private const int HeaderSize = 20; // int64 + uint64 + int32
     private readonly FileStream _fs;
     private long _nextSequence;
+    private bool _dirty;
 
     public WalFile(string path)
     {
@@ -15,24 +17,38 @@ internal sealed class WalFile : IDisposable
     }
 
     /// <summary>
-    /// Appends a WAL entry and fsyncs to disk.
-    /// Format: [Sequence: int64][QueryLength: int32][Query: UTF-8]
+    /// Appends a WAL entry to the OS buffer (no fsync).
+    /// Call <see cref="SyncToDisk"/> to flush to durable storage.
+    /// Format: [Sequence: int64][ResolvedId: uint64][QueryLength: int32][Query: UTF-8]
     /// </summary>
-    public long Append(string query)
+    public long Append(string query, ulong resolvedId = 0)
     {
         var seq = _nextSequence++;
         var queryBytes = Encoding.UTF8.GetBytes(query);
 
-        Span<byte> header = stackalloc byte[12];
+        Span<byte> header = stackalloc byte[HeaderSize];
         BinaryPrimitives.WriteInt64LittleEndian(header, seq);
-        BinaryPrimitives.WriteInt32LittleEndian(header[8..], queryBytes.Length);
+        BinaryPrimitives.WriteUInt64LittleEndian(header[8..], resolvedId);
+        BinaryPrimitives.WriteInt32LittleEndian(header[16..], queryBytes.Length);
 
         _fs.Seek(0, SeekOrigin.End);
         _fs.Write(header);
         _fs.Write(queryBytes);
-        _fs.Flush(flushToDisk: true);
+        _fs.Flush(flushToDisk: false);
+        _dirty = true;
 
         return seq;
+    }
+
+    /// <summary>
+    /// Flushes pending WAL data to durable storage (fsync).
+    /// Called periodically by the engine's WAL sync cycle.
+    /// </summary>
+    public void SyncToDisk()
+    {
+        if (!_dirty) return;
+        _fs.Flush(flushToDisk: true);
+        _dirty = false;
     }
 
     /// <summary>
@@ -42,14 +58,15 @@ internal sealed class WalFile : IDisposable
     {
         var entries = new List<WalEntry>();
         _fs.Seek(0, SeekOrigin.Begin);
-        var headerBuf = new byte[12];
+        var headerBuf = new byte[HeaderSize];
 
         while (_fs.Position < _fs.Length)
         {
-            if (_fs.Read(headerBuf, 0, 12) != 12) break;
+            if (_fs.Read(headerBuf, 0, HeaderSize) != HeaderSize) break;
 
             var seq = BinaryPrimitives.ReadInt64LittleEndian(headerBuf);
-            var len = BinaryPrimitives.ReadInt32LittleEndian(headerBuf.AsSpan(8));
+            var resolvedId = BinaryPrimitives.ReadUInt64LittleEndian(headerBuf.AsSpan(8));
+            var len = BinaryPrimitives.ReadInt32LittleEndian(headerBuf.AsSpan(16));
 
             var queryBuf = new byte[len];
             if (_fs.Read(queryBuf, 0, len) != len) break;
@@ -57,6 +74,7 @@ internal sealed class WalFile : IDisposable
             entries.Add(new WalEntry
             {
                 Sequence = seq,
+                ResolvedId = resolvedId,
                 Query = Encoding.UTF8.GetString(queryBuf),
             });
         }
@@ -80,14 +98,14 @@ internal sealed class WalFile : IDisposable
     {
         long last = 0;
         _fs.Seek(0, SeekOrigin.Begin);
-        var headerBuf = new byte[12];
+        var headerBuf = new byte[HeaderSize];
 
         while (_fs.Position < _fs.Length)
         {
-            if (_fs.Read(headerBuf, 0, 12) != 12) break;
+            if (_fs.Read(headerBuf, 0, HeaderSize) != HeaderSize) break;
 
             last = BinaryPrimitives.ReadInt64LittleEndian(headerBuf);
-            var len = BinaryPrimitives.ReadInt32LittleEndian(headerBuf.AsSpan(8));
+            var len = BinaryPrimitives.ReadInt32LittleEndian(headerBuf.AsSpan(16));
 
             _fs.Seek(len, SeekOrigin.Current);
         }

@@ -9,6 +9,7 @@ internal sealed class IndexHandle : IDisposable
     private MemoryMappedFile _mmf;
     private MemoryMappedViewAccessor _view;
     private long _capacity;
+    private long _nextPlace;
 
     public IndexHandle(string path)
     {
@@ -16,6 +17,7 @@ internal sealed class IndexHandle : IDisposable
         _fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
         _capacity = _fs.Length;
         (_mmf, _view) = CreateMapping(_fs, _capacity);
+        _nextPlace = ScanMaxPlace() + 1;
     }
 
     // ── NextId (stored at position 0 in the index file) ────
@@ -63,10 +65,19 @@ internal sealed class IndexHandle : IDisposable
     }
 
     /// <summary>
-    /// Scans all index entries to find the next sequential place.
-    /// Returns maxUsedPlace + 1.
+    /// Returns the next available place and advances the counter.
+    /// O(1) — the counter is initialized once on open via ScanMaxPlace().
     /// </summary>
     public long FindNextPlace()
+    {
+        return _nextPlace++;
+    }
+
+    /// <summary>
+    /// Scans all index entries to find the highest used place.
+    /// Called once at open time to initialize _nextPlace.
+    /// </summary>
+    private long ScanMaxPlace()
     {
         long maxPlace = -1;
         var entries = _capacity / StorageConstants.INDEX_ENTRY_SIZE;
@@ -82,7 +93,7 @@ internal sealed class IndexHandle : IDisposable
             }
         }
 
-        return maxPlace + 1;
+        return maxPlace;
     }
 
     /// <summary>

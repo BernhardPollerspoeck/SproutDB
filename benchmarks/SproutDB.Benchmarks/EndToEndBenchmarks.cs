@@ -14,7 +14,11 @@ public class EndToEndBenchmarks
     public void Setup()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-bench-{Guid.NewGuid()}");
-        _engine = new SproutEngine(_tempDir);
+        _engine = new SproutEngine(new SproutEngineSettings
+        {
+            DataDirectory = _tempDir,
+            FlushInterval = Timeout.InfiniteTimeSpan,
+        });
         _engine.Execute("create database", "bench");
     }
 

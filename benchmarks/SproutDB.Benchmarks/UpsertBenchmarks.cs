@@ -15,7 +15,11 @@ public class UpsertBenchmarks
     public void Setup()
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-bench-{Guid.NewGuid()}");
-        _engine = new SproutEngine(_tempDir);
+        _engine = new SproutEngine(new SproutEngineSettings
+        {
+            DataDirectory = _tempDir,
+            FlushInterval = Timeout.InfiniteTimeSpan,
+        });
         _engine.Execute("create database", "bench");
         _engine.Execute(
             "create table users (name string 100, email string 320, age ubyte, active bool default true, score sint)",

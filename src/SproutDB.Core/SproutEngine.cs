@@ -1,4 +1,3 @@
-using System.Text;
 using SproutDB.Core.Execution;
 using SproutDB.Core.Parsing;
 using SproutDB.Core.Storage;
@@ -8,19 +7,25 @@ namespace SproutDB.Core;
 /// <summary>
 /// Main entry point for the SproutDB engine.
 /// Parses queries and dispatches execution to specialized executors.
-/// Write path: WAL append + fsync → MMF update → Response.
-/// Background flush cycle: MMF flush → WAL truncate.
+/// Write path: WAL append → MMF update → Response.
+/// Background: WAL group commit (fsync), flush cycle (MMF flush + WAL truncate).
 /// </summary>
 public sealed class SproutEngine : IDisposable
 {
     private readonly string _dataDirectory;
     private readonly Dictionary<string, TableHandle> _tables = [];
     private readonly Dictionary<string, WalFile> _wals = [];
+    private readonly HashSet<string> _knownDatabases = [];
     private readonly HashSet<string> _replayedDatabases = [];
 
     // Flush cycle
     private readonly CancellationTokenSource _flushCts = new();
     private readonly Task _flushTask;
+
+    // WAL group commit
+    private readonly CancellationTokenSource _walSyncCts = new();
+    private readonly Task _walSyncTask;
+    private readonly TimeSpan _walSyncInterval;
 
     /// <summary>
     /// Creates a new SproutDB engine with default settings.
@@ -38,7 +43,9 @@ public sealed class SproutEngine : IDisposable
         _dataDirectory = Path.GetFullPath(settings.DataDirectory);
         Directory.CreateDirectory(_dataDirectory);
 
+        _walSyncInterval = settings.WalSyncInterval;
         _flushTask = RunFlushCycle(settings.FlushInterval, _flushCts.Token);
+        _walSyncTask = RunWalSyncCycle(_walSyncInterval, _walSyncCts.Token);
     }
 
     /// <summary>
@@ -68,13 +75,17 @@ public sealed class SproutEngine : IDisposable
         // WAL write before mutating operations (except create database)
         if (IsMutatingQuery(parsedQuery))
         {
-            if (!Directory.Exists(dbPath))
+            if (!DatabaseExists(dbPath))
                 return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_DATABASE,
                     $"database '{dbName}' does not exist");
 
-            var walQuery = ResolveWalQuery(query, parsedQuery, dbPath);
+            ulong resolvedId = ResolveIdForWal(parsedQuery, dbPath);
             var wal = GetOrOpenWal(dbPath);
-            wal.Append(walQuery);
+            wal.Append(query, resolvedId);
+
+            // Immediate fsync if group commit is disabled
+            if (_walSyncInterval == TimeSpan.Zero)
+                wal.SyncToDisk();
         }
 
         return DispatchQuery(query, dbName, dbPath, parsedQuery);
@@ -116,6 +127,34 @@ public sealed class SproutEngine : IDisposable
         }
     }
 
+    // ── WAL group commit ────────────────────────────────────
+
+    private async Task RunWalSyncCycle(TimeSpan interval, CancellationToken ct)
+    {
+        if (interval == TimeSpan.Zero || interval == Timeout.InfiniteTimeSpan)
+            return;
+
+        using var timer = new PeriodicTimer(interval);
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                SyncAllWals();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on dispose
+        }
+    }
+
+    private void SyncAllWals()
+    {
+        foreach (var wal in _wals.Values)
+            wal.SyncToDisk();
+    }
+
     // ── WAL replay ───────────────────────────────────────────
 
     private void ReplayWalIfNeeded(string dbPath, string dbName)
@@ -124,6 +163,7 @@ public sealed class SproutEngine : IDisposable
         _replayedDatabases.Add(dbPath);
 
         if (!Directory.Exists(dbPath)) return;
+        _knownDatabases.Add(dbPath);
 
         var walPath = Path.Combine(dbPath, "_wal");
         if (!File.Exists(walPath)) return;
@@ -139,7 +179,24 @@ public sealed class SproutEngine : IDisposable
             if (!parseResult.Success || parseResult.Query is null)
                 continue; // skip corrupted/invalid entries
 
-            DispatchQuery(entry.Query, dbName, dbPath, parseResult.Query);
+            var replayQuery = parseResult.Query;
+
+            // Inject resolved ID for auto-ID upserts during replay
+            if (entry.ResolvedId > 0 && replayQuery is UpsertQuery upsert
+                && !upsert.Fields.Exists(f => f.Name == "id"))
+            {
+                upsert.Fields.Insert(0, new UpsertField
+                {
+                    Name = "id",
+                    Value = new UpsertValue
+                    {
+                        Kind = UpsertValueKind.Integer,
+                        Raw = entry.ResolvedId.ToString(),
+                    },
+                });
+            }
+
+            DispatchQuery(entry.Query, dbName, dbPath, replayQuery);
         }
 
         // Flush MMFs to disk, then truncate WAL
@@ -147,70 +204,31 @@ public sealed class SproutEngine : IDisposable
         wal.Truncate();
     }
 
-    // ── WAL query resolution ─────────────────────────────────
+    // ── WAL ID resolution ────────────────────────────────────
 
     private static bool IsMutatingQuery(IQuery query)
     {
         return query is CreateTableQuery or UpsertQuery or AddColumnQuery;
     }
 
-    private string ResolveWalQuery(string originalQuery, IQuery query, string dbPath)
+    /// <summary>
+    /// For auto-ID upserts, reads the next ID that will be assigned.
+    /// This ID is stored in the WAL entry so replay is idempotent.
+    /// Returns 0 for non-upsert or explicit-ID upsert queries.
+    /// </summary>
+    private ulong ResolveIdForWal(IQuery query, string dbPath)
     {
-        // Only upsert without explicit ID needs modification for idempotent replay
         if (query is not UpsertQuery upsert)
-            return originalQuery;
+            return 0;
 
         if (upsert.Fields.Exists(f => f.Name == "id"))
-            return originalQuery;
+            return 0;
 
         var tablePath = Path.Combine(dbPath, upsert.Table);
-        if (!Directory.Exists(tablePath))
-            return originalQuery; // will fail at execution
+        if (!_tables.TryGetValue(tablePath, out var table))
+            return 0; // table not cached = doesn't exist or first access, will fail at dispatch
 
-        var table = GetOrOpenTable(tablePath);
-        var nextId = table.Index.ReadNextId();
-
-        return RebuildUpsertWithId(upsert, nextId);
-    }
-
-    private static string RebuildUpsertWithId(UpsertQuery q, ulong id)
-    {
-        var sb = new StringBuilder();
-        sb.Append("upsert ");
-        sb.Append(q.Table);
-        sb.Append(" {id: ");
-        sb.Append(id);
-
-        foreach (var field in q.Fields)
-        {
-            sb.Append(", ");
-            sb.Append(field.Name);
-            sb.Append(": ");
-            AppendFieldValue(sb, field.Value);
-        }
-
-        sb.Append('}');
-        return sb.ToString();
-    }
-
-    private static void AppendFieldValue(StringBuilder sb, UpsertValue value)
-    {
-        switch (value.Kind)
-        {
-            case UpsertValueKind.Null:
-                sb.Append("null");
-                break;
-            case UpsertValueKind.Boolean:
-            case UpsertValueKind.Integer:
-            case UpsertValueKind.Float:
-                sb.Append(value.Raw);
-                break;
-            case UpsertValueKind.String:
-                sb.Append('\'');
-                sb.Append(value.Raw);
-                sb.Append('\'');
-                break;
-        }
+        return table.Index.ReadNextId();
     }
 
     // ── Query dispatch ───────────────────────────────────────
@@ -219,13 +237,32 @@ public sealed class SproutEngine : IDisposable
     {
         return parsedQuery switch
         {
-            CreateDatabaseQuery => CreateDatabaseExecutor.Execute(query, dbName, dbPath),
-            CreateTableQuery q => CreateTableExecutor.Execute(query, dbName, dbPath, q),
+            CreateDatabaseQuery => ExecuteCreateDatabase(query, dbName, dbPath),
+            CreateTableQuery q => ExecuteCreateTable(query, dbName, dbPath, q),
             GetQuery q => ExecuteWithTable(query, dbPath, q.Table, table => GetExecutor.Execute(query, table, q)),
             UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table, table => UpsertExecutor.Execute(query, table, q)),
             AddColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => AddColumnExecutor.Execute(query, table, q)),
             _ => ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, "operation not supported"),
         };
+    }
+
+    // ── Database-level execution ─────────────────────────────
+
+    private SproutResponse ExecuteCreateDatabase(string query, string dbName, string dbPath)
+    {
+        var result = CreateDatabaseExecutor.Execute(query, dbName, dbPath);
+        if (result.Errors is null)
+            _knownDatabases.Add(dbPath);
+        return result;
+    }
+
+    private SproutResponse ExecuteCreateTable(string query, string dbName, string dbPath, CreateTableQuery q)
+    {
+        if (!DatabaseExists(dbPath))
+            return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_DATABASE,
+                $"database '{dbName}' does not exist");
+
+        return CreateTableExecutor.Execute(query, dbName, dbPath, q);
     }
 
     // ── Table-scoped execution ──────────────────────────────
@@ -234,16 +271,22 @@ public sealed class SproutEngine : IDisposable
         string query, string dbPath, string tableName,
         Func<TableHandle, SproutResponse> executor)
     {
-        if (!Directory.Exists(dbPath))
+        var tablePath = Path.Combine(dbPath, tableName);
+
+        // Fast path: table already cached → db and table both exist
+        if (_tables.TryGetValue(tablePath, out var table))
+            return executor(table);
+
+        // Cold path: check filesystem
+        if (!DatabaseExists(dbPath))
             return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_DATABASE,
                 $"database '{Path.GetFileName(dbPath)}' does not exist");
 
-        var tablePath = Path.Combine(dbPath, tableName);
         if (!Directory.Exists(tablePath))
             return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_TABLE,
                 $"table '{tableName}' does not exist");
 
-        var table = GetOrOpenTable(tablePath);
+        table = GetOrOpenTable(tablePath);
         return executor(table);
     }
 
@@ -268,6 +311,20 @@ public sealed class SproutEngine : IDisposable
             _wals[dbPath] = wal;
         }
         return wal;
+    }
+
+    // ── Existence checks ────────────────────────────────────
+
+    private bool DatabaseExists(string dbPath)
+    {
+        if (_knownDatabases.Contains(dbPath))
+            return true;
+
+        if (!Directory.Exists(dbPath))
+            return false;
+
+        _knownDatabases.Add(dbPath);
+        return true;
     }
 
     // ── Flush helpers ────────────────────────────────────────
@@ -309,6 +366,14 @@ public sealed class SproutEngine : IDisposable
 
     public void Dispose()
     {
+        // Stop WAL sync cycle
+        _walSyncCts.Cancel();
+        _walSyncTask.GetAwaiter().GetResult();
+        _walSyncCts.Dispose();
+
+        // Final WAL sync: ensure all buffered WAL data is durable
+        SyncAllWals();
+
         // Stop flush cycle
         _flushCts.Cancel();
         _flushTask.GetAwaiter().GetResult();
