@@ -10,7 +10,7 @@ internal sealed class ColumnHandle : IDisposable
     private readonly string _path;
     private FileStream _fs;
     private MemoryMappedFile _mmf;
-    private MemoryMappedViewAccessor _view;
+    private volatile MemoryMappedViewAccessor _view;
     private long _capacity;
 
     public ColumnSchemaEntry Schema { get; }
@@ -278,13 +278,18 @@ internal sealed class ColumnHandle : IDisposable
 
     private void Remap(long newCapacity)
     {
-        _view.Flush();
-        _view.Dispose();
-        _mmf.Dispose();
+        var oldView = _view;
+        var oldMmf = _mmf;
+
+        oldView.Flush();
 
         _fs.SetLength(newCapacity);
         _capacity = newCapacity;
         (_mmf, _view) = CreateMapping(_fs, _capacity);
+
+        // Dispose old mappings after new ones are live
+        oldView.Dispose();
+        oldMmf.Dispose();
     }
 
     private static (MemoryMappedFile, MemoryMappedViewAccessor) CreateMapping(FileStream fs, long capacity)

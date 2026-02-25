@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Threading.Channels;
 using SproutDB.Core.Execution;
 using SproutDB.Core.Parsing;
 using SproutDB.Core.Storage;
@@ -6,26 +8,26 @@ namespace SproutDB.Core;
 
 /// <summary>
 /// Main entry point for the SproutDB engine.
-/// Parses queries and dispatches execution to specialized executors.
-/// Write path: WAL append → MMF update → Response.
+/// Single-writer queue (Channel) serializes all mutations.
+/// Reads (GetQuery) run lock-free on the caller thread against MMFs.
 /// Background: WAL group commit (fsync), flush cycle (MMF flush + WAL truncate).
 /// </summary>
 public sealed class SproutEngine : IDisposable
 {
     private readonly string _dataDirectory;
-    private readonly Dictionary<string, TableHandle> _tables = [];
+    private readonly ConcurrentDictionary<string, Lazy<TableHandle>> _tables = new();
     private readonly Dictionary<string, WalFile> _wals = [];
-    private readonly HashSet<string> _knownDatabases = [];
-    private readonly HashSet<string> _replayedDatabases = [];
+    private readonly ConcurrentDictionary<string, byte> _knownDatabases = new();
 
-    // Flush cycle
-    private readonly CancellationTokenSource _flushCts = new();
+    // Writer channel
+    private readonly Channel<Action> _writeChannel;
+    private readonly Task _writerTask;
+
+    // Background cycles
     private readonly Task _flushTask;
-
-    // WAL group commit
-    private readonly CancellationTokenSource _walSyncCts = new();
     private readonly Task _walSyncTask;
     private readonly TimeSpan _walSyncInterval;
+    private volatile bool _disposed;
 
     /// <summary>
     /// Creates a new SproutDB engine with default settings.
@@ -44,8 +46,24 @@ public sealed class SproutEngine : IDisposable
         Directory.CreateDirectory(_dataDirectory);
 
         _walSyncInterval = settings.WalSyncInterval;
-        _flushTask = RunFlushCycle(settings.FlushInterval, _flushCts.Token);
-        _walSyncTask = RunWalSyncCycle(_walSyncInterval, _walSyncCts.Token);
+
+        // ── Startup replay: discover all databases, replay WALs ──
+        ReplayAllDatabases();
+
+        // ── Start writer channel ─────────────────────────────────
+        _writeChannel = Channel.CreateUnbounded<Action>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+        });
+        _writerTask = Task.Factory.StartNew(
+            RunWriterLoop,
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default).Unwrap();
+
+        // ── Start background cycles ──────────────────────────────
+        _flushTask = RunFlushCycle(settings.FlushInterval);
+        _walSyncTask = RunWalSyncCycle(_walSyncInterval);
     }
 
     /// <summary>
@@ -61,9 +79,7 @@ public sealed class SproutEngine : IDisposable
 
         var dbPath = Path.Combine(_dataDirectory, dbName);
 
-        // Replay WAL on first access to this database
-        ReplayWalIfNeeded(dbPath, dbName);
-
+        // Parse on caller thread (stateless)
         var parseResult = QueryParser.Parse(query);
         if (!parseResult.Success)
             return ResponseHelper.ParseError(parseResult);
@@ -72,112 +88,117 @@ public sealed class SproutEngine : IDisposable
         if (parsedQuery is null)
             return ResponseHelper.ParseError(parseResult);
 
-        // WAL write before mutating operations (except create database)
-        if (IsMutatingQuery(parsedQuery))
-        {
-            if (!DatabaseExists(dbPath))
-                return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_DATABASE,
-                    $"database '{dbName}' does not exist");
+        // Reads bypass the channel → run directly on caller thread
+        if (parsedQuery is GetQuery getQuery)
+            return ExecuteGet(query, dbName, dbPath, getQuery);
 
-            ulong resolvedId = ResolveIdForWal(parsedQuery, dbPath);
-            var wal = GetOrOpenWal(dbPath);
-            wal.Append(query, resolvedId);
-
-            // Immediate fsync if group commit is disabled
-            if (_walSyncInterval == TimeSpan.Zero)
-                wal.SyncToDisk();
-        }
-
-        return DispatchQuery(query, dbName, dbPath, parsedQuery);
+        // All mutations go through the writer channel
+        return PostWrite(() => ExecuteWrite(query, dbName, dbPath, parsedQuery));
     }
 
-    // ── Flush cycle ──────────────────────────────────────────
+    // ── Writer channel ──────────────────────────────────────
 
-    private async Task RunFlushCycle(TimeSpan interval, CancellationToken ct)
+    private SproutResponse PostWrite(Func<SproutResponse> work)
     {
-        if (interval == Timeout.InfiniteTimeSpan)
-            return;
+        var tcs = new TaskCompletionSource<SproutResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        using var timer = new PeriodicTimer(interval);
+        var action = new Action(tcs, work);
+        if (!_writeChannel.Writer.TryWrite(action))
+            return ResponseHelper.Error("", ErrorCodes.SYNTAX_ERROR, "engine is shutting down");
 
-        try
+        return tcs.Task.GetAwaiter().GetResult();
+    }
+
+    private async Task RunWriterLoop()
+    {
+        await foreach (var action in _writeChannel.Reader.ReadAllAsync())
         {
-            while (await timer.WaitForNextTickAsync(ct))
+            try
             {
-                FlushAll();
+                var result = action.Work();
+                action.Completion.TrySetResult(result);
+            }
+            catch (Exception ex)
+            {
+                action.Completion.TrySetException(ex);
             }
         }
-        catch (OperationCanceledException)
-        {
-            // Expected on dispose
-        }
     }
 
-    private void FlushAll()
+    /// <summary>
+    /// Executes a mutating query on the writer thread.
+    /// </summary>
+    private SproutResponse ExecuteWrite(string query, string dbName, string dbPath, IQuery parsedQuery)
     {
-        // Flush all open table MMFs to disk
-        foreach (var table in _tables.Values)
-            table.Flush();
+        if (parsedQuery is CreateDatabaseQuery)
+            return ExecuteCreateDatabase(query, dbName, dbPath);
 
-        // Truncate all WALs (data is now durable on disk)
-        foreach (var wal in _wals.Values)
-        {
-            if (!wal.IsEmpty)
-                wal.Truncate();
-        }
-    }
+        // All other mutations require the database to exist
+        if (!DatabaseExists(dbPath))
+            return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_DATABASE,
+                $"database '{dbName}' does not exist");
 
-    // ── WAL group commit ────────────────────────────────────
+        // WAL append before mutation
+        ulong resolvedId = ResolveIdForWal(parsedQuery, dbPath);
+        var wal = GetOrOpenWal(dbPath);
+        wal.Append(query, resolvedId);
 
-    private async Task RunWalSyncCycle(TimeSpan interval, CancellationToken ct)
-    {
-        if (interval == TimeSpan.Zero || interval == Timeout.InfiniteTimeSpan)
-            return;
-
-        using var timer = new PeriodicTimer(interval);
-
-        try
-        {
-            while (await timer.WaitForNextTickAsync(ct))
-            {
-                SyncAllWals();
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected on dispose
-        }
-    }
-
-    private void SyncAllWals()
-    {
-        foreach (var wal in _wals.Values)
+        // Immediate fsync if group commit is disabled
+        if (_walSyncInterval == TimeSpan.Zero)
             wal.SyncToDisk();
+
+        return DispatchMutation(query, dbName, dbPath, parsedQuery);
     }
 
-    // ── WAL replay ───────────────────────────────────────────
+    // ── Startup replay ──────────────────────────────────────
 
-    private void ReplayWalIfNeeded(string dbPath, string dbName)
+    private void ReplayAllDatabases()
     {
-        if (_replayedDatabases.Contains(dbPath)) return;
-        _replayedDatabases.Add(dbPath);
+        if (!Directory.Exists(_dataDirectory))
+            return;
 
-        if (!Directory.Exists(dbPath)) return;
-        _knownDatabases.Add(dbPath);
+        foreach (var dbDir in Directory.GetDirectories(_dataDirectory))
+        {
+            var dbName = Path.GetFileName(dbDir);
+            _knownDatabases[dbDir] = 0;
 
+            // Open all existing tables for this database
+            OpenTablesForDatabase(dbDir);
+
+            // Replay WAL if present
+            ReplayWal(dbDir, dbName);
+        }
+    }
+
+    private void OpenTablesForDatabase(string dbPath)
+    {
+        foreach (var tableDir in Directory.GetDirectories(dbPath))
+        {
+            var schemaPath = Path.Combine(tableDir, "_schema.bin");
+            if (!File.Exists(schemaPath))
+                continue;
+
+            GetOrOpenTable(tableDir);
+        }
+    }
+
+    private void ReplayWal(string dbPath, string dbName)
+    {
         var walPath = Path.Combine(dbPath, "_wal");
-        if (!File.Exists(walPath)) return;
+        if (!File.Exists(walPath))
+            return;
 
         var wal = GetOrOpenWal(dbPath);
         var entries = wal.ReadAll();
 
-        if (entries.Count == 0) return;
+        if (entries.Count == 0)
+            return;
 
         foreach (var entry in entries)
         {
             var parseResult = QueryParser.Parse(entry.Query);
             if (!parseResult.Success || parseResult.Query is null)
-                continue; // skip corrupted/invalid entries
+                continue;
 
             var replayQuery = parseResult.Query;
 
@@ -196,12 +217,101 @@ public sealed class SproutEngine : IDisposable
                 });
             }
 
-            DispatchQuery(entry.Query, dbName, dbPath, replayQuery);
+            DispatchAll(entry.Query, dbName, dbPath, replayQuery);
         }
 
         // Flush MMFs to disk, then truncate WAL
         FlushTablesForDatabase(dbPath);
         wal.Truncate();
+    }
+
+    // ── Flush cycle ──────────────────────────────────────────
+
+    private async Task RunFlushCycle(TimeSpan interval)
+    {
+        if (interval == Timeout.InfiniteTimeSpan)
+            return;
+
+        using var timer = new PeriodicTimer(interval);
+
+        while (!_disposed)
+        {
+            if (!await timer.WaitForNextTickAsync())
+                break;
+
+            if (_disposed)
+                break;
+
+            PostFlushAll();
+        }
+    }
+
+    private void PostFlushAll()
+    {
+        var tcs = new TaskCompletionSource<SproutResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var action = new Action(tcs, () =>
+        {
+            FlushAll();
+            return new SproutResponse { Operation = SproutOperation.Get }; // dummy
+        });
+        _writeChannel.Writer.TryWrite(action);
+        // Fire-and-forget: don't block timer thread
+    }
+
+    private void FlushAll()
+    {
+        // Flush all open table MMFs to disk
+        foreach (var lazy in _tables.Values)
+        {
+            if (lazy.IsValueCreated)
+                lazy.Value.Flush();
+        }
+
+        // Truncate all WALs (data is now durable on disk)
+        foreach (var wal in _wals.Values)
+        {
+            if (!wal.IsEmpty)
+                wal.Truncate();
+        }
+    }
+
+    // ── WAL group commit ────────────────────────────────────
+
+    private async Task RunWalSyncCycle(TimeSpan interval)
+    {
+        if (interval == TimeSpan.Zero || interval == Timeout.InfiniteTimeSpan)
+            return;
+
+        using var timer = new PeriodicTimer(interval);
+
+        while (!_disposed)
+        {
+            if (!await timer.WaitForNextTickAsync())
+                break;
+
+            if (_disposed)
+                break;
+
+            PostSyncAllWals();
+        }
+    }
+
+    private void PostSyncAllWals()
+    {
+        var tcs = new TaskCompletionSource<SproutResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var action = new Action(tcs, () =>
+        {
+            SyncAllWals();
+            return new SproutResponse { Operation = SproutOperation.Get }; // dummy
+        });
+        _writeChannel.Writer.TryWrite(action);
+        // Fire-and-forget
+    }
+
+    private void SyncAllWals()
+    {
+        foreach (var wal in _wals.Values)
+            wal.SyncToDisk();
     }
 
     // ── WAL ID resolution ────────────────────────────────────
@@ -225,15 +335,39 @@ public sealed class SproutEngine : IDisposable
             return 0;
 
         var tablePath = Path.Combine(dbPath, upsert.Table);
-        if (!_tables.TryGetValue(tablePath, out var table))
-            return 0; // table not cached = doesn't exist or first access, will fail at dispatch
+        if (!_tables.TryGetValue(tablePath, out var lazy) || !lazy.IsValueCreated)
+            return 0;
 
-        return table.Index.ReadNextId();
+        return lazy.Value.Index.ReadNextId();
     }
 
     // ── Query dispatch ───────────────────────────────────────
 
-    private SproutResponse DispatchQuery(string query, string dbName, string dbPath, IQuery parsedQuery)
+    private SproutResponse ExecuteGet(string query, string dbName, string dbPath, GetQuery q)
+    {
+        if (!DatabaseExists(dbPath))
+            return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_DATABASE,
+                $"database '{dbName}' does not exist");
+
+        return ExecuteWithTable(query, dbPath, q.Table,
+            table => GetExecutor.Execute(query, table, q));
+    }
+
+    private SproutResponse DispatchMutation(string query, string dbName, string dbPath, IQuery parsedQuery)
+    {
+        return parsedQuery switch
+        {
+            CreateTableQuery q => ExecuteCreateTable(query, dbName, dbPath, q),
+            UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table, table => UpsertExecutor.Execute(query, table, q)),
+            AddColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => AddColumnExecutor.Execute(query, table, q)),
+            _ => ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, "operation not supported"),
+        };
+    }
+
+    /// <summary>
+    /// Full dispatch used during replay (handles all query types including CreateDatabase).
+    /// </summary>
+    private SproutResponse DispatchAll(string query, string dbName, string dbPath, IQuery parsedQuery)
     {
         return parsedQuery switch
         {
@@ -252,7 +386,7 @@ public sealed class SproutEngine : IDisposable
     {
         var result = CreateDatabaseExecutor.Execute(query, dbName, dbPath);
         if (result.Errors is null)
-            _knownDatabases.Add(dbPath);
+            _knownDatabases[dbPath] = 0;
         return result;
     }
 
@@ -273,9 +407,9 @@ public sealed class SproutEngine : IDisposable
     {
         var tablePath = Path.Combine(dbPath, tableName);
 
-        // Fast path: table already cached → db and table both exist
-        if (_tables.TryGetValue(tablePath, out var table))
-            return executor(table);
+        // Fast path: table already cached
+        if (_tables.TryGetValue(tablePath, out var lazy))
+            return executor(lazy.Value);
 
         // Cold path: check filesystem
         if (!DatabaseExists(dbPath))
@@ -286,7 +420,7 @@ public sealed class SproutEngine : IDisposable
             return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_TABLE,
                 $"table '{tableName}' does not exist");
 
-        table = GetOrOpenTable(tablePath);
+        var table = GetOrOpenTable(tablePath);
         return executor(table);
     }
 
@@ -294,12 +428,9 @@ public sealed class SproutEngine : IDisposable
 
     private TableHandle GetOrOpenTable(string tablePath)
     {
-        if (!_tables.TryGetValue(tablePath, out var handle))
-        {
-            handle = TableHandle.Open(tablePath);
-            _tables[tablePath] = handle;
-        }
-        return handle;
+        var lazy = _tables.GetOrAdd(tablePath,
+            static path => new Lazy<TableHandle>(() => TableHandle.Open(path)));
+        return lazy.Value;
     }
 
     private WalFile GetOrOpenWal(string dbPath)
@@ -317,13 +448,13 @@ public sealed class SproutEngine : IDisposable
 
     private bool DatabaseExists(string dbPath)
     {
-        if (_knownDatabases.Contains(dbPath))
+        if (_knownDatabases.ContainsKey(dbPath))
             return true;
 
         if (!Directory.Exists(dbPath))
             return false;
 
-        _knownDatabases.Add(dbPath);
+        _knownDatabases[dbPath] = 0;
         return true;
     }
 
@@ -331,10 +462,10 @@ public sealed class SproutEngine : IDisposable
 
     private void FlushTablesForDatabase(string dbPath)
     {
-        foreach (var (path, handle) in _tables)
+        foreach (var (path, lazy) in _tables)
         {
-            if (path.StartsWith(dbPath, StringComparison.Ordinal))
-                handle.Flush();
+            if (lazy.IsValueCreated && path.StartsWith(dbPath, StringComparison.Ordinal))
+                lazy.Value.Flush();
         }
     }
 
@@ -366,28 +497,35 @@ public sealed class SproutEngine : IDisposable
 
     public void Dispose()
     {
-        // Stop WAL sync cycle
-        _walSyncCts.Cancel();
-        _walSyncTask.GetAwaiter().GetResult();
-        _walSyncCts.Dispose();
+        // 1. Signal background loops to stop
+        _disposed = true;
 
-        // Final WAL sync: ensure all buffered WAL data is durable
-        SyncAllWals();
-
-        // Stop flush cycle
-        _flushCts.Cancel();
+        // 2. Wait for timer loops to exit
         _flushTask.GetAwaiter().GetResult();
-        _flushCts.Dispose();
+        _walSyncTask.GetAwaiter().GetResult();
 
-        // Final flush: ensure all data is on disk
+        // 3. Complete the writer channel → writer loop drains and exits
+        _writeChannel.Writer.Complete();
+        _writerTask.GetAwaiter().GetResult();
+
+        // 4. Final sync + flush on dispose thread (writer is done)
+        SyncAllWals();
         FlushAll();
 
-        foreach (var table in _tables.Values)
-            table.Dispose();
+        // 5. Dispose handles
+        foreach (var lazy in _tables.Values)
+        {
+            if (lazy.IsValueCreated)
+                lazy.Value.Dispose();
+        }
         _tables.Clear();
 
         foreach (var wal in _wals.Values)
             wal.Dispose();
         _wals.Clear();
     }
+
+    // ── Action record ────────────────────────────────────────
+
+    private sealed record Action(TaskCompletionSource<SproutResponse> Completion, Func<SproutResponse> Work);
 }
