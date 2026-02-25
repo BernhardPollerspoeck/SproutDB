@@ -1,3 +1,14 @@
 <Solution>
-  
+  <Folder Name="/src/">
+    <Project Path="src/SproutDB.Core/SproutDB.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SproutDB.Core.Tests/SproutDB.Core.Tests.csproj" />
+  </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/SproutDB.Benchmarks/SproutDB.Benchmarks.csproj" />
+  </Folder>
+  <Folder Name="/sandbox/">
+    <Project Path="sandbox/SproutDB.Sandbox/SproutDB.Sandbox.csproj" />
+  </Folder>
 </Solution>

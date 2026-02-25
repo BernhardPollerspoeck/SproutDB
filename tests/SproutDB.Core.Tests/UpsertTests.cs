@@ -1,0 +1,246 @@
+namespace SproutDB.Core.Tests;
+
+public class UpsertTests : IDisposable
+{
+    private readonly string _tempDir;
+    private readonly SproutEngine _engine;
+
+    public UpsertTests()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
+        _engine = new SproutEngine(_tempDir);
+        _engine.Execute("create database", "testdb");
+        _engine.Execute(
+            "create table users (name string 100, email string 320 strict, age ubyte, active bool default true, score sint)",
+            "testdb");
+    }
+
+    public void Dispose()
+    {
+        _engine.Dispose();
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, true);
+    }
+
+    // ── Insert ──────────────────────────────────────────────
+
+    [Fact]
+    public void Insert_ReturnsId1()
+    {
+        var r = _engine.Execute("upsert users {name: 'John'}", "testdb");
+
+        Assert.Equal(SproutOperation.Upsert, r.Operation);
+        Assert.Equal(1, r.Affected);
+        Assert.NotNull(r.Data);
+        Assert.Single(r.Data);
+        Assert.Equal((ulong)1, r.Data[0]["id"]);
+    }
+
+    [Fact]
+    public void Insert_AutoIncrementsId()
+    {
+        _engine.Execute("upsert users {name: 'John'}", "testdb");
+        var r2 = _engine.Execute("upsert users {name: 'Jane'}", "testdb");
+
+        Assert.Equal((ulong)2, r2.Data![0]["id"]);
+    }
+
+    [Fact]
+    public void Insert_ReturnsFullRecord()
+    {
+        var r = _engine.Execute("upsert users {name: 'John', email: 'john@test.com', age: 25}", "testdb");
+
+        var row = r.Data![0];
+        Assert.Equal((ulong)1, row["id"]);
+        Assert.Equal("John", row["name"]);
+        Assert.Equal("john@test.com", row["email"]);
+        Assert.Equal((byte)25, row["age"]);
+        Assert.Equal(true, row["active"]); // default
+        Assert.Null(row["score"]);          // nullable, no value
+    }
+
+    [Fact]
+    public void Insert_EmptyObject_OnlyDefaults()
+    {
+        var r = _engine.Execute("upsert users {}", "testdb");
+
+        var row = r.Data![0];
+        Assert.Equal((ulong)1, row["id"]);
+        Assert.Null(row["name"]);
+        Assert.Null(row["email"]);
+        Assert.Null(row["age"]);
+        Assert.Equal(true, row["active"]); // default
+        Assert.Null(row["score"]);
+    }
+
+    [Fact]
+    public void Insert_NullOnNullableColumn()
+    {
+        var r = _engine.Execute("upsert users {name: null}", "testdb");
+
+        Assert.Equal(SproutOperation.Upsert, r.Operation);
+        Assert.Null(r.Data![0]["name"]);
+    }
+
+    // ── Update ──────────────────────────────────────────────
+
+    [Fact]
+    public void Update_WithExplicitId()
+    {
+        _engine.Execute("upsert users {name: 'John', age: 25}", "testdb");
+        var r = _engine.Execute("upsert users {id: 1, name: 'John Doe'}", "testdb");
+
+        Assert.Equal(SproutOperation.Upsert, r.Operation);
+        Assert.Equal(1, r.Affected);
+
+        var row = r.Data![0];
+        Assert.Equal((ulong)1, row["id"]);
+        Assert.Equal("John Doe", row["name"]);
+        Assert.Equal((byte)25, row["age"]);  // unchanged
+    }
+
+    [Fact]
+    public void Update_SetToNull()
+    {
+        _engine.Execute("upsert users {name: 'John', age: 25}", "testdb");
+        var r = _engine.Execute("upsert users {id: 1, age: null}", "testdb");
+
+        Assert.Null(r.Data![0]["age"]);
+        Assert.Equal("John", r.Data[0]["name"]); // unchanged
+    }
+
+    [Fact]
+    public void Update_PreservesUnchangedFields()
+    {
+        _engine.Execute("upsert users {name: 'John', email: 'john@test.com', age: 25, score: -100}", "testdb");
+        var r = _engine.Execute("upsert users {id: 1, email: 'new@test.com'}", "testdb");
+
+        var row = r.Data![0];
+        Assert.Equal("John", row["name"]);
+        Assert.Equal("new@test.com", row["email"]);
+        Assert.Equal((byte)25, row["age"]);
+        Assert.Equal(true, row["active"]);
+        Assert.Equal(-100, row["score"]);
+    }
+
+    [Fact]
+    public void Upsert_NewIdCreatesRecord()
+    {
+        var r = _engine.Execute("upsert users {id: 42, name: 'John'}", "testdb");
+
+        Assert.Equal(SproutOperation.Upsert, r.Operation);
+        Assert.Equal((ulong)42, r.Data![0]["id"]);
+        Assert.Equal("John", r.Data[0]["name"]);
+    }
+
+    [Fact]
+    public void Upsert_NewId_NextIdAdvances()
+    {
+        _engine.Execute("upsert users {id: 42, name: 'John'}", "testdb");
+        var r = _engine.Execute("upsert users {name: 'Jane'}", "testdb");
+
+        // next_id should have advanced past 42
+        Assert.Equal((ulong)43, r.Data![0]["id"]);
+    }
+
+    // ── Type handling ───────────────────────────────────────
+
+    [Fact]
+    public void Insert_AllNumericTypes()
+    {
+        _engine.Execute(
+            "create table nums (a sbyte, b ubyte, c sshort, d ushort, e sint, f uint, g slong, h ulong, i float, j double)",
+            "testdb");
+
+        var r = _engine.Execute(
+            "upsert nums {a: -1, b: 255, c: -1000, d: 60000, e: -100000, f: 100000, g: -999999999, h: 999999999, i: 3.14, j: 2.71828}",
+            "testdb");
+
+        var row = r.Data![0];
+        Assert.Equal((sbyte)-1, row["a"]);
+        Assert.Equal((byte)255, row["b"]);
+        Assert.Equal((short)-1000, row["c"]);
+        Assert.Equal((ushort)60000, row["d"]);
+        Assert.Equal(-100000, row["e"]);
+        Assert.Equal(100000u, row["f"]);
+        Assert.Equal(-999999999L, row["g"]);
+        Assert.Equal(999999999UL, row["h"]);
+        Assert.IsType<float>(row["i"]);
+        Assert.IsType<double>(row["j"]);
+    }
+
+    [Fact]
+    public void Insert_BoolColumn()
+    {
+        var r = _engine.Execute("upsert users {active: false}", "testdb");
+        Assert.Equal(false, r.Data![0]["active"]);
+    }
+
+    [Fact]
+    public void Insert_FloatAcceptsInteger()
+    {
+        _engine.Execute("create table t (val double)", "testdb");
+        var r = _engine.Execute("upsert t {val: 42}", "testdb");
+
+        Assert.Equal(42.0, r.Data![0]["val"]);
+    }
+
+    // ── Error cases ─────────────────────────────────────────
+
+    [Fact]
+    public void UnknownTable_Error()
+    {
+        var r = _engine.Execute("upsert missing {name: 'x'}", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal("UNKNOWN_TABLE", r.Errors![0].Code);
+    }
+
+    [Fact]
+    public void UnknownColumn_Error()
+    {
+        var r = _engine.Execute("upsert users {nonexistent: 'x'}", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal("UNKNOWN_COLUMN", r.Errors![0].Code);
+        Assert.Contains("nonexistent", r.Errors[0].Message);
+    }
+
+    [Fact]
+    public void TypeMismatch_StringToInt_Error()
+    {
+        var r = _engine.Execute("upsert users {age: 'twenty'}", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal("TYPE_MISMATCH", r.Errors![0].Code);
+    }
+
+    [Fact]
+    public void TypeMismatch_IntToBool_Error()
+    {
+        var r = _engine.Execute("upsert users {active: 1}", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal("TYPE_MISMATCH", r.Errors![0].Code);
+    }
+
+    [Fact]
+    public void NotNullable_Error()
+    {
+        var r = _engine.Execute("upsert users {active: null}", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal("NOT_NULLABLE", r.Errors![0].Code);
+        Assert.Contains("active", r.Errors[0].Message);
+        Assert.Contains("true", r.Errors[0].Message);
+    }
+
+    [Fact]
+    public void UnknownDatabase_Error()
+    {
+        var r = _engine.Execute("upsert users {name: 'x'}", "missing");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal("UNKNOWN_DATABASE", r.Errors![0].Code);
+    }
+}
