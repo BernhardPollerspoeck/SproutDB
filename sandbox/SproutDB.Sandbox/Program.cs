@@ -2,7 +2,7 @@ using System.Text.Json;
 using SproutDB.Core;
 
 var dataDir = Path.Combine($"sproutdb-sandbox-{Guid.NewGuid()}");
-using var engine = new SproutEngine(dataDir);
+var engine = new SproutEngine(dataDir);
 
 var json = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower, WriteIndented = true };
 void Run(string query, string db = "testdb")
@@ -47,3 +47,32 @@ foreach (var file in Directory.GetFiles(tablePath))
     var info = new FileInfo(file);
     Console.WriteLine($"  {info.Name,-20} {info.Length,10:N0} bytes");
 }
+
+// Show WAL file
+var walPath = Path.Combine(dataDir, "testdb", "_wal");
+if (File.Exists(walPath))
+{
+    var walInfo = new FileInfo(walPath);
+    Console.WriteLine($"\n  _wal                 {walInfo.Length,10:N0} bytes");
+}
+
+// -- WAL Replay Demo --
+Console.WriteLine("\n=== WAL REPLAY DEMO ===");
+Console.WriteLine("Disposing engine (simulating shutdown)...");
+engine.Dispose();
+
+Console.WriteLine("Opening new engine on same data directory...");
+using var engine2 = new SproutEngine(dataDir);
+
+var json2 = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower, WriteIndented = true };
+void Run2(string query, string db = "testdb")
+{
+    Console.WriteLine($"\n> {query}");
+    Console.WriteLine(JsonSerializer.Serialize(engine2.Execute(query, db), json2));
+}
+
+Console.WriteLine("Data should be recovered from WAL:");
+Run2("get users select id, name, score");
+
+Console.WriteLine("\nInsert after restart (should get id=5):");
+Run2("upsert users {name: 'Diana', score: 999}");

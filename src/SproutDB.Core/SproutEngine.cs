@@ -9,6 +9,7 @@ namespace SproutDB.Core;
 /// Main entry point for the SproutDB engine.
 /// Parses queries and dispatches execution to specialized executors.
 /// Write path: WAL append + fsync → MMF update → Response.
+/// Background flush cycle: MMF flush → WAL truncate.
 /// </summary>
 public sealed class SproutEngine : IDisposable
 {
@@ -17,10 +18,27 @@ public sealed class SproutEngine : IDisposable
     private readonly Dictionary<string, WalFile> _wals = [];
     private readonly HashSet<string> _replayedDatabases = [];
 
+    // Flush cycle
+    private readonly CancellationTokenSource _flushCts = new();
+    private readonly Task _flushTask;
+
+    /// <summary>
+    /// Creates a new SproutDB engine with default settings.
+    /// </summary>
     public SproutEngine(string dataDirectory)
+        : this(new SproutEngineSettings { DataDirectory = dataDirectory })
     {
-        _dataDirectory = Path.GetFullPath(dataDirectory);
+    }
+
+    /// <summary>
+    /// Creates a new SproutDB engine with the specified settings.
+    /// </summary>
+    public SproutEngine(SproutEngineSettings settings)
+    {
+        _dataDirectory = Path.GetFullPath(settings.DataDirectory);
         Directory.CreateDirectory(_dataDirectory);
+
+        _flushTask = RunFlushCycle(settings.FlushInterval, _flushCts.Token);
     }
 
     /// <summary>
@@ -60,6 +78,42 @@ public sealed class SproutEngine : IDisposable
         }
 
         return DispatchQuery(query, dbName, dbPath, parsedQuery);
+    }
+
+    // ── Flush cycle ──────────────────────────────────────────
+
+    private async Task RunFlushCycle(TimeSpan interval, CancellationToken ct)
+    {
+        if (interval == Timeout.InfiniteTimeSpan)
+            return;
+
+        using var timer = new PeriodicTimer(interval);
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                FlushAll();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on dispose
+        }
+    }
+
+    private void FlushAll()
+    {
+        // Flush all open table MMFs to disk
+        foreach (var table in _tables.Values)
+            table.Flush();
+
+        // Truncate all WALs (data is now durable on disk)
+        foreach (var wal in _wals.Values)
+        {
+            if (!wal.IsEmpty)
+                wal.Truncate();
+        }
     }
 
     // ── WAL replay ───────────────────────────────────────────
@@ -216,7 +270,7 @@ public sealed class SproutEngine : IDisposable
         return wal;
     }
 
-    // ── Flush ────────────────────────────────────────────────
+    // ── Flush helpers ────────────────────────────────────────
 
     private void FlushTablesForDatabase(string dbPath)
     {
@@ -255,6 +309,14 @@ public sealed class SproutEngine : IDisposable
 
     public void Dispose()
     {
+        // Stop flush cycle
+        _flushCts.Cancel();
+        _flushTask.GetAwaiter().GetResult();
+        _flushCts.Dispose();
+
+        // Final flush: ensure all data is on disk
+        FlushAll();
+
         foreach (var table in _tables.Values)
             table.Dispose();
         _tables.Clear();
