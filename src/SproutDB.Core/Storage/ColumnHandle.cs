@@ -267,6 +267,13 @@ internal sealed class ColumnHandle : IDisposable
         return Encoding.UTF8.GetString(buf, 0, end);
     }
 
+    // ── Flush ────────────────────────────────────────────────
+
+    public void Flush()
+    {
+        _view.Flush();
+    }
+
     // ── MMF lifecycle ───────────────────────────────────────
 
     private void Remap(long newCapacity)

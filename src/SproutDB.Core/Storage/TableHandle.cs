@@ -78,6 +78,13 @@ internal sealed class TableHandle : IDisposable
         }
     }
 
+    public void Flush()
+    {
+        Index.Flush();
+        foreach (var col in _columns.Values)
+            col.Flush();
+    }
+
     public void SaveSchema()
     {
         SchemaFile.Write(_schemaPath, Schema);

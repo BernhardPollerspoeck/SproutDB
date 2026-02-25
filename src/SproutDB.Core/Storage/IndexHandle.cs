@@ -100,6 +100,11 @@ internal sealed class IndexHandle : IDisposable
         }
     }
 
+    public void Flush()
+    {
+        _view.Flush();
+    }
+
     public void EnsureCapacity(long requiredBytes)
     {
         if (requiredBytes <= _capacity)
