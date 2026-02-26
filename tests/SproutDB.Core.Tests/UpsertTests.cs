@@ -438,6 +438,101 @@ public class UpsertTests : IDisposable
         Assert.Equal(2, r.Affected);
     }
 
+    // ── Multi-error collection (#011) ──────────────────────
+
+    /// <summary>
+    /// Two unknown columns in a single upsert — both errors are collected.
+    /// </summary>
+    [Fact]
+    public void MultipleUnknownColumns_AllReported()
+    {
+        var r = _engine.Execute("upsert users {foo: 'x', bar: 42}", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal(2, r.Errors!.Count);
+        Assert.Equal("UNKNOWN_COLUMN", r.Errors[0].Code);
+        Assert.Contains("foo", r.Errors[0].Message);
+        Assert.Equal("UNKNOWN_COLUMN", r.Errors[1].Code);
+        Assert.Contains("bar", r.Errors[1].Message);
+    }
+
+    /// <summary>
+    /// Mix of unknown column and type mismatch — both collected.
+    /// Known columns are type-checked even when unknown columns exist.
+    /// </summary>
+    [Fact]
+    public void UnknownColumn_And_TypeMismatch_BothReported()
+    {
+        var r = _engine.Execute("upsert users {foo: 'x', age: 'twenty'}", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal(2, r.Errors!.Count);
+        Assert.Equal("UNKNOWN_COLUMN", r.Errors[0].Code);
+        Assert.Contains("foo", r.Errors[0].Message);
+        Assert.Equal("TYPE_MISMATCH", r.Errors[1].Code);
+        Assert.Contains("age", r.Errors[1].Message);
+    }
+
+    /// <summary>
+    /// Multiple type mismatches in a single upsert — all collected.
+    /// </summary>
+    [Fact]
+    public void MultipleTypeMismatches_AllReported()
+    {
+        var r = _engine.Execute("upsert users {age: 'twenty', active: 1}", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal(2, r.Errors!.Count);
+        Assert.All(r.Errors, e => Assert.Equal("TYPE_MISMATCH", e.Code));
+    }
+
+    /// <summary>
+    /// Invalid id plus unknown column — both collected.
+    /// </summary>
+    [Fact]
+    public void InvalidId_And_UnknownColumn_BothReported()
+    {
+        var r = _engine.Execute("upsert users {id: -5, foo: 'x'}", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal(2, r.Errors!.Count);
+        Assert.Equal("TYPE_MISMATCH", r.Errors[0].Code);
+        Assert.Contains("id", r.Errors[0].Message);
+        Assert.Equal("UNKNOWN_COLUMN", r.Errors[1].Code);
+        Assert.Contains("foo", r.Errors[1].Message);
+    }
+
+    /// <summary>
+    /// AnnotatedQuery places error comments inline at the exact field positions.
+    /// </summary>
+    [Fact]
+    public void MultipleErrors_AnnotatedQueryInline()
+    {
+        var r = _engine.Execute("upsert users {foo: 'x', bar: 42}", "testdb");
+
+        Assert.NotNull(r.AnnotatedQuery);
+        // Errors are annotated inline after the field name
+        Assert.Equal(
+            "upsert users {foo ##column 'foo' does not exist##: 'x', bar ##column 'bar' does not exist##: 42}",
+            r.AnnotatedQuery);
+    }
+
+    /// <summary>
+    /// Single error still works correctly with inline annotation.
+    /// </summary>
+    [Fact]
+    public void SingleError_InlineAnnotation()
+    {
+        var r = _engine.Execute("upsert users {nonexistent: 'x'}", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Single(r.Errors!);
+        Assert.Equal("UNKNOWN_COLUMN", r.Errors[0].Code);
+        Assert.Equal(
+            "upsert users {nonexistent ##column 'nonexistent' does not exist##: 'x'}",
+            r.AnnotatedQuery);
+    }
+
     // Helper for tests that need custom settings
     private sealed class TempDir : IDisposable
     {

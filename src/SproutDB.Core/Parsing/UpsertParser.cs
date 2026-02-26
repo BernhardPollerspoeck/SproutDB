@@ -159,6 +159,8 @@ internal static class UpsertParser
         {
             Name = name,
             Value = value,
+            Position = nameToken.Start,
+            Length = nameToken.Length,
         };
     }
 

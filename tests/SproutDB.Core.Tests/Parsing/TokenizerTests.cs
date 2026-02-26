@@ -169,6 +169,121 @@ public class TokenizerTests
         Assert.Equal(TokenType.Eof, tokens[2].Type);
     }
 
+    /// <summary>
+    /// Empty comment (####) produces no tokens — just two ## markers back-to-back.
+    /// </summary>
+    [Fact]
+    public void EmptyComment_IsSkipped()
+    {
+        var input = "get #### users";
+        var tokens = Tokenizer.Tokenize(input);
+        // get, users, eof
+        Assert.Equal(3, tokens.Count);
+        Assert.Equal("get", GetText(input, tokens[0]));
+        Assert.Equal("users", GetText(input, tokens[1]));
+    }
+
+    /// <summary>
+    /// Multiple separate inline comments in a single query are all stripped.
+    /// </summary>
+    [Fact]
+    public void MultipleInlineComments_AllSkipped()
+    {
+        var input = "get ##a## users ##b## where ##c## active = true";
+        var tokens = Tokenizer.Tokenize(input);
+        // get, users, where, active, =, true, eof
+        Assert.Equal(7, tokens.Count);
+        Assert.Equal("get", GetText(input, tokens[0]));
+        Assert.Equal("users", GetText(input, tokens[1]));
+        Assert.Equal("where", GetText(input, tokens[2]));
+        Assert.Equal("active", GetText(input, tokens[3]));
+        Assert.Equal("true", GetText(input, tokens[5]));
+    }
+
+    /// <summary>
+    /// A query consisting of only a comment produces just the EOF token.
+    /// </summary>
+    [Fact]
+    public void OnlyComment_ReturnsEof()
+    {
+        var tokens = Tokenizer.Tokenize("## this is just a comment");
+        Assert.Single(tokens);
+        Assert.Equal(TokenType.Eof, tokens[0].Type);
+    }
+
+    /// <summary>
+    /// A single # is NOT a comment marker — only ## starts a comment.
+    /// </summary>
+    [Fact]
+    public void SingleHash_IsNotComment()
+    {
+        var input = "get # users";
+        var tokens = Tokenizer.Tokenize(input);
+        // get, users, eof  (single # is unknown char, skipped)
+        Assert.Equal(3, tokens.Count);
+        Assert.Equal("get", GetText(input, tokens[0]));
+        Assert.Equal("users", GetText(input, tokens[1]));
+    }
+
+    /// <summary>
+    /// Comment inside an upsert — tokens before and after the comment are preserved.
+    /// </summary>
+    [Fact]
+    public void Comment_InsideUpsertBody()
+    {
+        var input = "upsert users {name: ##field## 'John'}";
+        var tokens = Tokenizer.Tokenize(input);
+        // upsert, users, {, name, :, 'John', }, eof
+        Assert.Equal(8, tokens.Count);
+        Assert.Equal("upsert", GetText(input, tokens[0]));
+        Assert.Equal("name", GetText(input, tokens[3]));
+        Assert.Equal(TokenType.StringLiteral, tokens[5].Type);
+        Assert.Equal(TokenType.RightBrace, tokens[6].Type);
+    }
+
+    /// <summary>
+    /// Quote inside a comment is NOT treated as a string start — comment has precedence.
+    /// </summary>
+    [Fact]
+    public void QuoteInsideComment_NotStringLiteral()
+    {
+        var input = "get ##it's a comment## users";
+        var tokens = Tokenizer.Tokenize(input);
+        // get, users, eof
+        Assert.Equal(3, tokens.Count);
+        Assert.Equal("get", GetText(input, tokens[0]));
+        Assert.Equal("users", GetText(input, tokens[1]));
+    }
+
+    /// <summary>
+    /// ## inside a string literal is NOT treated as a comment — string has higher precedence.
+    /// </summary>
+    [Fact]
+    public void HashInsideStringLiteral_NotComment()
+    {
+        var input = "upsert t {name: 'ich ##lon## bin da'}";
+        var tokens = Tokenizer.Tokenize(input);
+        // upsert, t, {, name, :, 'ich ##lon## bin da', }, eof
+        Assert.Equal(8, tokens.Count);
+        Assert.Equal(TokenType.StringLiteral, tokens[5].Type);
+        // Full string including ##...## preserved
+        Assert.Equal("'ich ##lon## bin da'", GetText(input, tokens[5]));
+    }
+
+    /// <summary>
+    /// Comment directly adjacent to tokens (no surrounding whitespace).
+    /// </summary>
+    [Fact]
+    public void Comment_NoSurroundingWhitespace()
+    {
+        var input = "get##comment##users";
+        var tokens = Tokenizer.Tokenize(input);
+        // get, users, eof
+        Assert.Equal(3, tokens.Count);
+        Assert.Equal("get", GetText(input, tokens[0]));
+        Assert.Equal("users", GetText(input, tokens[1]));
+    }
+
     [Fact]
     public void ComplexQuery_CorrectTokenCount()
     {

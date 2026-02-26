@@ -208,6 +208,50 @@ public class GetTests : IDisposable
         Assert.Contains("nonexistent", r.Errors[0].Message);
     }
 
+    /// <summary>
+    /// Multiple unknown columns in select — all errors are collected.
+    /// </summary>
+    [Fact]
+    public void Get_MultipleUnknownColumns_AllReported()
+    {
+        var r = _engine.Execute("get users select foo, bar, baz", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal(3, r.Errors!.Count);
+        Assert.All(r.Errors, e => Assert.Equal("UNKNOWN_COLUMN", e.Code));
+        Assert.Contains("foo", r.Errors[0].Message);
+        Assert.Contains("bar", r.Errors[1].Message);
+        Assert.Contains("baz", r.Errors[2].Message);
+    }
+
+    /// <summary>
+    /// Mix of valid and unknown columns — only unknown columns produce errors.
+    /// </summary>
+    [Fact]
+    public void Get_MixedValidAndUnknown_OnlyUnknownReported()
+    {
+        var r = _engine.Execute("get users select name, foo, age, bar", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal(2, r.Errors!.Count);
+        Assert.Contains("foo", r.Errors[0].Message);
+        Assert.Contains("bar", r.Errors[1].Message);
+    }
+
+    /// <summary>
+    /// AnnotatedQuery places error comments inline at the exact column positions.
+    /// </summary>
+    [Fact]
+    public void Get_MultipleErrors_AnnotatedQueryInline()
+    {
+        var r = _engine.Execute("get users select foo, bar", "testdb");
+
+        Assert.NotNull(r.AnnotatedQuery);
+        Assert.Equal(
+            "get users select foo ##column 'foo' does not exist##, bar ##column 'bar' does not exist##",
+            r.AnnotatedQuery);
+    }
+
     [Fact]
     public void Get_CaseInsensitive()
     {

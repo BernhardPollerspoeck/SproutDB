@@ -13,7 +13,7 @@ internal static class GetParser
         ctx.Advance();
 
         // Optional: select <col1>, <col2>, ...
-        List<string>? selectColumns = null;
+        List<SelectColumn>? selectColumns = null;
 
         if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("select"))
         {
@@ -31,9 +31,9 @@ internal static class GetParser
         });
     }
 
-    private static List<string> ParseSelectList(ParserContext ctx)
+    private static List<SelectColumn> ParseSelectList(ParserContext ctx)
     {
-        var columns = new List<string>();
+        var columns = new List<SelectColumn>();
 
         while (true)
         {
@@ -44,7 +44,7 @@ internal static class GetParser
                 return columns;
             }
 
-            columns.Add(ctx.GetLowercaseText(token));
+            columns.Add(new SelectColumn(ctx.GetLowercaseText(token), token.Start, token.Length));
             ctx.Advance();
 
             if (ctx.Peek().Type == TokenType.Comma)

@@ -35,7 +35,7 @@ public class GetParserTests
         var q = Assert.IsType<GetQuery>(result.Query);
         Assert.NotNull(q.Select);
         Assert.Single(q.Select);
-        Assert.Equal("name", q.Select[0]);
+        Assert.Equal("name", q.Select[0].Name);
     }
 
     [Fact]
@@ -47,9 +47,9 @@ public class GetParserTests
         var q = Assert.IsType<GetQuery>(result.Query);
         Assert.NotNull(q.Select);
         Assert.Equal(3, q.Select.Count);
-        Assert.Equal("name", q.Select[0]);
-        Assert.Equal("email", q.Select[1]);
-        Assert.Equal("age", q.Select[2]);
+        Assert.Equal("name", q.Select[0].Name);
+        Assert.Equal("email", q.Select[1].Name);
+        Assert.Equal("age", q.Select[2].Name);
     }
 
     [Fact]
@@ -61,8 +61,8 @@ public class GetParserTests
         var q = Assert.IsType<GetQuery>(result.Query);
         Assert.NotNull(q.Select);
         Assert.Equal(2, q.Select.Count);
-        Assert.Equal("id", q.Select[0]);
-        Assert.Equal("name", q.Select[1]);
+        Assert.Equal("id", q.Select[0].Name);
+        Assert.Equal("name", q.Select[1].Name);
     }
 
     [Fact]
@@ -72,8 +72,8 @@ public class GetParserTests
 
         Assert.True(result.Success);
         var q = Assert.IsType<GetQuery>(result.Query);
-        Assert.Equal("name", q.Select![0]);
-        Assert.Equal("email", q.Select[1]);
+        Assert.Equal("name", q.Select![0].Name);
+        Assert.Equal("email", q.Select[1].Name);
     }
 
     [Fact]
@@ -95,7 +95,7 @@ public class GetParserTests
         Assert.True(result.Success);
         var q = Assert.IsType<GetQuery>(result.Query);
         Assert.Single(q.Select!);
-        Assert.Equal("name", q.Select![0]);
+        Assert.Equal("name", q.Select![0].Name);
     }
 
     // ── Error cases ───────────────────────────────────────────

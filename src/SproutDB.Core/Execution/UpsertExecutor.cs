@@ -143,31 +143,36 @@ internal static class UpsertExecutor
     {
         ulong? explicitId = null;
         var dataFields = new List<UpsertField>(fields.Count);
+        List<SproutError>? errors = null;
 
         foreach (var field in fields)
         {
             if (field.Name == "id")
             {
-                if (field.Value.Kind != UpsertValueKind.Integer || field.Value.Raw is null)
-                    return ParsedRecord.WithError(
-                        ResponseHelper.Error(query, ErrorCodes.TYPE_MISMATCH, "id must be a positive integer"));
-
-                if (!ulong.TryParse(field.Value.Raw, out var idVal) || idVal == 0)
-                    return ParsedRecord.WithError(
-                        ResponseHelper.Error(query, ErrorCodes.TYPE_MISMATCH, "id must be a positive integer"));
-
-                explicitId = idVal;
+                if (field.Value.Kind != UpsertValueKind.Integer || field.Value.Raw is null
+                    || !ulong.TryParse(field.Value.Raw, out var idVal) || idVal == 0)
+                {
+                    errors ??= [];
+                    errors.Add(new SproutError { Code = ErrorCodes.TYPE_MISMATCH, Message = "id must be a positive integer", Position = field.Position, Length = field.Length });
+                }
+                else
+                {
+                    explicitId = idVal;
+                }
                 continue;
             }
 
             if (!table.HasColumn(field.Name))
-                return ParsedRecord.WithError(
-                    ResponseHelper.Error(query, ErrorCodes.UNKNOWN_COLUMN,
-                        $"column '{field.Name}' does not exist"));
+            {
+                errors ??= [];
+                errors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{field.Name}' does not exist", Position = field.Position, Length = field.Length });
+                continue;
+            }
 
             dataFields.Add(field);
         }
 
+        // Type/null validation only for fields that exist (skip unknown columns)
         foreach (var field in dataFields)
         {
             var colHandle = table.GetColumn(field.Name);
@@ -175,17 +180,23 @@ internal static class UpsertExecutor
             if (field.Value.Kind == UpsertValueKind.Null)
             {
                 if (!colHandle.Schema.Nullable)
-                    return ParsedRecord.WithError(
-                        ResponseHelper.Error(query, ErrorCodes.NOT_NULLABLE,
-                            $"column '{field.Name}' is not nullable, default is '{colHandle.Schema.Default}'"));
+                {
+                    errors ??= [];
+                    errors.Add(new SproutError { Code = ErrorCodes.NOT_NULLABLE, Message = $"column '{field.Name}' is not nullable, default is '{colHandle.Schema.Default}'", Position = field.Position, Length = field.Length });
+                }
                 continue;
             }
 
             var typeError = ValidateValueType(field, colHandle.Schema);
             if (typeError is not null)
-                return ParsedRecord.WithError(
-                    ResponseHelper.Error(query, ErrorCodes.TYPE_MISMATCH, typeError));
+            {
+                errors ??= [];
+                errors.Add(new SproutError { Code = ErrorCodes.TYPE_MISMATCH, Message = typeError, Position = field.Position, Length = field.Length });
+            }
         }
+
+        if (errors is not null)
+            return ParsedRecord.WithError(ResponseHelper.Errors(query, errors));
 
         var fieldsByName = new Dictionary<string, UpsertField>(dataFields.Count);
         foreach (var f in dataFields)

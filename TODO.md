@@ -19,14 +19,14 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 
 ## Kommentare
 
-- [ ] #009 Kommentare in Queries: `##` startet UND beendet einen Kommentar (inline toggle). Kommentare am Zeilenende brauchen kein schließendes `##`.
+- [x] #009 Kommentare in Queries: `##` startet UND beendet einen Kommentar (inline toggle). Kommentare am Zeilenende brauchen kein schließendes `##`. → **Bereits im Tokenizer implementiert. Tests ergänzt (Tokenizer + Parser-Level).**
 
 ---
 
 ## Fehlerbehandlung
 
-- [ ] #010 Annotated Query: Fehler-Kommentare (`##...##`) an der **exakten Fehlerstelle inline** einfügen statt nur als Suffix. Z.B. `get users where agee ##unknown column 'agee'## > 18`. Aktuell nur Suffix-Annotation.
-- [ ] #011 Mehrere Fehler sammeln: Bei nicht-Dead-Stop Fehlern (z.B. mehrere unbekannte Spalten) alle Fehler sammeln und gemeinsam zurückgeben statt beim ersten abzubrechen.
+- [x] #010 Annotated Query: Fehler-Kommentare (`##...##`) an der **exakten Fehlerstelle inline** einfügen statt nur als Suffix. Z.B. `get users where agee ##unknown column 'agee'## > 18`. → **Implementiert: Position/Length in UpsertField, SelectColumn, SproutError. ResponseHelper.BuildAnnotatedQuery setzt Fehler inline.**
+- [x] #011 Mehrere Fehler sammeln: Bei nicht-Dead-Stop Fehlern (z.B. mehrere unbekannte Spalten) alle Fehler sammeln und gemeinsam zurückgeben statt beim ersten abzubrechen. → **Implementiert in UpsertExecutor.ValidateRecord und GetExecutor (Select-Validation). ResponseHelper.Errors für Multi-Error-Responses.**
 
 ---
 

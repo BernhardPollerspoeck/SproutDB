@@ -15,6 +15,70 @@ internal static class ResponseHelper
         };
     }
 
+    public static SproutResponse Errors(string query, List<SproutError> errors)
+    {
+        return new SproutResponse
+        {
+            Operation = SproutOperation.Error,
+            Errors = errors,
+            AnnotatedQuery = BuildAnnotatedQuery(query, errors),
+        };
+    }
+
+    private static string BuildAnnotatedQuery(string query, List<SproutError> errors)
+    {
+        // Sort errors by position (inline first, then suffix for position=-1)
+        // Stable sort preserves original order for errors at the same position
+        var sorted = new List<SproutError>(errors);
+        sorted.Sort((a, b) =>
+        {
+            // Errors without position go to the end (suffix)
+            if (a.Position < 0 && b.Position < 0) return 0;
+            if (a.Position < 0) return 1;
+            if (b.Position < 0) return -1;
+            return a.Position.CompareTo(b.Position);
+        });
+
+        var sb = new System.Text.StringBuilder(query.Length + errors.Count * 40);
+        var lastPos = 0;
+
+        foreach (var error in sorted)
+        {
+            if (error.Position < 0)
+            {
+                // No position — append as suffix
+                if (lastPos < query.Length)
+                {
+                    sb.Append(query, lastPos, query.Length - lastPos);
+                    lastPos = query.Length;
+                }
+                sb.Append(" ##");
+                sb.Append(error.Message);
+                sb.Append("##");
+                continue;
+            }
+
+            var errorEnd = error.Position + error.Length;
+
+            // Copy query text up to end of error token
+            if (errorEnd > lastPos)
+            {
+                sb.Append(query, lastPos, errorEnd - lastPos);
+                lastPos = errorEnd;
+            }
+
+            sb.Append(" ##");
+            sb.Append(error.Message);
+            sb.Append("##");
+        }
+
+        // Remaining query text after last inline annotation
+        if (lastPos < query.Length)
+            sb.Append(query, lastPos, query.Length - lastPos);
+
+        return sb.ToString();
+    }
+
     public static SproutResponse ParseError(ParseResult result)
     {
         return new SproutResponse

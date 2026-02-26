@@ -12,6 +12,8 @@ internal sealed class UpsertField
 {
     public required string Name { get; init; }
     public required UpsertValue Value { get; init; }
+    public int Position { get; init; }
+    public int Length { get; init; }
 }
 
 internal sealed class UpsertValue
