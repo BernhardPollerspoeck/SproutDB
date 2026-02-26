@@ -4,6 +4,9 @@ namespace SproutDB.Core.Tests.Parsing;
 
 public class UpsertParserTests
 {
+    // Helper to get fields of a single-record upsert
+    private static List<UpsertField> Fields(UpsertQuery q) => q.Records[0];
+
     // ── Success cases ────────────────────────────────────────
 
     [Fact]
@@ -14,15 +17,16 @@ public class UpsertParserTests
         Assert.True(result.Success);
         var q = Assert.IsType<UpsertQuery>(result.Query);
         Assert.Equal("users", q.Table);
-        Assert.Equal(2, q.Fields.Count);
+        Assert.Single(q.Records);
+        Assert.Equal(2, Fields(q).Count);
 
-        Assert.Equal("name", q.Fields[0].Name);
-        Assert.Equal(UpsertValueKind.String, q.Fields[0].Value.Kind);
-        Assert.Equal("John", q.Fields[0].Value.Raw);
+        Assert.Equal("name", Fields(q)[0].Name);
+        Assert.Equal(UpsertValueKind.String, Fields(q)[0].Value.Kind);
+        Assert.Equal("John", Fields(q)[0].Value.Raw);
 
-        Assert.Equal("age", q.Fields[1].Name);
-        Assert.Equal(UpsertValueKind.Integer, q.Fields[1].Value.Kind);
-        Assert.Equal("25", q.Fields[1].Value.Raw);
+        Assert.Equal("age", Fields(q)[1].Name);
+        Assert.Equal(UpsertValueKind.Integer, Fields(q)[1].Value.Kind);
+        Assert.Equal("25", Fields(q)[1].Value.Raw);
     }
 
     [Fact]
@@ -33,7 +37,8 @@ public class UpsertParserTests
         Assert.True(result.Success);
         var q = Assert.IsType<UpsertQuery>(result.Query);
         Assert.Equal("users", q.Table);
-        Assert.Empty(q.Fields);
+        Assert.Single(q.Records);
+        Assert.Empty(Fields(q));
     }
 
     [Fact]
@@ -43,11 +48,11 @@ public class UpsertParserTests
 
         Assert.True(result.Success);
         var q = Assert.IsType<UpsertQuery>(result.Query);
-        Assert.Equal(2, q.Fields.Count);
+        Assert.Equal(2, Fields(q).Count);
 
-        Assert.Equal("id", q.Fields[0].Name);
-        Assert.Equal(UpsertValueKind.Integer, q.Fields[0].Value.Kind);
-        Assert.Equal("42", q.Fields[0].Value.Raw);
+        Assert.Equal("id", Fields(q)[0].Name);
+        Assert.Equal(UpsertValueKind.Integer, Fields(q)[0].Value.Kind);
+        Assert.Equal("42", Fields(q)[0].Value.Raw);
     }
 
     [Fact]
@@ -57,9 +62,9 @@ public class UpsertParserTests
 
         Assert.True(result.Success);
         var q = Assert.IsType<UpsertQuery>(result.Query);
-        Assert.Equal("email", q.Fields[1].Name);
-        Assert.Equal(UpsertValueKind.Null, q.Fields[1].Value.Kind);
-        Assert.Null(q.Fields[1].Value.Raw);
+        Assert.Equal("email", Fields(q)[1].Name);
+        Assert.Equal(UpsertValueKind.Null, Fields(q)[1].Value.Kind);
+        Assert.Null(Fields(q)[1].Value.Raw);
     }
 
     [Fact]
@@ -70,11 +75,11 @@ public class UpsertParserTests
         Assert.True(result.Success);
         var q = Assert.IsType<UpsertQuery>(result.Query);
 
-        Assert.Equal(UpsertValueKind.Boolean, q.Fields[0].Value.Kind);
-        Assert.Equal("true", q.Fields[0].Value.Raw);
+        Assert.Equal(UpsertValueKind.Boolean, Fields(q)[0].Value.Kind);
+        Assert.Equal("true", Fields(q)[0].Value.Raw);
 
-        Assert.Equal(UpsertValueKind.Boolean, q.Fields[1].Value.Kind);
-        Assert.Equal("false", q.Fields[1].Value.Raw);
+        Assert.Equal(UpsertValueKind.Boolean, Fields(q)[1].Value.Kind);
+        Assert.Equal("false", Fields(q)[1].Value.Raw);
     }
 
     [Fact]
@@ -84,8 +89,8 @@ public class UpsertParserTests
 
         Assert.True(result.Success);
         var q = Assert.IsType<UpsertQuery>(result.Query);
-        Assert.Equal(UpsertValueKind.Integer, q.Fields[0].Value.Kind);
-        Assert.Equal("-10", q.Fields[0].Value.Raw);
+        Assert.Equal(UpsertValueKind.Integer, Fields(q)[0].Value.Kind);
+        Assert.Equal("-10", Fields(q)[0].Value.Raw);
     }
 
     [Fact]
@@ -95,8 +100,8 @@ public class UpsertParserTests
 
         Assert.True(result.Success);
         var q = Assert.IsType<UpsertQuery>(result.Query);
-        Assert.Equal(UpsertValueKind.Float, q.Fields[0].Value.Kind);
-        Assert.Equal("3.14", q.Fields[0].Value.Raw);
+        Assert.Equal(UpsertValueKind.Float, Fields(q)[0].Value.Kind);
+        Assert.Equal("3.14", Fields(q)[0].Value.Raw);
     }
 
     [Fact]
@@ -106,8 +111,8 @@ public class UpsertParserTests
 
         Assert.True(result.Success);
         var q = Assert.IsType<UpsertQuery>(result.Query);
-        Assert.Equal(UpsertValueKind.Float, q.Fields[0].Value.Kind);
-        Assert.Equal("-0.5", q.Fields[0].Value.Raw);
+        Assert.Equal(UpsertValueKind.Float, Fields(q)[0].Value.Kind);
+        Assert.Equal("-0.5", Fields(q)[0].Value.Raw);
     }
 
     [Fact]
@@ -118,7 +123,7 @@ public class UpsertParserTests
         Assert.True(result.Success);
         var q = Assert.IsType<UpsertQuery>(result.Query);
         Assert.Equal("users", q.Table);
-        Assert.Equal("name", q.Fields[0].Name);
+        Assert.Equal("name", Fields(q)[0].Name);
     }
 
     [Fact]
@@ -175,5 +180,95 @@ public class UpsertParserTests
         var result = QueryParser.Parse("upsert users {name: 'John'} extra");
         Assert.False(result.Success);
         Assert.Contains("unexpected token", result.Errors![0].Message);
+    }
+
+    // ── ON clause ─────────────────────────────────────────────
+
+    [Fact]
+    public void OnClause_Parsed()
+    {
+        var result = QueryParser.Parse("upsert users {email: 'john@test.com', name: 'John'} on email");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<UpsertQuery>(result.Query);
+        Assert.Equal("email", q.OnColumn);
+        Assert.Equal(2, Fields(q).Count);
+    }
+
+    [Fact]
+    public void OnClause_CaseInsensitive()
+    {
+        var result = QueryParser.Parse("upsert users {email: 'john@test.com'} ON Email");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<UpsertQuery>(result.Query);
+        Assert.Equal("email", q.OnColumn);
+    }
+
+    [Fact]
+    public void NoOnClause_OnColumnIsNull()
+    {
+        var result = QueryParser.Parse("upsert users {name: 'John'}");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<UpsertQuery>(result.Query);
+        Assert.Null(q.OnColumn);
+    }
+
+    [Fact]
+    public void OnClause_MissingColumnName_Error()
+    {
+        var result = QueryParser.Parse("upsert users {name: 'John'} on");
+        Assert.False(result.Success);
+    }
+
+    // ── Bulk syntax ───────────────────────────────────────────
+
+    [Fact]
+    public void Bulk_TwoRecords()
+    {
+        var result = QueryParser.Parse("upsert users [{name: 'John', age: 25}, {name: 'Jane', age: 30}]");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<UpsertQuery>(result.Query);
+        Assert.Equal(2, q.Records.Count);
+
+        Assert.Equal("John", q.Records[0][0].Value.Raw);
+        Assert.Equal("Jane", q.Records[1][0].Value.Raw);
+    }
+
+    [Fact]
+    public void Bulk_SingleRecord()
+    {
+        var result = QueryParser.Parse("upsert users [{name: 'John'}]");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<UpsertQuery>(result.Query);
+        Assert.Single(q.Records);
+    }
+
+    [Fact]
+    public void Bulk_WithOnClause()
+    {
+        var result = QueryParser.Parse("upsert users [{email: 'a@b.com'}, {email: 'c@d.com'}] on email");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<UpsertQuery>(result.Query);
+        Assert.Equal(2, q.Records.Count);
+        Assert.Equal("email", q.OnColumn);
+    }
+
+    [Fact]
+    public void Bulk_MissingClosingBracket_Error()
+    {
+        var result = QueryParser.Parse("upsert users [{name: 'John'}");
+        Assert.False(result.Success);
+    }
+
+    [Fact]
+    public void Bulk_MissingBraceInArray_Error()
+    {
+        var result = QueryParser.Parse("upsert users [name: 'John']");
+        Assert.False(result.Success);
     }
 }

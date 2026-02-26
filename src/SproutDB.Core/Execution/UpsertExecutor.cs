@@ -5,34 +5,169 @@ namespace SproutDB.Core.Execution;
 
 internal static class UpsertExecutor
 {
-    public static SproutResponse Execute(string query, TableHandle table, UpsertQuery q)
+    public static SproutResponse Execute(string query, TableHandle table, UpsertQuery q, int bulkLimit)
     {
-        // Separate id field from data fields, validate
-        ulong? explicitId = null;
-        var dataFields = new List<UpsertField>(q.Fields.Count);
+        // ── Bulk limit check (fail fast, before any validation/writes) ──
+        if (q.Records.Count > bulkLimit)
+            return ResponseHelper.Error(query, ErrorCodes.BULK_LIMIT,
+                $"bulk upsert exceeds limit of {bulkLimit} records ({q.Records.Count} given)");
 
-        foreach (var field in q.Fields)
+        // ── Validate all records upfront ─────────────────────────────────
+        var parsed = new ParsedRecord[q.Records.Count];
+        for (int i = 0; i < q.Records.Count; i++)
+        {
+            var result = ValidateRecord(query, table, q.Records[i]);
+            if (result.Error is not null)
+                return result.Error;
+            parsed[i] = result;
+        }
+
+        // ── ON clause validation ─────────────────────────────────────────
+        if (q.OnColumn is not null)
+        {
+            if (!table.HasColumn(q.OnColumn))
+                return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_COLUMN,
+                    $"on column '{q.OnColumn}' does not exist");
+
+            for (int i = 0; i < parsed.Length; i++)
+            {
+                if (parsed[i].ExplicitId.HasValue)
+                    return ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR,
+                        "cannot combine explicit id with 'on' clause");
+
+                if (!parsed[i].FieldsByName.ContainsKey(q.OnColumn))
+                    return ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR,
+                        $"on column '{q.OnColumn}' must be included in the upsert fields");
+            }
+
+            // Single-pass scan: collect all match values, scan once, resolve IDs
+            ResolveOnColumnIds(table, q.OnColumn, parsed);
+        }
+
+        // ── Execute all records ──────────────────────────────────────────
+        var data = new List<Dictionary<string, object?>>(parsed.Length);
+        foreach (var rec in parsed)
+        {
+            var resolvedId = rec.ExplicitId ?? rec.ResolvedOnId;
+            Dictionary<string, object?> record;
+            ulong id;
+
+            if (resolvedId.HasValue)
+            {
+                (record, id) = WriteWithId(table, rec.FieldsByName, resolvedId.Value);
+            }
+            else
+            {
+                (record, id) = WriteInsert(table, rec.FieldsByName);
+            }
+
+            record["id"] = id;
+            data.Add(record);
+        }
+
+        return new SproutResponse
+        {
+            Operation = SproutOperation.Upsert,
+            Data = data,
+            Affected = data.Count,
+        };
+    }
+
+    // ── Single-pass ON column resolution ─────────────────────────────
+
+    private static void ResolveOnColumnIds(TableHandle table, string columnName, ParsedRecord[] parsed)
+    {
+        var colHandle = table.GetColumn(columnName);
+
+        // Build lookup: encoded match value → index in parsed array
+        // For null match values, track indices separately
+        var nullIndices = new List<int>();
+        var encodedLookup = new Dictionary<ByteKey, int>();
+
+        for (int i = 0; i < parsed.Length; i++)
+        {
+            var matchField = parsed[i].FieldsByName[columnName];
+            if (matchField.Value.Kind == UpsertValueKind.Null)
+            {
+                nullIndices.Add(i);
+            }
+            else
+            {
+                var encoded = colHandle.EncodeValueToBytes(matchField.Value.Raw!);
+                encodedLookup[new ByteKey(encoded)] = i;
+            }
+        }
+
+        // Single scan over all used rows
+        int remaining = encodedLookup.Count + nullIndices.Count;
+        table.Index.ForEachUsed((id, place) =>
+        {
+            if (remaining == 0) return;
+
+            // Check null matches
+            if (nullIndices.Count > 0 && colHandle.IsNullAtPlace(place))
+            {
+                // Assign to first unresolved null match
+                for (int n = 0; n < nullIndices.Count; n++)
+                {
+                    var idx = nullIndices[n];
+                    if (!parsed[idx].ResolvedOnId.HasValue)
+                    {
+                        parsed[idx].ResolvedOnId = id;
+                        remaining--;
+                        break;
+                    }
+                }
+                return;
+            }
+
+            // Check encoded matches
+            if (encodedLookup.Count > 0)
+            {
+                foreach (var (key, idx) in encodedLookup)
+                {
+                    if (!parsed[idx].ResolvedOnId.HasValue && colHandle.MatchesAtPlace(place, key.Bytes))
+                    {
+                        parsed[idx].ResolvedOnId = id;
+                        remaining--;
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    // ── Validation ───────────────────────────────────────────────────
+
+    private static ParsedRecord ValidateRecord(string query, TableHandle table, List<UpsertField> fields)
+    {
+        ulong? explicitId = null;
+        var dataFields = new List<UpsertField>(fields.Count);
+
+        foreach (var field in fields)
         {
             if (field.Name == "id")
             {
                 if (field.Value.Kind != UpsertValueKind.Integer || field.Value.Raw is null)
-                    return ResponseHelper.Error(query, ErrorCodes.TYPE_MISMATCH, "id must be a positive integer");
+                    return ParsedRecord.WithError(
+                        ResponseHelper.Error(query, ErrorCodes.TYPE_MISMATCH, "id must be a positive integer"));
 
                 if (!ulong.TryParse(field.Value.Raw, out var idVal) || idVal == 0)
-                    return ResponseHelper.Error(query, ErrorCodes.TYPE_MISMATCH, "id must be a positive integer");
+                    return ParsedRecord.WithError(
+                        ResponseHelper.Error(query, ErrorCodes.TYPE_MISMATCH, "id must be a positive integer"));
 
                 explicitId = idVal;
                 continue;
             }
 
             if (!table.HasColumn(field.Name))
-                return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_COLUMN,
-                    $"column '{field.Name}' does not exist");
+                return ParsedRecord.WithError(
+                    ResponseHelper.Error(query, ErrorCodes.UNKNOWN_COLUMN,
+                        $"column '{field.Name}' does not exist"));
 
             dataFields.Add(field);
         }
 
-        // Validate types and nullable constraints
         foreach (var field in dataFields)
         {
             var colHandle = table.GetColumn(field.Name);
@@ -40,28 +175,32 @@ internal static class UpsertExecutor
             if (field.Value.Kind == UpsertValueKind.Null)
             {
                 if (!colHandle.Schema.Nullable)
-                    return ResponseHelper.Error(query, ErrorCodes.NOT_NULLABLE,
-                        $"column '{field.Name}' is not nullable, default is '{colHandle.Schema.Default}'");
+                    return ParsedRecord.WithError(
+                        ResponseHelper.Error(query, ErrorCodes.NOT_NULLABLE,
+                            $"column '{field.Name}' is not nullable, default is '{colHandle.Schema.Default}'"));
                 continue;
             }
 
             var typeError = ValidateValueType(field, colHandle.Schema);
             if (typeError is not null)
-                return ResponseHelper.Error(query, ErrorCodes.TYPE_MISMATCH, typeError);
+                return ParsedRecord.WithError(
+                    ResponseHelper.Error(query, ErrorCodes.TYPE_MISMATCH, typeError));
         }
 
-        // Build field lookup
         var fieldsByName = new Dictionary<string, UpsertField>(dataFields.Count);
         foreach (var f in dataFields)
             fieldsByName[f.Name] = f;
 
-        if (explicitId.HasValue)
-            return ExecuteWithId(table, fieldsByName, explicitId.Value);
-
-        return ExecuteInsert(table, fieldsByName);
+        return new ParsedRecord
+        {
+            ExplicitId = explicitId,
+            FieldsByName = fieldsByName,
+        };
     }
 
-    private static SproutResponse ExecuteInsert(
+    // ── Write helpers ────────────────────────────────────────────────
+
+    private static (Dictionary<string, object?> record, ulong id) WriteInsert(
         TableHandle table,
         Dictionary<string, UpsertField> fieldsByName)
     {
@@ -72,17 +211,10 @@ internal static class UpsertExecutor
         table.Index.WritePlace(id, place);
 
         var record = WriteRecord(table, place, fieldsByName, isNew: true);
-        record["id"] = id;
-
-        return new SproutResponse
-        {
-            Operation = SproutOperation.Upsert,
-            Data = [record],
-            Affected = 1,
-        };
+        return (record, id);
     }
 
-    private static SproutResponse ExecuteWithId(
+    private static (Dictionary<string, object?> record, ulong id) WriteWithId(
         TableHandle table,
         Dictionary<string, UpsertField> fieldsByName,
         ulong id)
@@ -108,14 +240,7 @@ internal static class UpsertExecutor
             table.Index.WriteNextId(id + 1);
 
         var record = WriteRecord(table, place, fieldsByName, isNew);
-        record["id"] = id;
-
-        return new SproutResponse
-        {
-            Operation = SproutOperation.Upsert,
-            Data = [record],
-            Affected = 1,
-        };
+        return (record, id);
     }
 
     private static Dictionary<string, object?> WriteRecord(
@@ -192,5 +317,38 @@ internal static class UpsertExecutor
 
             _ => null,
         };
+    }
+
+    // ── Internal types ───────────────────────────────────────────────
+
+    private sealed class ParsedRecord
+    {
+        public ulong? ExplicitId;
+        public ulong? ResolvedOnId;
+        public Dictionary<string, UpsertField> FieldsByName = null!;
+        public SproutResponse? Error;
+
+        public static ParsedRecord WithError(SproutResponse error) => new() { Error = error };
+    }
+
+    /// <summary>
+    /// Wrapper for byte[] that implements value equality for use as dictionary key.
+    /// </summary>
+    private readonly struct ByteKey : IEquatable<ByteKey>
+    {
+        public readonly byte[] Bytes;
+
+        public ByteKey(byte[] bytes) => Bytes = bytes;
+
+        public bool Equals(ByteKey other) => Bytes.AsSpan().SequenceEqual(other.Bytes);
+        public override bool Equals(object? obj) => obj is ByteKey other && Equals(other);
+
+        public override int GetHashCode()
+        {
+            var hash = new HashCode();
+            foreach (var b in Bytes)
+                hash.Add(b);
+            return hash.ToHashCode();
+        }
     }
 }

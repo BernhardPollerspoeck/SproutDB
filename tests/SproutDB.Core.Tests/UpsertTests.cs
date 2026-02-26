@@ -243,4 +243,210 @@ public class UpsertTests : IDisposable
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_DATABASE", r.Errors![0].Code);
     }
+
+    // ── ON clause ────────────────────────────────────────────
+
+    [Fact]
+    public void UpsertOn_NoMatch_Inserts()
+    {
+        var r = _engine.Execute("upsert users {email: 'john@test.com', name: 'John'} on email", "testdb");
+
+        Assert.Equal(SproutOperation.Upsert, r.Operation);
+        Assert.Equal(1, r.Affected);
+        Assert.Equal((ulong)1, r.Data![0]["id"]);
+        Assert.Equal("john@test.com", r.Data[0]["email"]);
+        Assert.Equal("John", r.Data[0]["name"]);
+    }
+
+    [Fact]
+    public void UpsertOn_Match_Updates()
+    {
+        _engine.Execute("upsert users {email: 'john@test.com', name: 'John', age: 25}", "testdb");
+        var r = _engine.Execute("upsert users {email: 'john@test.com', name: 'John Doe'} on email", "testdb");
+
+        Assert.Equal(SproutOperation.Upsert, r.Operation);
+        Assert.Equal(1, r.Affected);
+        Assert.Equal((ulong)1, r.Data![0]["id"]); // same record
+        Assert.Equal("John Doe", r.Data[0]["name"]);
+        Assert.Equal("john@test.com", r.Data[0]["email"]);
+        Assert.Equal((byte)25, r.Data[0]["age"]); // unchanged
+    }
+
+    [Fact]
+    public void UpsertOn_Match_PreservesUnchangedFields()
+    {
+        _engine.Execute("upsert users {email: 'john@test.com', name: 'John', age: 25, score: -50}", "testdb");
+        var r = _engine.Execute("upsert users {email: 'john@test.com', age: 30} on email", "testdb");
+
+        var row = r.Data![0];
+        Assert.Equal((ulong)1, row["id"]);
+        Assert.Equal("John", row["name"]); // unchanged
+        Assert.Equal((byte)30, row["age"]); // updated
+        Assert.Equal(-50, row["score"]); // unchanged
+    }
+
+    [Fact]
+    public void UpsertOn_SecondInsert_GetsNewId()
+    {
+        _engine.Execute("upsert users {email: 'john@test.com', name: 'John'} on email", "testdb");
+        var r = _engine.Execute("upsert users {email: 'jane@test.com', name: 'Jane'} on email", "testdb");
+
+        Assert.Equal((ulong)2, r.Data![0]["id"]); // new record
+        Assert.Equal("jane@test.com", r.Data[0]["email"]);
+    }
+
+    [Fact]
+    public void UpsertOn_NumericMatch()
+    {
+        _engine.Execute("upsert users {age: 25, name: 'John'}", "testdb");
+        var r = _engine.Execute("upsert users {age: 25, name: 'John Updated'} on age", "testdb");
+
+        Assert.Equal((ulong)1, r.Data![0]["id"]); // same record
+        Assert.Equal("John Updated", r.Data[0]["name"]);
+    }
+
+    [Fact]
+    public void UpsertOn_UnknownColumn_Error()
+    {
+        var r = _engine.Execute("upsert users {name: 'John'} on nonexistent", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal("UNKNOWN_COLUMN", r.Errors![0].Code);
+    }
+
+    [Fact]
+    public void UpsertOn_ColumnNotInFields_Error()
+    {
+        var r = _engine.Execute("upsert users {name: 'John'} on email", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal("SYNTAX_ERROR", r.Errors![0].Code);
+        Assert.Contains("email", r.Errors[0].Message);
+    }
+
+    [Fact]
+    public void UpsertOn_WithExplicitId_Error()
+    {
+        var r = _engine.Execute("upsert users {id: 1, email: 'john@test.com'} on email", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal("SYNTAX_ERROR", r.Errors![0].Code);
+        Assert.Contains("id", r.Errors[0].Message);
+    }
+
+    // ── Bulk upsert ─────────────────────────────────────────
+
+    [Fact]
+    public void Bulk_InsertsMultipleRecords()
+    {
+        var r = _engine.Execute("upsert users [{name: 'John', age: 25}, {name: 'Jane', age: 30}]", "testdb");
+
+        Assert.Equal(SproutOperation.Upsert, r.Operation);
+        Assert.Equal(2, r.Affected);
+        Assert.Equal(2, r.Data!.Count);
+        Assert.Equal((ulong)1, r.Data[0]["id"]);
+        Assert.Equal("John", r.Data[0]["name"]);
+        Assert.Equal((ulong)2, r.Data[1]["id"]);
+        Assert.Equal("Jane", r.Data[1]["name"]);
+    }
+
+    [Fact]
+    public void Bulk_WithOn_UpdatesAndInserts()
+    {
+        _engine.Execute("upsert users {email: 'john@test.com', name: 'John', age: 25}", "testdb");
+
+        var r = _engine.Execute(
+            "upsert users [{email: 'john@test.com', name: 'John Updated'}, {email: 'jane@test.com', name: 'Jane'}] on email",
+            "testdb");
+
+        Assert.Equal(2, r.Affected);
+        Assert.Equal((ulong)1, r.Data![0]["id"]); // updated existing
+        Assert.Equal("John Updated", r.Data[0]["name"]);
+        Assert.Equal((byte)25, r.Data[0]["age"]); // unchanged
+        Assert.Equal((ulong)2, r.Data[1]["id"]); // inserted new
+        Assert.Equal("Jane", r.Data[1]["name"]);
+    }
+
+    [Fact]
+    public void Bulk_WithOn_SinglePassMatchesAll()
+    {
+        _engine.Execute("upsert users {email: 'a@test.com', name: 'A'}", "testdb");
+        _engine.Execute("upsert users {email: 'b@test.com', name: 'B'}", "testdb");
+
+        var r = _engine.Execute(
+            "upsert users [{email: 'b@test.com', name: 'B Updated'}, {email: 'a@test.com', name: 'A Updated'}] on email",
+            "testdb");
+
+        Assert.Equal(2, r.Affected);
+        Assert.Equal((ulong)2, r.Data![0]["id"]); // b@test.com = id 2
+        Assert.Equal("B Updated", r.Data[0]["name"]);
+        Assert.Equal((ulong)1, r.Data![1]["id"]); // a@test.com = id 1
+        Assert.Equal("A Updated", r.Data[1]["name"]);
+    }
+
+    [Fact]
+    public void Bulk_ReturnsAllRecordsWithAllFields()
+    {
+        var r = _engine.Execute("upsert users [{name: 'John'}, {name: 'Jane'}]", "testdb");
+
+        foreach (var row in r.Data!)
+        {
+            Assert.True(row.ContainsKey("id"));
+            Assert.True(row.ContainsKey("name"));
+            Assert.True(row.ContainsKey("email"));
+            Assert.True(row.ContainsKey("age"));
+            Assert.True(row.ContainsKey("active"));
+            Assert.True(row.ContainsKey("score"));
+        }
+    }
+
+    [Fact]
+    public void BulkLimit_Exceeded_Error()
+    {
+        // Default bulk limit is 100; create engine with limit of 2
+        using var tempDir = new TempDir();
+        using var engine = new SproutEngine(new SproutEngineSettings
+        {
+            DataDirectory = tempDir.Path,
+            BulkLimit = 2,
+        });
+        engine.Execute("create database", "testdb");
+        engine.Execute("create table users (name string 100)", "testdb");
+
+        var r = engine.Execute("upsert users [{name: 'A'}, {name: 'B'}, {name: 'C'}]", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal("BULK_LIMIT", r.Errors![0].Code);
+        Assert.Contains("3", r.Errors[0].Message);
+    }
+
+    [Fact]
+    public void BulkLimit_AtLimit_Succeeds()
+    {
+        using var tempDir = new TempDir();
+        using var engine = new SproutEngine(new SproutEngineSettings
+        {
+            DataDirectory = tempDir.Path,
+            BulkLimit = 2,
+        });
+        engine.Execute("create database", "testdb");
+        engine.Execute("create table users (name string 100)", "testdb");
+
+        var r = engine.Execute("upsert users [{name: 'A'}, {name: 'B'}]", "testdb");
+
+        Assert.Equal(SproutOperation.Upsert, r.Operation);
+        Assert.Equal(2, r.Affected);
+    }
+
+    // Helper for tests that need custom settings
+    private sealed class TempDir : IDisposable
+    {
+        public string Path { get; } = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
+        public void Dispose()
+        {
+            if (Directory.Exists(Path))
+                Directory.Delete(Path, true);
+        }
+    }
 }

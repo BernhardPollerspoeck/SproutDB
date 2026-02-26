@@ -93,13 +93,13 @@ public class InsertPipelineBenchmarks
     [Benchmark(Description = "3. MMF write only (3 fields)")]
     public SproutResponse MmfWrite_3Fields()
     {
-        return UpsertExecutor.Execute(Query3Fields, _table, _parsed3Fields);
+        return UpsertExecutor.Execute(Query3Fields, _table, _parsed3Fields, 100);
     }
 
     [Benchmark(Description = "3. MMF write only (5 fields)")]
     public SproutResponse MmfWrite_5Fields()
     {
-        return UpsertExecutor.Execute(Query5Fields, _table, _parsed5Fields);
+        return UpsertExecutor.Execute(Query5Fields, _table, _parsed5Fields, 100);
     }
 
     // ── Full pipeline (for comparison) ──────────────────────

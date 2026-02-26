@@ -12,4 +12,5 @@ internal static class ErrorCodes
     public const string TYPE_NARROWING = "TYPE_NARROWING";
     public const string STRICT_VIOLATION = "STRICT_VIOLATION";
     public const string UNKNOWN_DATABASE = "UNKNOWN_DATABASE";
+    public const string BULK_LIMIT = "BULK_LIMIT";
 }

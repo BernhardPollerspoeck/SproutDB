@@ -65,6 +65,109 @@ internal sealed class ColumnHandle : IDisposable
         return ReadAndDecode(offset + 1);
     }
 
+    // ── Match (zero-allocation per row) ────────────────────
+
+    /// <summary>
+    /// Encodes a raw value into the byte representation stored in the MMF.
+    /// Call once before scanning; pass the result to <see cref="MatchesAtPlace"/>.
+    /// </summary>
+    public byte[] EncodeValueToBytes(string raw)
+    {
+        var buf = new byte[Schema.Size];
+        EncodeIntoBuffer(buf, raw);
+        return buf;
+    }
+
+    /// <summary>
+    /// Returns true if the value at <paramref name="place"/> equals <paramref name="encoded"/>.
+    /// Zero heap allocations — reads byte-by-byte from the MMF.
+    /// </summary>
+    public bool MatchesAtPlace(long place, byte[] encoded)
+    {
+        var offset = place * Schema.EntrySize;
+        if (offset + Schema.EntrySize > _capacity)
+            return false;
+
+        if (_view.ReadByte(offset) != StorageConstants.FLAG_VALUE)
+            return false;
+
+        var valueOffset = offset + 1;
+        for (int i = 0; i < encoded.Length; i++)
+        {
+            if (_view.ReadByte(valueOffset + i) != encoded[i])
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Returns true if the value at <paramref name="place"/> is null.
+    /// </summary>
+    public bool IsNullAtPlace(long place)
+    {
+        var offset = place * Schema.EntrySize;
+        if (offset + Schema.EntrySize > _capacity)
+            return true;
+        return _view.ReadByte(offset) == StorageConstants.FLAG_NULL;
+    }
+
+    private void EncodeIntoBuffer(byte[] buf, string raw)
+    {
+        switch (Type)
+        {
+            case ColumnType.Bool:
+                buf[0] = (byte)(raw == "true" ? 1 : 0);
+                break;
+            case ColumnType.SByte:
+                buf[0] = (byte)sbyte.Parse(raw, CultureInfo.InvariantCulture);
+                break;
+            case ColumnType.UByte:
+                buf[0] = byte.Parse(raw, CultureInfo.InvariantCulture);
+                break;
+            case ColumnType.SShort:
+                BinaryPrimitives.WriteInt16LittleEndian(buf, short.Parse(raw, CultureInfo.InvariantCulture));
+                break;
+            case ColumnType.UShort:
+                BinaryPrimitives.WriteUInt16LittleEndian(buf, ushort.Parse(raw, CultureInfo.InvariantCulture));
+                break;
+            case ColumnType.SInt:
+                BinaryPrimitives.WriteInt32LittleEndian(buf, int.Parse(raw, CultureInfo.InvariantCulture));
+                break;
+            case ColumnType.UInt:
+                BinaryPrimitives.WriteUInt32LittleEndian(buf, uint.Parse(raw, CultureInfo.InvariantCulture));
+                break;
+            case ColumnType.SLong:
+                BinaryPrimitives.WriteInt64LittleEndian(buf, long.Parse(raw, CultureInfo.InvariantCulture));
+                break;
+            case ColumnType.ULong:
+                BinaryPrimitives.WriteUInt64LittleEndian(buf, ulong.Parse(raw, CultureInfo.InvariantCulture));
+                break;
+            case ColumnType.Float:
+                BinaryPrimitives.WriteSingleLittleEndian(buf, float.Parse(raw, CultureInfo.InvariantCulture));
+                break;
+            case ColumnType.Double:
+                BinaryPrimitives.WriteDoubleLittleEndian(buf, double.Parse(raw, CultureInfo.InvariantCulture));
+                break;
+            case ColumnType.Date:
+                BinaryPrimitives.WriteInt32LittleEndian(buf,
+                    DateOnly.Parse(raw, CultureInfo.InvariantCulture).DayNumber);
+                break;
+            case ColumnType.Time:
+                BinaryPrimitives.WriteInt64LittleEndian(buf,
+                    TimeOnly.Parse(raw, CultureInfo.InvariantCulture).Ticks);
+                break;
+            case ColumnType.DateTime:
+                BinaryPrimitives.WriteInt64LittleEndian(buf,
+                    DateTime.Parse(raw, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal).Ticks);
+                break;
+            case ColumnType.String:
+                var bytes = Encoding.UTF8.GetBytes(raw);
+                var len = Math.Min(bytes.Length, Schema.Size - 1);
+                Array.Copy(bytes, buf, len);
+                break;
+        }
+    }
+
     // ── Capacity ────────────────────────────────────────────
 
     public void EnsureCapacity(long requiredEntries)

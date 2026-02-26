@@ -4,7 +4,8 @@ internal sealed class UpsertQuery : IQuery
 {
     public SproutOperation Operation => SproutOperation.Upsert;
     public required string Table { get; init; }
-    public required List<UpsertField> Fields { get; init; }
+    public required List<List<UpsertField>> Records { get; init; }
+    public string? OnColumn { get; init; }
 }
 
 internal sealed class UpsertField

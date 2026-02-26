@@ -23,4 +23,11 @@ public sealed class SproutEngineSettings
     /// Default: 50ms. Set to <see cref="TimeSpan.Zero"/> for immediate fsync per write.
     /// </summary>
     public TimeSpan WalSyncInterval { get; init; } = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>
+    /// Maximum number of records in a single bulk upsert.
+    /// Exceeding this limit returns error code BULK_LIMIT.
+    /// Default: 100.
+    /// </summary>
+    public int BulkLimit { get; init; } = 100;
 }

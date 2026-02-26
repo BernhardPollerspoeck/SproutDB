@@ -12,15 +12,39 @@ internal static class UpsertParser
         var tableName = ctx.GetLowercaseText(nameToken);
         ctx.Advance();
 
-        // Opening brace
-        var braceToken = ctx.Peek();
-        if (braceToken.Type != TokenType.LeftBrace)
-            return ctx.Error(braceToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_OPEN_BRACE);
-        ctx.Advance();
+        // Single {…} or bulk [{…}, {…}]
+        List<List<UpsertField>> records;
+        var next = ctx.Peek();
 
-        // Fields
-        var fields = ParseFields(ctx);
-        if (ctx.HasErrors) return ctx.Fail();
+        if (next.Type == TokenType.LeftBracket)
+        {
+            ctx.Advance();
+            records = ParseBulkRecords(ctx);
+            if (ctx.HasErrors) return ctx.Fail();
+        }
+        else if (next.Type == TokenType.LeftBrace)
+        {
+            ctx.Advance();
+            var fields = ParseFields(ctx);
+            if (ctx.HasErrors) return ctx.Fail();
+            records = [fields];
+        }
+        else
+        {
+            return ctx.Error(next, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_OPEN_BRACE);
+        }
+
+        // Optional ON clause
+        string? onColumn = null;
+        if (ctx.Peek().Type == TokenType.Identifier && ctx.IsKeyword(ctx.Peek(), "on"))
+        {
+            ctx.Advance();
+            var colToken = ctx.Peek();
+            if (colToken.Type != TokenType.Identifier)
+                return ctx.Error(colToken, ErrorCodes.SYNTAX_ERROR, "expected column name after 'on'");
+            onColumn = ctx.GetLowercaseText(colToken);
+            ctx.Advance();
+        }
 
         ctx.ExpectEof();
         if (ctx.HasErrors) return ctx.Fail();
@@ -28,8 +52,46 @@ internal static class UpsertParser
         return ParseResult.Ok(new UpsertQuery
         {
             Table = tableName,
-            Fields = fields,
+            Records = records,
+            OnColumn = onColumn,
         });
+    }
+
+    private static List<List<UpsertField>> ParseBulkRecords(ParserContext ctx)
+    {
+        var records = new List<List<UpsertField>>();
+
+        while (true)
+        {
+            var token = ctx.Peek();
+            if (token.Type != TokenType.LeftBrace)
+            {
+                ctx.AddError(token, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_OPEN_BRACE);
+                return records;
+            }
+            ctx.Advance();
+
+            var fields = ParseFields(ctx);
+            if (ctx.HasErrors) return records;
+            records.Add(fields);
+
+            if (ctx.Peek().Type == TokenType.Comma)
+            {
+                ctx.Advance();
+                continue;
+            }
+
+            if (ctx.Peek().Type == TokenType.RightBracket)
+            {
+                ctx.Advance();
+                break;
+            }
+
+            ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected ',' or ']'");
+            return records;
+        }
+
+        return records;
     }
 
     private static List<UpsertField> ParseFields(ParserContext ctx)

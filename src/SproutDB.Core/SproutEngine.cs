@@ -15,6 +15,7 @@ namespace SproutDB.Core;
 public sealed class SproutEngine : IDisposable
 {
     private readonly string _dataDirectory;
+    private readonly SproutEngineSettings _settings;
     private readonly ConcurrentDictionary<string, Lazy<TableHandle>> _tables = new();
     private readonly Dictionary<string, WalFile> _wals = [];
     private readonly ConcurrentDictionary<string, byte> _knownDatabases = new();
@@ -42,6 +43,7 @@ public sealed class SproutEngine : IDisposable
     /// </summary>
     public SproutEngine(SproutEngineSettings settings)
     {
+        _settings = settings;
         _dataDirectory = Path.GetFullPath(settings.DataDirectory);
         Directory.CreateDirectory(_dataDirectory);
 
@@ -204,9 +206,10 @@ public sealed class SproutEngine : IDisposable
 
             // Inject resolved ID for auto-ID upserts during replay
             if (entry.ResolvedId > 0 && replayQuery is UpsertQuery upsert
-                && !upsert.Fields.Exists(f => f.Name == "id"))
+                && upsert.Records.Count == 1
+                && !upsert.Records[0].Exists(f => f.Name == "id"))
             {
-                upsert.Fields.Insert(0, new UpsertField
+                upsert.Records[0].Insert(0, new UpsertField
                 {
                     Name = "id",
                     Value = new UpsertValue
@@ -331,7 +334,7 @@ public sealed class SproutEngine : IDisposable
         if (query is not UpsertQuery upsert)
             return 0;
 
-        if (upsert.Fields.Exists(f => f.Name == "id"))
+        if (upsert.Records.Count != 1 || upsert.Records[0].Exists(f => f.Name == "id"))
             return 0;
 
         var tablePath = Path.Combine(dbPath, upsert.Table);
@@ -358,7 +361,7 @@ public sealed class SproutEngine : IDisposable
         return parsedQuery switch
         {
             CreateTableQuery q => ExecuteCreateTable(query, dbName, dbPath, q),
-            UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table, table => UpsertExecutor.Execute(query, table, q)),
+            UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table, table => UpsertExecutor.Execute(query, table, q, _settings.BulkLimit)),
             AddColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => AddColumnExecutor.Execute(query, table, q)),
             _ => ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, "operation not supported"),
         };
@@ -374,7 +377,7 @@ public sealed class SproutEngine : IDisposable
             CreateDatabaseQuery => ExecuteCreateDatabase(query, dbName, dbPath),
             CreateTableQuery q => ExecuteCreateTable(query, dbName, dbPath, q),
             GetQuery q => ExecuteWithTable(query, dbPath, q.Table, table => GetExecutor.Execute(query, table, q)),
-            UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table, table => UpsertExecutor.Execute(query, table, q)),
+            UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table, table => UpsertExecutor.Execute(query, table, q, _settings.BulkLimit)),
             AddColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => AddColumnExecutor.Execute(query, table, q)),
             _ => ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, "operation not supported"),
         };
