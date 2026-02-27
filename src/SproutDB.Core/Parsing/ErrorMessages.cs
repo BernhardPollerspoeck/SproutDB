@@ -6,7 +6,7 @@ internal static class ErrorMessages
         "expected a command";
 
     public const string UNKNOWN_COMMAND =
-        "unknown command, expected 'create', 'get', 'upsert', 'delete', 'add', 'describe', 'purge', 'rename' or 'alter'";
+        "unknown command, expected 'create', 'get', 'upsert', 'delete', 'add', 'describe', 'purge', 'rename', 'alter', 'backup' or 'restore'";
 
     public const string EXPECTED_CREATE_TARGET =
         "expected 'database', 'table' or 'index'";
@@ -52,4 +52,16 @@ internal static class ErrorMessages
 
     public const string EXPECTED_DOT =
         "expected '.'";
+
+    public const string EXPECTED_PURGE_TARGET =
+        "expected 'column', 'table' or 'database'";
+
+    public const string EXPECTED_TO_KEYWORD =
+        "expected 'to'";
+
+    public const string EXPECTED_STRING_KEYWORD =
+        "expected 'string'";
+
+    public const string EXPECTED_SIZE =
+        "expected size";
 }

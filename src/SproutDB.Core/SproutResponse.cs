@@ -11,6 +11,7 @@ public sealed class SproutResponse
     public int Affected { get; init; }
     public SchemaInfo? Schema { get; init; }
     public PagingInfo? Paging { get; init; }
+    public string? BackupPath { get; init; }
     public List<SproutError>? Errors { get; init; }
     public string? AnnotatedQuery { get; init; }
 }

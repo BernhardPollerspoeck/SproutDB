@@ -6,74 +6,33 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 
 ## Upsert
 
-- [x] #001 **[C:6]** `upsert users {email: 'john@test.com', name: 'John Doe'} on email` – Upsert mit Match-Spalte (ON clause). Existiert ein Record mit diesem Wert? → Update. Sonst → Insert.
-- [x] #002 **[C:3]** `upsert users {id: 42, email: null}` – Explizites NULL-Setzen per Upsert. Nur wenn Spalte nullable ist, sonst Fehler NOT_NULLABLE. → **Bereits implementiert + Tests (NotNullable_Error, Update_SetToNull, Insert_NullOnNullableColumn).**
-- [x] #003 **[C:4]** Upsert Response muss den **kompletten Record** im finalen State zurückgeben – inkl. aller bestehenden Felder die nicht geändert wurden. Kein extra GET nötig. → **Bereits implementiert + Tests (Insert_ReturnsFullRecord, Update_PreservesUnchangedFields).**
-- [x] #004 **[C:2]** Upsert Response: `operation` Sub-Feld als `"insert"` oder `"update"` (bei Bulk eine Liste). Aktuell nur Byte-Enum 2 (upsert) ohne Unterscheidung insert/update. → **Entscheidung: keine Unterscheidung, bleibt bei upsert.**
-- [x] #005 **[C:5]** Bulk Upsert: `upsert users [{name: 'John', age: 25}, {name: 'Jane', age: 30}]` – Array-Syntax mit mehreren Records.
-- [x] #006 **[C:7]** Bulk Upsert mit ON: `upsert users [{...}, {...}] on email` – Bulk + Match-Spalte kombiniert. → **Single-Pass Scan über alle Match-Werte.**
-- [x] #007 **[C:3]** Bulk Upsert Response: alle betroffenen Records zurückgeben. → **Data ist bereits List, passt für Single und Bulk.**
-- [x] #008 **[C:2]** Bulk Limit: konfigurierbares Limit für Bulk Upsert, Error Code `BULK_LIMIT` wenn überschritten.
-
 ---
 
 ## Kommentare
-
-- [x] #009 Kommentare in Queries: `##` startet UND beendet einen Kommentar (inline toggle). Kommentare am Zeilenende brauchen kein schließendes `##`. → **Bereits im Tokenizer implementiert. Tests ergänzt (Tokenizer + Parser-Level).**
 
 ---
 
 ## Fehlerbehandlung
 
-- [x] #010 Annotated Query: Fehler-Kommentare (`##...##`) an der **exakten Fehlerstelle inline** einfügen statt nur als Suffix. Z.B. `get users where agee ##unknown column 'agee'## > 18`. → **Implementiert: Position/Length in UpsertField, SelectColumn, SproutError. ResponseHelper.BuildAnnotatedQuery setzt Fehler inline.**
-- [x] #011 Mehrere Fehler sammeln: Bei nicht-Dead-Stop Fehlern (z.B. mehrere unbekannte Spalten) alle Fehler sammeln und gemeinsam zurückgeben statt beim ersten abzubrechen. → **Implementiert in UpsertExecutor.ValidateRecord und GetExecutor (Select-Validation). ResponseHelper.Errors für Multi-Error-Responses.**
-
 ---
 
 ## Schema
-
-- [ ] #012 `rename column users.old_name to new_name` – RENAME COLUMN. Benennt .col File um + Schema update.
-- [ ] #013 `alter column users.bio string 10000` – ALTER COLUMN (String-Länge ändern). Rebuilds .col File mit neuer Entry Size, Pointer-Swap, Reads laufen währenddessen weiter. Vergrößern und Verkleinern erlaubt (Daten die nicht passen werden abgeschnitten).
-- [ ] #014 `purge column users.old_field` – PURGE COLUMN. Löscht .col File + Schema update. Endgültig, kein Undo.
-- [ ] #015 `purge table users` – PURGE TABLE. Löscht Table-Verzeichnis komplett. Endgültig.
-- [ ] #016 `purge database` – PURGE DATABASE. Löscht Database-Verzeichnis aus dem Header. Endgültig.
-
----
-
-## Delete
-
-- [ ] #017 `delete users where id = 42` – DELETE einzelner Record.
-- [ ] #018 `delete users where active = false` – DELETE mit Bedingung.
-- [ ] #019 `delete users where last_login < '2024-01-01'` – DELETE mit Datum-Bedingung.
-- [ ] #020 Delete Response: returnt die gelöschten Records (komplette Records für Logging/Undo/Auditing).
-- [ ] #021 Delete Storage: Alle .col Files an der Place-Position nullen (Flag 0x00 + Null-Bytes), _index ID-Position auf 0 setzen.
-- [ ] #022 Free-List / Place-Reuse bei Insert: Scan _index für ersten Eintrag mit Wert 0 → freier Place wiederverwenden statt immer appenden. (Design-Entscheidung: Stack LIFO oder PriorityQueue min-heap)
-
----
-
-## Backup
-
-- [ ] #023 `db.ExportToZip("/backups/shop.zip")` – Database = Verzeichnis. ZIP = vollständiges Backup inkl. Daten, Schema, Migrations-History.
-- [ ] #024 `sprout.ImportFromZip("/backups/shop.zip", "shop_restored")` – Unzip in neues Verzeichnis, MMFs öffnen, fertig.
 
 ---
 
 ## Describe
 
-- [ ] #025 `describe users` – DESCRIBE TABLE. Returnt alle Spalten mit Typ, nullable, default, strict, auto. Response enthält `schema.table` und `schema.columns` Array.
-- [ ] #026 `describe` (ohne Argument) – DESCRIBE ALL. Returnt alle Tabellen der aktuellen Datenbank als `schema.tables` Array.
-
 ---
 
 ## Get
 
-- [ ] #027 `get users -select age, email` – Exclude-Select. Gibt alle Spalten zurück AUSSER den angegebenen. Entweder `select` oder `-select`, nie beides (Mischen → Fehler). `-select id` ist erlaubt.
-- [ ] #028 `get users where age > 30` – Where-Clause mit Vergleichsoperator `>`.
-- [ ] #029 `get users where name = 'John'` – Where-Clause mit Gleichheit `=`.
-- [ ] #030 `get users where age >= 18` – Where-Clause mit `>=`.
-- [ ] #031 `get users where age <= 30` – Where-Clause mit `<=`.
-- [ ] #032 `get users where age < 18` – Where-Clause mit `<`.
-- [ ] #033 `get users where age != 18` – Where-Clause mit Ungleichheit (falls supported, aus Samples ableitbar).
+- [x] #027 `get users -select age, email` – Exclude-Select. Gibt alle Spalten zurück AUSSER den angegebenen. Entweder `select` oder `-select`, nie beides (Mischen → Fehler). `-select id` ist erlaubt.
+- [x] #028 `get users where age > 30` – Where-Clause mit Vergleichsoperator `>`.
+- [x] #029 `get users where name = 'John'` – Where-Clause mit Gleichheit `=`.
+- [x] #030 `get users where age >= 18` – Where-Clause mit `>=`.
+- [x] #031 `get users where age <= 30` – Where-Clause mit `<=`.
+- [x] #032 `get users where age < 18` – Where-Clause mit `<`.
+- [x] #033 `get users where age != 18` – Where-Clause mit Ungleichheit (falls supported, aus Samples ableitbar).
 - [ ] #034 `get users where email contains '@gmail'` – String-Operator `contains`.
 - [ ] #035 `get users where name starts 'Jo'` – String-Operator `starts`.
 - [ ] #036 `get users where name ends 'son'` – String-Operator `ends`.
@@ -119,6 +78,21 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 - [ ] #076 `get users where active = true page 2 size 100` – Manuelle Paging-Syntax mit `page` und `size` Keywords.
 - [ ] #077 Default Page Size / Bulk Limit: 100 (ein Setting für beides). Konfigurierbar auf Server-Ebene, Override pro Database möglich.
 - [ ] #078 `get orders avg amount where created > '2025-01-01 00:00:00.0000'` – Aggregation + WHERE + Datums-Vergleich kombiniert.
+
+---
+
+## Delete
+
+- [ ] #017 `delete users where age < 18` – DELETE mit WHERE. Löscht alle Rows die matchen. Response enthält `affected_rows`.
+- [ ] #018 `delete users where id = 5` – DELETE by ID.
+- [ ] #019 `delete users` (ohne WHERE) → Fehler `WHERE_REQUIRED`. Verhindert versehentliches Löschen aller Rows.
+- [ ] #020 DELETE setzt Flag-Byte in jeder betroffenen Column auf 0x00 (gelöscht). Kein physisches Löschen, Platz wird bei nächstem Upsert wiederverwendet.
+- [ ] #021 Free-List: Gelöschte Row-Positionen in einer Free-List (im Index-File oder separates File). Upsert prüft Free-List zuerst bevor neuer Platz alloziert wird.
+- [ ] #022 DELETE + WAL: Delete-Query wird ins WAL geschrieben. Bei Replay: idempotent (bereits gelöschte Rows erneut löschen = no-op).
+
+---
+
+## Backup
 
 ---
 

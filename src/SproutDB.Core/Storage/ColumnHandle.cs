@@ -111,6 +111,59 @@ internal sealed class ColumnHandle : IDisposable
         return _view.ReadByte(offset) == StorageConstants.FLAG_NULL;
     }
 
+    /// <summary>
+    /// Compares the value at <paramref name="place"/> against <paramref name="encoded"/>.
+    /// Returns negative if stored &lt; encoded, zero if equal, positive if stored &gt; encoded.
+    /// Returns null if the stored value is null.
+    /// </summary>
+    public int? CompareAtPlace(long place, byte[] encoded)
+    {
+        var offset = place * Schema.EntrySize;
+        if (offset + Schema.EntrySize > _capacity)
+            return null;
+
+        if (_view.ReadByte(offset) != StorageConstants.FLAG_VALUE)
+            return null;
+
+        var valueOffset = offset + 1;
+        return CompareBytes(valueOffset, encoded);
+    }
+
+    private int CompareBytes(long offset, byte[] encoded)
+    {
+        return Type switch
+        {
+            ColumnType.Bool => _view.ReadByte(offset).CompareTo(encoded[0]),
+            ColumnType.UByte => _view.ReadByte(offset).CompareTo(encoded[0]),
+            ColumnType.SByte => ((sbyte)_view.ReadByte(offset)).CompareTo((sbyte)encoded[0]),
+            ColumnType.UShort => _view.ReadUInt16(offset).CompareTo(BinaryPrimitives.ReadUInt16LittleEndian(encoded)),
+            ColumnType.SShort => _view.ReadInt16(offset).CompareTo(BinaryPrimitives.ReadInt16LittleEndian(encoded)),
+            ColumnType.UInt => _view.ReadUInt32(offset).CompareTo(BinaryPrimitives.ReadUInt32LittleEndian(encoded)),
+            ColumnType.SInt => _view.ReadInt32(offset).CompareTo(BinaryPrimitives.ReadInt32LittleEndian(encoded)),
+            ColumnType.ULong => _view.ReadUInt64(offset).CompareTo(BinaryPrimitives.ReadUInt64LittleEndian(encoded)),
+            ColumnType.SLong => _view.ReadInt64(offset).CompareTo(BinaryPrimitives.ReadInt64LittleEndian(encoded)),
+            ColumnType.Float => _view.ReadSingle(offset).CompareTo(BinaryPrimitives.ReadSingleLittleEndian(encoded)),
+            ColumnType.Double => _view.ReadDouble(offset).CompareTo(BinaryPrimitives.ReadDoubleLittleEndian(encoded)),
+            ColumnType.Date => _view.ReadInt32(offset).CompareTo(BinaryPrimitives.ReadInt32LittleEndian(encoded)),
+            ColumnType.Time => _view.ReadInt64(offset).CompareTo(BinaryPrimitives.ReadInt64LittleEndian(encoded)),
+            ColumnType.DateTime => _view.ReadInt64(offset).CompareTo(BinaryPrimitives.ReadInt64LittleEndian(encoded)),
+            ColumnType.String => CompareString(offset, encoded),
+            _ => 0,
+        };
+    }
+
+    private int CompareString(long offset, byte[] encoded)
+    {
+        // Byte-by-byte comparison (UTF-8 preserves order for ASCII)
+        for (int i = 0; i < encoded.Length; i++)
+        {
+            var stored = _view.ReadByte(offset + i);
+            var cmp = stored.CompareTo(encoded[i]);
+            if (cmp != 0) return cmp;
+        }
+        return 0;
+    }
+
     private void EncodeIntoBuffer(byte[] buf, string raw)
     {
         switch (Type)

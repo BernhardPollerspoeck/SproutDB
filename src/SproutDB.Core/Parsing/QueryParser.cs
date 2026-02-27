@@ -27,11 +27,29 @@ internal static class QueryParser
         if (ctx.MatchKeyword("get"))
             return GetParser.Parse(ctx);
 
+        if (ctx.MatchKeyword("describe"))
+            return DescribeParser.Parse(ctx);
+
         if (ctx.MatchKeyword("upsert"))
             return UpsertParser.Parse(ctx);
 
         if (ctx.MatchKeyword("add"))
             return AddColumnParser.Parse(ctx);
+
+        if (ctx.MatchKeyword("purge"))
+            return PurgeParser.Parse(ctx);
+
+        if (ctx.MatchKeyword("rename"))
+            return RenameColumnParser.Parse(ctx);
+
+        if (ctx.MatchKeyword("alter"))
+            return AlterColumnParser.Parse(ctx);
+
+        if (ctx.MatchKeyword("backup"))
+            return BackupParser.Parse(ctx);
+
+        if (ctx.MatchKeyword("restore"))
+            return RestoreParser.Parse(ctx);
 
         return ctx.Error(current, ErrorCodes.SYNTAX_ERROR, ErrorMessages.UNKNOWN_COMMAND);
     }

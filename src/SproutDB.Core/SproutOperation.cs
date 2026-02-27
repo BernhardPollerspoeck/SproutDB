@@ -20,4 +20,6 @@ public enum SproutOperation : byte
     AlterColumn = 12,
     CreateIndex = 13,
     PurgeIndex = 14,
+    Backup = 15,
+    Restore = 16,
 }

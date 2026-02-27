@@ -261,6 +261,72 @@ public class GetTests : IDisposable
         Assert.Equal(3, r.Data!.Count);
     }
 
+    // ── Exclude select (-select) ──────────────────────────────
+
+    [Fact]
+    public void ExcludeSelect_ExcludesNamedColumns()
+    {
+        var r = _engine.Execute("get users -select age, email", "testdb");
+
+        Assert.Equal(SproutOperation.Get, r.Operation);
+        Assert.Equal(3, r.Data!.Count);
+        var row = r.Data[0];
+        Assert.True(row.ContainsKey("id"));
+        Assert.True(row.ContainsKey("name"));
+        Assert.True(row.ContainsKey("active"));
+        Assert.False(row.ContainsKey("age"));
+        Assert.False(row.ContainsKey("email"));
+    }
+
+    [Fact]
+    public void ExcludeSelect_ExcludeId()
+    {
+        var r = _engine.Execute("get users -select id", "testdb");
+
+        var row = r.Data![0];
+        Assert.False(row.ContainsKey("id"));
+        Assert.True(row.ContainsKey("name"));
+        Assert.True(row.ContainsKey("email"));
+        Assert.True(row.ContainsKey("age"));
+        Assert.True(row.ContainsKey("active"));
+    }
+
+    [Fact]
+    public void ExcludeSelect_SingleColumn()
+    {
+        var r = _engine.Execute("get users -select active", "testdb");
+
+        var row = r.Data![0];
+        Assert.True(row.ContainsKey("id"));
+        Assert.True(row.ContainsKey("name"));
+        Assert.True(row.ContainsKey("email"));
+        Assert.True(row.ContainsKey("age"));
+        Assert.False(row.ContainsKey("active"));
+    }
+
+    [Fact]
+    public void ExcludeSelect_WithWhere()
+    {
+        var r = _engine.Execute("get users -select email, active where age > 30", "testdb");
+
+        Assert.Equal(1, r.Affected);
+        var row = r.Data![0];
+        Assert.True(row.ContainsKey("id"));
+        Assert.True(row.ContainsKey("name"));
+        Assert.True(row.ContainsKey("age"));
+        Assert.False(row.ContainsKey("email"));
+        Assert.False(row.ContainsKey("active"));
+    }
+
+    [Fact]
+    public void ExcludeSelect_UnknownColumn_Error()
+    {
+        var r = _engine.Execute("get users -select missing", "testdb");
+
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal("UNKNOWN_COLUMN", r.Errors![0].Code);
+    }
+
     // ── Response format ───────────────────────────────────────
 
     [Fact]

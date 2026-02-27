@@ -78,6 +78,118 @@ internal sealed class TableHandle : IDisposable
         }
     }
 
+    /// <summary>
+    /// Removes a column: disposes handle, deletes .col file, updates schema.
+    /// </summary>
+    public void RemoveColumn(string name)
+    {
+        if (_columns.TryGetValue(name, out var handle))
+        {
+            handle.Dispose();
+            _columns.Remove(name);
+        }
+
+        var colPath = Path.Combine(_tablePath, $"{name}.col");
+        if (File.Exists(colPath))
+            File.Delete(colPath);
+
+        Schema.Columns.RemoveAll(c => c.Name == name);
+        SaveSchema();
+    }
+
+    /// <summary>
+    /// Renames a column: disposes old handle, renames .col file, reopens handle, updates schema.
+    /// </summary>
+    public void RenameColumn(string oldName, string newName)
+    {
+        var oldPath = Path.Combine(_tablePath, $"{oldName}.col");
+        var newPath = Path.Combine(_tablePath, $"{newName}.col");
+
+        // Dispose old handle so file is released
+        if (_columns.TryGetValue(oldName, out var handle))
+        {
+            handle.Dispose();
+            _columns.Remove(oldName);
+        }
+
+        // Rename file on disk
+        File.Move(oldPath, newPath);
+
+        // Update schema entry
+        var entry = Schema.Columns.Find(c => c.Name == oldName);
+        if (entry is not null)
+            entry.Name = newName;
+
+        SaveSchema();
+
+        // Reopen handle with new name
+        if (entry is not null)
+            _columns[newName] = new ColumnHandle(newPath, entry);
+    }
+
+    /// <summary>
+    /// Rebuilds a string column with a new size.
+    /// Creates temp file, copies data entry-by-entry (truncating if shrinking), swaps files.
+    /// </summary>
+    public void RebuildColumn(string name, int newSize)
+    {
+        var entry = Schema.Columns.Find(c => c.Name == name);
+        if (entry is null) return;
+
+        var oldSize = entry.Size;
+        var oldEntrySize = entry.EntrySize;
+        var newEntrySize = 1 + newSize; // flag byte + value
+        var copySize = Math.Min(oldSize, newSize);
+
+        var colPath = Path.Combine(_tablePath, $"{name}.col");
+        var tmpPath = colPath + ".tmp";
+
+        // Dispose old handle so file is released for reading
+        if (_columns.TryGetValue(name, out var oldHandle))
+        {
+            oldHandle.Flush();
+            oldHandle.Dispose();
+            _columns.Remove(name);
+        }
+
+        // Build new file: read old file raw, write entries with new size
+        using (var oldFs = new FileStream(colPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (var newFs = File.Create(tmpPath))
+        {
+            var entryCount = oldFs.Length / oldEntrySize;
+            newFs.SetLength(entryCount * newEntrySize);
+
+            var oldBuf = new byte[oldEntrySize];
+            var newBuf = new byte[newEntrySize];
+
+            for (long i = 0; i < entryCount; i++)
+            {
+                oldFs.ReadExactly(oldBuf);
+                Array.Clear(newBuf);
+
+                // Copy flag byte
+                newBuf[0] = oldBuf[0];
+
+                // Copy value bytes (truncate if shrinking)
+                Buffer.BlockCopy(oldBuf, 1, newBuf, 1, copySize);
+
+                newFs.Write(newBuf);
+            }
+        }
+
+        // Swap: delete old, rename tmp
+        File.Delete(colPath);
+        File.Move(tmpPath, colPath);
+
+        // Update schema
+        entry.Size = newSize;
+        entry.EntrySize = newEntrySize;
+        SaveSchema();
+
+        // Reopen handle
+        _columns[name] = new ColumnHandle(colPath, entry);
+    }
+
     public void Flush()
     {
         Index.Flush();

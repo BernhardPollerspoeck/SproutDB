@@ -98,6 +98,53 @@ public class GetParserTests
         Assert.Equal("name", q.Select![0].Name);
     }
 
+    // ── Exclude select (-select) ──────────────────────────────
+
+    [Fact]
+    public void ExcludeSelect_SingleColumn()
+    {
+        var result = QueryParser.Parse("get users -select age");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.True(q.ExcludeSelect);
+        Assert.NotNull(q.Select);
+        Assert.Single(q.Select);
+        Assert.Equal("age", q.Select[0].Name);
+    }
+
+    [Fact]
+    public void ExcludeSelect_MultipleColumns()
+    {
+        var result = QueryParser.Parse("get users -select age, email");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.True(q.ExcludeSelect);
+        Assert.Equal(2, q.Select?.Count);
+    }
+
+    [Fact]
+    public void ExcludeSelect_WithWhere()
+    {
+        var result = QueryParser.Parse("get users -select age where name = 'Alice'");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.True(q.ExcludeSelect);
+        Assert.NotNull(q.Where);
+    }
+
+    [Fact]
+    public void RegularSelect_NotExclude()
+    {
+        var result = QueryParser.Parse("get users select name");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.False(q.ExcludeSelect);
+    }
+
     // ── Error cases ───────────────────────────────────────────
 
     [Fact]

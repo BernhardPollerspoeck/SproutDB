@@ -76,3 +76,22 @@ Run2("get users select id, name, score");
 
 Console.WriteLine("\nInsert after restart (should get id=5):");
 Run2("upsert users {name: 'Diana', score: 999}");
+
+// -- PURGE Demo --
+Console.WriteLine("\n=== PURGE COLUMN ===");
+Run2("purge column users.score");
+
+Console.WriteLine("\n=== GET after purge column (score gone) ===");
+Run2("get users");
+
+Console.WriteLine("\n=== PURGE TABLE ===");
+Run2("purge table users");
+
+Console.WriteLine("\n=== GET after purge table (table gone) ===");
+Run2("get users");
+
+Console.WriteLine("\n=== PURGE DATABASE ===");
+Run2("purge database");
+
+Console.WriteLine("\n=== GET after purge database (db gone) ===");
+Run2("get users");

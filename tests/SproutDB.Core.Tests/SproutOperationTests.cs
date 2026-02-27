@@ -20,15 +20,17 @@ public class SproutOperationTests
     [InlineData(SproutOperation.AlterColumn, 12)]
     [InlineData(SproutOperation.CreateIndex, 13)]
     [InlineData(SproutOperation.PurgeIndex, 14)]
+    [InlineData(SproutOperation.Backup, 15)]
+    [InlineData(SproutOperation.Restore, 16)]
     public void Operation_HasCorrectByteValue(SproutOperation operation, byte expected)
     {
         Assert.Equal(expected, (byte)operation);
     }
 
     [Fact]
-    public void Operation_HasExactly15Members()
+    public void Operation_HasExactly17Members()
     {
         var values = Enum.GetValues<SproutOperation>();
-        Assert.Equal(15, values.Length);
+        Assert.Equal(17, values.Length);
     }
 }
