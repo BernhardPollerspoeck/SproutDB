@@ -105,14 +105,26 @@ public class ConcurrencyTests : IDisposable
 
         Task.WaitAll(tasks);
 
-        var result = engine.Execute("get users select id, name", "testdb");
         var totalExpected = writersCount * writesPerThread;
 
-        Assert.Equal(totalExpected, result.Data?.Count);
+        // Use count to verify total (auto-paging would truncate Data)
+        var countResult = engine.Execute("get users count", "testdb");
+        Assert.Equal(totalExpected, countResult.Affected);
 
-        // All IDs must be unique
-        var ids = result.Data?.Select(row => (ulong)row["id"]!).ToList();
-        Assert.Equal(totalExpected, ids?.Distinct().Count());
+        // Collect all IDs via paging
+        var allIds = new List<ulong>();
+        var page = 1;
+        while (true)
+        {
+            var result = engine.Execute($"get users select id page {page} size 100", "testdb");
+            if (result.Data is null || result.Data.Count == 0) break;
+            allIds.AddRange(result.Data.Select(row => (ulong)row["id"]!));
+            if (result.Paging?.Next is null) break;
+            page++;
+        }
+
+        Assert.Equal(totalExpected, allIds.Count);
+        Assert.Equal(totalExpected, allIds.Distinct().Count());
     }
 
     // ── 3. Reads during writes: no crash, no torn rows ──────

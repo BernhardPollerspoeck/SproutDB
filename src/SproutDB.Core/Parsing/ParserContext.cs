@@ -21,6 +21,12 @@ internal sealed class ParserContext
 
     public Token Peek() => _tokens[_pos];
 
+    public Token PeekAt(int offset)
+    {
+        var index = _pos + offset;
+        return index < _tokens.Count ? _tokens[index] : _tokens[^1]; // last is always Eof
+    }
+
     public Token Advance()
     {
         var token = _tokens[_pos];

@@ -30,4 +30,12 @@ public sealed class SproutEngineSettings
     /// Default: 100.
     /// </summary>
     public int BulkLimit { get; init; } = 100;
+
+    /// <summary>
+    /// Default page size for GET results. When a result exceeds this size,
+    /// automatic paging is applied. Also used as default for manual paging
+    /// when no explicit size is provided.
+    /// Default: 100.
+    /// </summary>
+    public int DefaultPageSize { get; init; } = 100;
 }

@@ -332,7 +332,7 @@ public sealed class SproutEngine : IDisposable
                 $"database '{dbName}' does not exist");
 
         return ExecuteWithTable(query, dbPath, q.Table,
-            table => GetExecutor.Execute(query, table, q));
+            table => GetExecutor.Execute(query, table, q, _settings.DefaultPageSize));
     }
 
     private SproutResponse ExecuteDescribe(string query, string dbName, string dbPath, DescribeQuery q)
@@ -356,7 +356,7 @@ public sealed class SproutEngine : IDisposable
         {
             CreateDatabaseQuery => ExecuteCreateDatabase(query, dbName, dbPath),
             CreateTableQuery q => ExecuteCreateTable(query, dbName, dbPath, q),
-            GetQuery q => ExecuteWithTable(query, dbPath, q.Table, table => GetExecutor.Execute(query, table, q)),
+            GetQuery q => ExecuteWithTable(query, dbPath, q.Table, table => GetExecutor.Execute(query, table, q, _settings.DefaultPageSize)),
             UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table, table => UpsertExecutor.Execute(query, table, q, _settings.BulkLimit)),
             AddColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => AddColumnExecutor.Execute(query, table, q)),
             PurgeColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => PurgeColumnExecutor.Execute(query, table, q)),

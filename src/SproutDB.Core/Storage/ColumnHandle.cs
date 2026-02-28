@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.IO.MemoryMappedFiles;
 using System.Text;
+using SproutDB.Core.Parsing;
 
 namespace SproutDB.Core.Storage;
 
@@ -150,6 +151,72 @@ internal sealed class ColumnHandle : IDisposable
             ColumnType.String => CompareString(offset, encoded),
             _ => 0,
         };
+    }
+
+    /// <summary>
+    /// Encodes a raw string value into UTF-8 bytes without zero-padding.
+    /// Used as the needle for string match operations (contains/starts/ends).
+    /// </summary>
+    public byte[] EncodeStringBytes(string raw) => Encoding.UTF8.GetBytes(raw);
+
+    /// <summary>
+    /// Returns true if the string value at <paramref name="place"/> matches the
+    /// <paramref name="needle"/> bytes according to the given <paramref name="op"/>.
+    /// Returns false for null values.
+    /// </summary>
+    public bool StringMatchAtPlace(long place, byte[] needle, CompareOp op)
+    {
+        var offset = place * Schema.EntrySize;
+        if (offset + Schema.EntrySize > _capacity)
+            return false;
+
+        if (_view.ReadByte(offset) != StorageConstants.FLAG_VALUE)
+            return false;
+
+        var valueOffset = offset + 1;
+
+        // Determine actual stored string length (up to first zero byte)
+        int storedLen = 0;
+        for (int i = 0; i < Schema.Size; i++)
+        {
+            if (_view.ReadByte(valueOffset + i) == 0) break;
+            storedLen++;
+        }
+
+        return op switch
+        {
+            CompareOp.Contains => BytesContain(valueOffset, storedLen, needle),
+            CompareOp.StartsWith => BytesMatchAt(valueOffset, 0, needle, storedLen),
+            CompareOp.EndsWith => storedLen >= needle.Length && BytesMatchAt(valueOffset, storedLen - needle.Length, needle, storedLen),
+            _ => false,
+        };
+    }
+
+    private bool BytesMatchAt(long baseOffset, int startIndex, byte[] needle, int storedLen)
+    {
+        if (startIndex + needle.Length > storedLen)
+            return false;
+
+        for (int i = 0; i < needle.Length; i++)
+        {
+            if (_view.ReadByte(baseOffset + startIndex + i) != needle[i])
+                return false;
+        }
+        return true;
+    }
+
+    private bool BytesContain(long baseOffset, int storedLen, byte[] needle)
+    {
+        if (needle.Length > storedLen)
+            return false;
+
+        var limit = storedLen - needle.Length;
+        for (int start = 0; start <= limit; start++)
+        {
+            if (BytesMatchAt(baseOffset, start, needle, storedLen))
+                return true;
+        }
+        return false;
     }
 
     private int CompareString(long offset, byte[] encoded)

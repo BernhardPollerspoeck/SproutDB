@@ -33,38 +33,40 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 - [x] #031 `get users where age <= 30` – Where-Clause mit `<=`.
 - [x] #032 `get users where age < 18` – Where-Clause mit `<`.
 - [x] #033 `get users where age != 18` – Where-Clause mit Ungleichheit (falls supported, aus Samples ableitbar).
-- [ ] #034 `get users where email contains '@gmail'` – String-Operator `contains`.
-- [ ] #035 `get users where name starts 'Jo'` – String-Operator `starts`.
-- [ ] #036 `get users where name ends 'son'` – String-Operator `ends`.
-- [ ] #037 `get users where age >= 18 and active = true` – Logischer Operator `and`.
-- [ ] #038 `get users where role = 'admin' or role = 'moderator'` – Logischer Operator `or`.
-- [ ] #039 `get users where not active = true` – Negation mit `not`.
-- [ ] #040 `get users where role in ['admin', 'moderator']` – `in`-Operator mit Array-Literal.
-- [ ] #041 `get users where role not in ['banned', 'suspended']` – `not in`-Operator.
-- [ ] #042 `get users where age between 18 and 30` – `between`-Operator (inklusiv, wie SQL).
-- [ ] #043 `get users where age not between 18 and 30` – `not between`.
-- [ ] #044 `get users where email is null` – NULL-Check mit `is null`.
-- [ ] #045 `get users where email is not null` – NULL-Check mit `is not null`.
-- [ ] #046 Where mit Datum/Zeit-Vergleich: `get users where created > '2025-01-01 14:30:00.0000'`
-- [ ] #047 Where mit Date-Vergleich: `get users where birthday > '2000-01-01'`
-- [ ] #048 Where mit Time-Vergleich: `get users where shift_start > '08:00:00.0000'`
-- [ ] #049 Where mit DateTime-Between: `get users where created between '2025-01-01 00:00:00.0000' and '2025-06-01 00:00:00.0000'`
-- [ ] #050 `get users where age > 18 order by name` – ORDER BY (ascending default).
-- [ ] #051 `get users where age > 18 order by age desc` – ORDER BY DESC.
-- [ ] #052 `get users where active = true order by created desc, name` – Multi-Column ORDER BY.
-- [ ] #053 `get users where active = true limit 10` – LIMIT.
-- [ ] #054 `get users order by created desc limit 5` – LIMIT ohne WHERE.
-- [ ] #055 `get users count` – COUNT (Anzahl Rows).
-- [ ] #056 `get users where active = true count` – COUNT mit WHERE.
-- [ ] #057 `get users select city distinct` – DISTINCT.
-- [ ] #058 `get users select role distinct where active = true` – DISTINCT mit WHERE.
-- [ ] #059 `get orders sum amount` – Aggregation SUM.
-- [ ] #060 `get orders avg amount` – Aggregation AVG.
-- [ ] #061 `get orders min amount` – Aggregation MIN.
-- [ ] #062 `get orders max amount` – Aggregation MAX.
-- [ ] #063 `get orders sum amount as total_revenue` – Aggregation mit Alias (AS).
-- [ ] #064 `get orders avg amount as average_order_value where status = 'completed'` – Aggregation + Alias + WHERE.
-- [ ] #065 `get orders sum amount where status = 'completed'` – Aggregation mit WHERE.
+- [x] #034 `get users where email contains '@gmail'` – String-Operator `contains`.
+- [x] #035 `get users where name starts 'Jo'` – String-Operator `starts`.
+- [x] #036 `get users where name ends 'son'` – String-Operator `ends`.
+- [x] #037 `get users where age >= 18 and active = true` – Logischer Operator `and`.
+- [x] #038 `get users where role = 'admin' or role = 'moderator'` – Logischer Operator `or`.
+- [x] #039 `get users where not active = true` – Negation mit `not`.
+- [x] #040 `get users where role in ['admin', 'moderator']` – `in`-Operator mit Array-Literal.
+- [x] #041 `get users where role not in ['banned', 'suspended']` – `not in`-Operator.
+- [x] #042 `get users where age between 18 and 30` – `between`-Operator (inklusiv, wie SQL).
+- [x] #043 `get users where age not between 18 and 30` – `not between`.
+- [x] #044 `get users where email is null` – NULL-Check mit `is null`.
+- [x] #045 `get users where email is not null` – NULL-Check mit `is not null`.
+- [x] #046 Where mit Datum/Zeit-Vergleich: `get users where created > '2025-01-01 14:30:00.0000'`
+- [x] #047 Where mit Date-Vergleich: `get users where birthday > '2000-01-01'`
+- [x] #048 Where mit Time-Vergleich: `get users where shift_start > '08:00:00.0000'`
+- [x] #049 Where mit DateTime-Between: `get users where created between '2025-01-01 00:00:00.0000' and '2025-06-01 00:00:00.0000'`
+- [x] #049A Where mit Date-Between: `get users where birthday between '2000-01-01' and '2005-12-31'`
+- [x] #049B Where mit Time-Between: `get users where shift_start between '08:00:00' and '17:00:00'`
+- [x] #050 `get users where age > 18 order by name` – ORDER BY (ascending default).
+- [x] #051 `get users where age > 18 order by age desc` – ORDER BY DESC.
+- [x] #052 `get users where active = true order by created desc, name` – Multi-Column ORDER BY.
+- [x] #053 `get users where active = true limit 10` – LIMIT.
+- [x] #054 `get users order by created desc limit 5` – LIMIT ohne WHERE.
+- [x] #055 `get users count` – COUNT (Anzahl Rows).
+- [x] #056 `get users where active = true count` – COUNT mit WHERE.
+- [x] #057 `get users select city distinct` – DISTINCT.
+- [x] #058 `get users select role distinct where active = true` – DISTINCT mit WHERE.
+- [x] #059 `get orders sum amount` – Aggregation SUM.
+- [x] #060 `get orders avg amount` – Aggregation AVG.
+- [x] #061 `get orders min amount` – Aggregation MIN.
+- [x] #062 `get orders max amount` – Aggregation MAX.
+- [x] #063 `get orders sum amount as total_revenue` – Aggregation mit Alias (AS).
+- [x] #064 `get orders avg amount as average_order_value where status = 'completed'` – Aggregation + Alias + WHERE.
+- [x] #065 `get orders sum amount where status = 'completed'` – Aggregation mit WHERE.
 - [ ] #066 `get orders sum amount as revenue group by status` – GROUP BY.
 - [ ] #067 `get orders count group by city` – COUNT mit GROUP BY.
 - [ ] #068 `get orders avg amount as avg_amount group by customer_id order by avg_amount desc limit 10` – GROUP BY + ORDER BY + LIMIT kombiniert.
@@ -74,10 +76,10 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 - [ ] #072 `get users follow users.id -> orders.user_id as orders` – JOIN (follow Syntax).
 - [ ] #073 Gefilterter Join: `get users where active = true follow users.id -> orders.user_id as orders where orders.status = 'completed'`
 - [ ] #074 Mehrere Joins: `get users follow users.id -> orders.user_id as orders follow orders.product_id -> products.id as product`
-- [ ] #075 Auto-Paging: Wenn GET-Result die Page Size überschreitet, kommt automatisch Paging. Response enthält `paging.total`, `paging.page_size`, `paging.page`, `paging.next` (fertige Query für nächste Seite).
-- [ ] #076 `get users where active = true page 2 size 100` – Manuelle Paging-Syntax mit `page` und `size` Keywords.
-- [ ] #077 Default Page Size / Bulk Limit: 100 (ein Setting für beides). Konfigurierbar auf Server-Ebene, Override pro Database möglich.
-- [ ] #078 `get orders avg amount where created > '2025-01-01 00:00:00.0000'` – Aggregation + WHERE + Datums-Vergleich kombiniert.
+- [x] #075 Auto-Paging: Wenn GET-Result die Page Size überschreitet, kommt automatisch Paging. Response enthält `paging.total`, `paging.page_size`, `paging.page`, `paging.next` (fertige Query für nächste Seite).
+- [x] #076 `get users where active = true page 2 size 100` – Manuelle Paging-Syntax mit `page` und `size` Keywords.
+- [x] #077 Default Page Size / Bulk Limit: 100 (ein Setting für beides). Konfigurierbar auf Server-Ebene, Override pro Database möglich.
+- [x] #078 `get orders avg amount where created > '2025-01-01 00:00:00.0000'` – Aggregation + WHERE + Datums-Vergleich kombiniert.
 
 ---
 
