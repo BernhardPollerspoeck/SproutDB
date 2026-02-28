@@ -160,6 +160,20 @@ internal static class GetParser
             ctx.Advance();
         }
 
+        // Optional: follow (join) clauses — zero or more
+        List<FollowClause>? followClauses = null;
+
+        while (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("follow"))
+        {
+            var followClause = ParseFollowClause(ctx, tableName);
+            if (ctx.HasErrors) return ctx.Fail();
+            if (followClause is not null)
+            {
+                followClauses ??= [];
+                followClauses.Add(followClause);
+            }
+        }
+
         ctx.ExpectEof();
         if (ctx.HasErrors) return ctx.Fail();
 
@@ -180,6 +194,7 @@ internal static class GetParser
             AggregateColumnPosition = aggregateColumnPosition,
             AggregateColumnLength = aggregateColumnLength,
             AggregateAlias = aggregateAlias,
+            Follow = followClauses,
         });
     }
 
@@ -202,7 +217,8 @@ internal static class GetParser
             var next = ctx.PeekAt(1);
             if (next.Type == TokenType.Identifier && !ctx.IsKeyword(next, "where")
                 && !ctx.IsKeyword(next, "order") && !ctx.IsKeyword(next, "limit")
-                && !ctx.IsKeyword(next, "count") && !ctx.IsKeyword(next, "page"))
+                && !ctx.IsKeyword(next, "count") && !ctx.IsKeyword(next, "page")
+                && !ctx.IsKeyword(next, "follow"))
             {
                 ctx.Advance();
                 return fn;
@@ -541,7 +557,7 @@ internal static class GetParser
 
     // ── Select ────────────────────────────────────────────────
 
-    private static readonly string[] SelectStopKeywords = ["distinct", "where", "order", "limit", "count", "page"];
+    private static readonly string[] SelectStopKeywords = ["distinct", "where", "order", "limit", "count", "page", "follow"];
 
     private static List<SelectColumn> ParseSelectList(ParserContext ctx)
     {
@@ -588,6 +604,203 @@ internal static class GetParser
                 return true;
         }
         return false;
+    }
+
+    // ── Follow (join) ──────────────────────────────────────────
+
+    /// <summary>
+    /// Parses: source_table.source_col -> target_table.target_col as alias [where ...]
+    /// The 'follow' keyword has already been consumed.
+    /// </summary>
+    private static FollowClause? ParseFollowClause(ParserContext ctx, string mainTable)
+    {
+        // source_table.source_col
+        var srcTableToken = ctx.Peek();
+        if (srcTableToken.Type != TokenType.Identifier)
+        {
+            ctx.AddError(srcTableToken, ErrorCodes.SYNTAX_ERROR, "expected source table name after 'follow'");
+            return null;
+        }
+        var srcTable = ctx.GetLowercaseText(srcTableToken);
+        ctx.Advance();
+
+        if (ctx.Peek().Type != TokenType.Dot)
+        {
+            ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected '.' after source table name");
+            return null;
+        }
+        ctx.Advance();
+
+        var srcColToken = ctx.Peek();
+        if (srcColToken.Type != TokenType.Identifier)
+        {
+            ctx.AddError(srcColToken, ErrorCodes.SYNTAX_ERROR, "expected source column name after '.'");
+            return null;
+        }
+        var srcCol = ctx.GetLowercaseText(srcColToken);
+        ctx.Advance();
+
+        // ->
+        if (ctx.Peek().Type != TokenType.Arrow)
+        {
+            ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected '->' after source column");
+            return null;
+        }
+        ctx.Advance();
+
+        // target_table.target_col
+        var tgtTableToken = ctx.Peek();
+        if (tgtTableToken.Type != TokenType.Identifier)
+        {
+            ctx.AddError(tgtTableToken, ErrorCodes.SYNTAX_ERROR, "expected target table name after '->'");
+            return null;
+        }
+        var tgtTable = ctx.GetLowercaseText(tgtTableToken);
+        ctx.Advance();
+
+        if (ctx.Peek().Type != TokenType.Dot)
+        {
+            ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected '.' after target table name");
+            return null;
+        }
+        ctx.Advance();
+
+        var tgtColToken = ctx.Peek();
+        if (tgtColToken.Type != TokenType.Identifier)
+        {
+            ctx.AddError(tgtColToken, ErrorCodes.SYNTAX_ERROR, "expected target column name after '.'");
+            return null;
+        }
+        var tgtCol = ctx.GetLowercaseText(tgtColToken);
+        ctx.Advance();
+
+        // as alias
+        if (!ctx.MatchKeyword("as"))
+        {
+            ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected 'as' after target column");
+            return null;
+        }
+
+        var aliasToken = ctx.Peek();
+        if (aliasToken.Type != TokenType.Identifier)
+        {
+            ctx.AddError(aliasToken, ErrorCodes.SYNTAX_ERROR, "expected alias name after 'as'");
+            return null;
+        }
+        var alias = ctx.GetLowercaseText(aliasToken);
+        ctx.Advance();
+
+        // Optional: where clause for this follow
+        WhereNode? followWhere = null;
+        if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("where"))
+        {
+            followWhere = ParseFollowWhere(ctx);
+            if (ctx.HasErrors) return null;
+        }
+
+        return new FollowClause
+        {
+            SourceTable = srcTable,
+            SourceColumn = srcCol,
+            SourceColumnPosition = srcColToken.Start,
+            SourceColumnLength = srcColToken.Length,
+            TargetTable = tgtTable,
+            TargetTablePosition = tgtTableToken.Start,
+            TargetTableLength = tgtTableToken.Length,
+            TargetColumn = tgtCol,
+            TargetColumnPosition = tgtColToken.Start,
+            TargetColumnLength = tgtColToken.Length,
+            Alias = alias,
+            Where = followWhere,
+        };
+    }
+
+    /// <summary>
+    /// Parses the WHERE clause for a follow. Stops before 'follow' keyword
+    /// so the next follow can be parsed.
+    /// </summary>
+    private static WhereNode? ParseFollowWhere(ParserContext ctx)
+    {
+        return ParseFollowOrExpr(ctx);
+    }
+
+    private static WhereNode? ParseFollowOrExpr(ParserContext ctx)
+    {
+        var left = ParseFollowAndExpr(ctx);
+        if (left is null || ctx.HasErrors) return null;
+
+        while (ctx.Peek().Type == TokenType.Identifier
+               && ctx.IsKeyword(ctx.Peek(), "or")
+               && !IsFollowWhereStop(ctx, 1))
+        {
+            ctx.Advance();
+            var right = ParseFollowAndExpr(ctx);
+            if (right is null || ctx.HasErrors) return null;
+            left = new LogicalNode { Op = LogicalOp.Or, Left = left, Right = right };
+        }
+
+        return left;
+    }
+
+    private static WhereNode? ParseFollowAndExpr(ParserContext ctx)
+    {
+        var left = ParseFollowNotExpr(ctx);
+        if (left is null || ctx.HasErrors) return null;
+
+        while (ctx.Peek().Type == TokenType.Identifier
+               && ctx.IsKeyword(ctx.Peek(), "and")
+               && !IsFollowWhereStop(ctx, 1))
+        {
+            ctx.Advance();
+            var right = ParseFollowNotExpr(ctx);
+            if (right is null || ctx.HasErrors) return null;
+            left = new LogicalNode { Op = LogicalOp.And, Left = left, Right = right };
+        }
+
+        return left;
+    }
+
+    private static WhereNode? ParseFollowNotExpr(ParserContext ctx)
+    {
+        var token = ctx.Peek();
+        if (token.Type == TokenType.Identifier && ctx.IsKeyword(token, "not"))
+        {
+            var next = ctx.PeekAt(1);
+            if (next.Type != TokenType.Identifier || (!ctx.IsKeyword(next, "between") && !ctx.IsKeyword(next, "in")))
+            {
+                ctx.Advance();
+                var inner = ParseFollowNotExpr(ctx);
+                if (inner is null || ctx.HasErrors) return null;
+                return new NotNode { Inner = inner };
+            }
+        }
+
+        return ParseFollowComparison(ctx);
+    }
+
+    private static WhereNode? ParseFollowComparison(ParserContext ctx)
+    {
+        // If current token is 'follow', stop — this where is done
+        if (IsFollowWhereStopToken(ctx, ctx.Peek()))
+            return null;
+
+        // Delegate to the standard comparison parser
+        return ParseComparison(ctx);
+    }
+
+    /// <summary>
+    /// Checks if the token at offset from current position is a 'follow' keyword,
+    /// meaning we should stop parsing the current follow-where.
+    /// </summary>
+    private static bool IsFollowWhereStop(ParserContext ctx, int offset)
+    {
+        var token = ctx.PeekAt(offset);
+        return IsFollowWhereStopToken(ctx, token);
+    }
+
+    private static bool IsFollowWhereStopToken(ParserContext ctx, Token token)
+    {
+        return token.Type == TokenType.Identifier && ctx.IsKeyword(token, "follow");
     }
 
     private static List<OrderByColumn> ParseOrderByList(ParserContext ctx)

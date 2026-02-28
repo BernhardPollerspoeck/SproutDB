@@ -331,8 +331,12 @@ public sealed class SproutEngine : IDisposable
             return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_DATABASE,
                 $"database '{dbName}' does not exist");
 
+        Func<string, TableHandle?>? tableResolver = q.Follow is not null
+            ? name => ResolveTable(dbPath, name)
+            : null;
+
         return ExecuteWithTable(query, dbPath, q.Table,
-            table => GetExecutor.Execute(query, table, q, _settings.DefaultPageSize));
+            table => GetExecutor.Execute(query, table, q, _settings.DefaultPageSize, tableResolver));
     }
 
     private SproutResponse ExecuteDescribe(string query, string dbName, string dbPath, DescribeQuery q)
@@ -356,7 +360,7 @@ public sealed class SproutEngine : IDisposable
         {
             CreateDatabaseQuery => ExecuteCreateDatabase(query, dbName, dbPath),
             CreateTableQuery q => ExecuteCreateTable(query, dbName, dbPath, q),
-            GetQuery q => ExecuteWithTable(query, dbPath, q.Table, table => GetExecutor.Execute(query, table, q, _settings.DefaultPageSize)),
+            GetQuery q => ExecuteWithTable(query, dbPath, q.Table, table => GetExecutor.Execute(query, table, q, _settings.DefaultPageSize, q.Follow is not null ? name => ResolveTable(dbPath, name) : null)),
             UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table, table => UpsertExecutor.Execute(query, table, q, _settings.BulkLimit)),
             AddColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => AddColumnExecutor.Execute(query, table, q)),
             PurgeColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => PurgeColumnExecutor.Execute(query, table, q)),
@@ -458,6 +462,19 @@ public sealed class SproutEngine : IDisposable
 
         var table = _tableCache.GetOrOpen(tablePath);
         return executor(table);
+    }
+
+    /// <summary>
+    /// Resolves a table by name within a database. Returns null if the table does not exist.
+    /// </summary>
+    private TableHandle? ResolveTable(string dbPath, string tableName)
+    {
+        var tablePath = Path.Combine(dbPath, tableName);
+        if (_tableCache.TryGetTable(tablePath, out var cached) && cached is not null)
+            return cached;
+        if (!Directory.Exists(tablePath))
+            return null;
+        return _tableCache.GetOrOpen(tablePath);
     }
 
     // ── Validation ──────────────────────────────────────────

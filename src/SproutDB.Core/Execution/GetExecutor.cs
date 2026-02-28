@@ -5,7 +5,8 @@ namespace SproutDB.Core.Execution;
 
 internal static class GetExecutor
 {
-    public static SproutResponse Execute(string query, TableHandle table, GetQuery q, int defaultPageSize)
+    public static SproutResponse Execute(string query, TableHandle table, GetQuery q, int defaultPageSize,
+        Func<string, TableHandle?>? tableResolver = null)
     {
         // Validate select columns — collect all unknown columns
         List<SproutError>? validationErrors = null;
@@ -58,6 +59,43 @@ internal static class GetExecutor
             }
         }
 
+        // Validate follow clauses
+        if (q.Follow is not null && tableResolver is not null)
+        {
+            foreach (var follow in q.Follow)
+            {
+                var targetTable = tableResolver(follow.TargetTable);
+                if (targetTable is null)
+                {
+                    validationErrors ??= [];
+                    validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_TABLE, Message = $"table '{follow.TargetTable}' does not exist", Position = follow.TargetTablePosition, Length = follow.TargetTableLength });
+                    continue;
+                }
+
+                // Validate source column exists on appropriate table
+                var sourceTable = follow.SourceTable == q.Table ? table : tableResolver(follow.SourceTable);
+                if (follow.SourceColumn != "id" && (sourceTable is null || !sourceTable.HasColumn(follow.SourceColumn)))
+                {
+                    validationErrors ??= [];
+                    validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{follow.SourceColumn}' does not exist on '{follow.SourceTable}'", Position = follow.SourceColumnPosition, Length = follow.SourceColumnLength });
+                }
+
+                // Validate target column exists
+                if (follow.TargetColumn != "id" && !targetTable.HasColumn(follow.TargetColumn))
+                {
+                    validationErrors ??= [];
+                    validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{follow.TargetColumn}' does not exist on '{follow.TargetTable}'", Position = follow.TargetColumnPosition, Length = follow.TargetColumnLength });
+                }
+
+                // Validate follow where columns
+                if (follow.Where is not null)
+                {
+                    var followWhereErrors = ValidateWhereNode(targetTable, follow.Where);
+                    validationErrors = MergeErrors(validationErrors, followWhereErrors);
+                }
+            }
+        }
+
         if (validationErrors is not null)
             return ResponseHelper.Errors(query, validationErrors);
 
@@ -102,6 +140,19 @@ internal static class GetExecutor
                 }
                 return 0;
             });
+        }
+
+        // Follow (join): attach nested rows from target tables
+        if (q.Follow is not null && tableResolver is not null)
+        {
+            foreach (var follow in q.Follow)
+            {
+                var targetTable = tableResolver(follow.TargetTable);
+                if (targetTable is null) continue;
+
+                var targetFilter = PrepareFilter(targetTable, follow.Where);
+                ExecuteFollow(data, follow, targetTable, targetFilter);
+            }
         }
 
         // Count: return count only
@@ -220,6 +271,87 @@ internal static class GetExecutor
             Data = [row],
             Affected = 1,
         };
+    }
+
+    // ── Follow (join) ─────────────────────────────────────────
+
+    private static void ExecuteFollow(
+        List<Dictionary<string, object?>> data,
+        FollowClause follow,
+        TableHandle targetTable,
+        FilterNode? targetFilter)
+    {
+        // Build a lookup: for each row in the target table, group by the join column value
+        var targetIndex = BuildTargetIndex(targetTable, follow.TargetColumn, targetFilter);
+
+        // Resolve all target columns for projection
+        var targetColumns = new List<(string Name, ColumnHandle Handle)>(targetTable.Schema.Columns.Count);
+        foreach (var col in targetTable.Schema.Columns)
+            targetColumns.Add((col.Name, targetTable.GetColumn(col.Name)));
+
+        foreach (var row in data)
+        {
+            // Get the source value to join on
+            if (!row.TryGetValue(follow.SourceColumn, out var sourceValue) || sourceValue is null)
+            {
+                row[follow.Alias] = Array.Empty<Dictionary<string, object?>>();
+                continue;
+            }
+
+            // Look up matching target rows
+            var key = sourceValue.ToString() ?? "";
+            if (targetIndex.TryGetValue(key, out var places))
+            {
+                var nested = new List<Dictionary<string, object?>>(places.Count);
+                foreach (var (id, place) in places)
+                {
+                    var record = new Dictionary<string, object?>(targetColumns.Count + 1)
+                    {
+                        ["id"] = id
+                    };
+                    foreach (var (name, handle) in targetColumns)
+                        record[name] = handle.ReadValue(place);
+                    nested.Add(record);
+                }
+                row[follow.Alias] = nested;
+            }
+            else
+            {
+                row[follow.Alias] = Array.Empty<Dictionary<string, object?>>();
+            }
+        }
+    }
+
+    private static Dictionary<string, List<(ulong Id, long Place)>> BuildTargetIndex(
+        TableHandle table, string joinColumn, FilterNode? filter)
+    {
+        var index = new Dictionary<string, List<(ulong, long)>>();
+        var nextId = table.Index.ReadNextId();
+
+        ColumnHandle? colHandle = joinColumn == "id" ? null : table.GetColumn(joinColumn);
+
+        for (ulong id = 1; id < nextId; id++)
+        {
+            var place = table.Index.ReadPlace(id);
+            if (place < 0) continue;
+
+            // Apply follow where filter
+            if (filter is not null && !EvaluateFilter(filter, id, place)) continue;
+
+            // Get the join column value
+            object? val = colHandle is null ? (object)id : colHandle.ReadValue(place);
+            if (val is null) continue;
+
+            var key = val.ToString() ?? "";
+            if (!index.TryGetValue(key, out var list))
+            {
+                list = [];
+                index[key] = list;
+            }
+            list.Add((id, place));
+        }
+
+        return index;
     }
 
     private static List<object> ReadAggregateValues(TableHandle table, string colName, FilterNode? filter)

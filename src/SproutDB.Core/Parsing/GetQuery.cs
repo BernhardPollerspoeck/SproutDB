@@ -72,6 +72,11 @@ internal sealed class GetQuery : IQuery
     /// Optional alias for the aggregate result (from 'as' keyword). Null means use function name.
     /// </summary>
     public string? AggregateAlias { get; init; }
+
+    /// <summary>
+    /// Optional follow (join) clauses. Null means no joins.
+    /// </summary>
+    public List<FollowClause>? Follow { get; init; }
 }
 
 internal enum AggregateFunction
@@ -95,4 +100,34 @@ internal readonly struct OrderByColumn(string name, int position, int length, bo
     public int Position { get; } = position;
     public int Length { get; } = length;
     public bool Descending { get; } = descending;
+}
+
+internal sealed class FollowClause
+{
+    /// <summary>Source table name (e.g. "users").</summary>
+    public required string SourceTable { get; init; }
+
+    /// <summary>Source column name (e.g. "id").</summary>
+    public required string SourceColumn { get; init; }
+
+    public int SourceColumnPosition { get; init; }
+    public int SourceColumnLength { get; init; }
+
+    /// <summary>Target table name (e.g. "orders").</summary>
+    public required string TargetTable { get; init; }
+
+    public int TargetTablePosition { get; init; }
+    public int TargetTableLength { get; init; }
+
+    /// <summary>Target column name (e.g. "user_id").</summary>
+    public required string TargetColumn { get; init; }
+
+    public int TargetColumnPosition { get; init; }
+    public int TargetColumnLength { get; init; }
+
+    /// <summary>Alias for the nested result array (e.g. "orders").</summary>
+    public required string Alias { get; init; }
+
+    /// <summary>Optional WHERE filter for the target table rows.</summary>
+    public WhereNode? Where { get; init; }
 }

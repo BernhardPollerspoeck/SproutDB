@@ -73,9 +73,9 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 - [ ] #069 `get orders select amount, amount * 0.19 as tax` – Computed Fields mit Arithmetik und Alias.
 - [ ] #070 `get orders select name, price, quantity, price * quantity as total` – Computed Fields mit mehreren Spalten.
 - [ ] #071 Computed Fields Typ-Inferenz: immer der breiteste Typ (`sint * double` → `double`, `ubyte + uint` → `uint`).
-- [ ] #072 `get users follow users.id -> orders.user_id as orders` – JOIN (follow Syntax).
-- [ ] #073 Gefilterter Join: `get users where active = true follow users.id -> orders.user_id as orders where orders.status = 'completed'`
-- [ ] #074 Mehrere Joins: `get users follow users.id -> orders.user_id as orders follow orders.product_id -> products.id as product`
+- [x] #072 `get users follow users.id -> orders.user_id as orders` – JOIN (follow Syntax).
+- [x] #073 Gefilterter Join: `get users where active = true follow users.id -> orders.user_id as orders where orders.status = 'completed'`
+- [x] #074 Mehrere Joins: `get users follow users.id -> orders.user_id as orders follow orders.product_id -> products.id as product`
 - [x] #075 Auto-Paging: Wenn GET-Result die Page Size überschreitet, kommt automatisch Paging. Response enthält `paging.total`, `paging.page_size`, `paging.page`, `paging.next` (fertige Query für nächste Seite).
 - [x] #076 `get users where active = true page 2 size 100` – Manuelle Paging-Syntax mit `page` und `size` Keywords.
 - [x] #077 Default Page Size / Bulk Limit: 100 (ein Setting für beides). Konfigurierbar auf Server-Ebene, Override pro Database möglich.

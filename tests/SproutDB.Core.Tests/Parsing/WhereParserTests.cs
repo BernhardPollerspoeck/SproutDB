@@ -885,4 +885,120 @@ public class WhereParserTests
         Assert.Equal("summary", q.Table);
         Assert.Null(q.Aggregate);
     }
+
+    // ── FOLLOW (join) ────────────────────────────────────────
+
+    [Fact]
+    public void Follow_Basic()
+    {
+        var result = QueryParser.Parse("get users follow users.id -> orders.user_id as orders");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.NotNull(q.Follow);
+        Assert.Single(q.Follow);
+        var f = q.Follow[0];
+        Assert.Equal("users", f.SourceTable);
+        Assert.Equal("id", f.SourceColumn);
+        Assert.Equal("orders", f.TargetTable);
+        Assert.Equal("user_id", f.TargetColumn);
+        Assert.Equal("orders", f.Alias);
+        Assert.Null(f.Where);
+    }
+
+    [Fact]
+    public void Follow_WithWhere()
+    {
+        var result = QueryParser.Parse(
+            "get users where active = true follow users.id -> orders.user_id as orders where status = 'completed'");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.NotNull(q.Where);
+        Assert.NotNull(q.Follow);
+        Assert.Single(q.Follow);
+        var f = q.Follow[0];
+        Assert.Equal("orders", f.TargetTable);
+        Assert.NotNull(f.Where);
+        var cmp = Assert.IsType<CompareNode>(f.Where);
+        Assert.Equal("status", cmp.Column);
+        Assert.Equal("completed", cmp.Value);
+    }
+
+    [Fact]
+    public void Follow_Multiple()
+    {
+        var result = QueryParser.Parse(
+            "get users follow users.id -> orders.user_id as orders follow orders.product_id -> products.id as product");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.NotNull(q.Follow);
+        Assert.Equal(2, q.Follow.Count);
+        Assert.Equal("orders", q.Follow[0].Alias);
+        Assert.Equal("orders", q.Follow[0].TargetTable);
+        Assert.Equal("product", q.Follow[1].Alias);
+        Assert.Equal("products", q.Follow[1].TargetTable);
+    }
+
+    [Fact]
+    public void Follow_Multiple_WithWhere()
+    {
+        var result = QueryParser.Parse(
+            "get users follow users.id -> orders.user_id as orders where status = 'completed' follow orders.product_id -> products.id as product");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.NotNull(q.Follow);
+        Assert.Equal(2, q.Follow.Count);
+        Assert.NotNull(q.Follow[0].Where);
+        Assert.Null(q.Follow[1].Where);
+    }
+
+    [Fact]
+    public void Follow_CaseInsensitive()
+    {
+        var result = QueryParser.Parse("GET Users FOLLOW Users.Id -> Orders.User_Id AS MyOrders");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.NotNull(q.Follow);
+        Assert.Equal("myorders", q.Follow[0].Alias);
+    }
+
+    [Fact]
+    public void Follow_MissingArrow_Error()
+    {
+        var result = QueryParser.Parse("get users follow users.id orders.user_id as orders");
+
+        Assert.False(result.Success);
+    }
+
+    [Fact]
+    public void Follow_MissingAs_Error()
+    {
+        var result = QueryParser.Parse("get users follow users.id -> orders.user_id orders");
+
+        Assert.False(result.Success);
+    }
+
+    [Fact]
+    public void Follow_MissingDot_Error()
+    {
+        var result = QueryParser.Parse("get users follow users_id -> orders.user_id as orders");
+
+        Assert.False(result.Success);
+    }
+
+    [Fact]
+    public void Follow_NoConflict_WithSelect()
+    {
+        var result = QueryParser.Parse("get users select name, email follow users.id -> orders.user_id as orders");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.NotNull(q.Select);
+        Assert.Equal(2, q.Select.Count);
+        Assert.NotNull(q.Follow);
+    }
 }
