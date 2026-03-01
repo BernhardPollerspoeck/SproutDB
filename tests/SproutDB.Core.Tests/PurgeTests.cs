@@ -39,8 +39,8 @@ public class PurgeTests : IDisposable
         var r = _engine.Execute("purge column users.age", "testdb");
 
         var cols = r.Schema!.Columns!;
-        Assert.Equal(2, cols.Count); // id + name (age removed)
-        Assert.Equal("id", cols[0].Name);
+        Assert.Equal(2, cols.Count); // _id + name (age removed)
+        Assert.Equal("_id", cols[0].Name);
         Assert.Equal("name", cols[1].Name);
     }
 

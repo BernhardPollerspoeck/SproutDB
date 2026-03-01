@@ -40,10 +40,10 @@ public class IndexParserTests
     [Fact]
     public void CreateIndex_IdColumn_Error()
     {
-        var result = QueryParser.Parse("create index users.id");
+        var result = QueryParser.Parse("create index users._id");
 
         Assert.False(result.Success);
-        Assert.Contains("'id' is reserved", result.Errors![0].Message);
+        Assert.Contains("'_id' is reserved", result.Errors![0].Message);
     }
 
     [Fact]
@@ -88,9 +88,9 @@ public class IndexParserTests
     [Fact]
     public void PurgeIndex_IdColumn_Error()
     {
-        var result = QueryParser.Parse("purge index users.id");
+        var result = QueryParser.Parse("purge index users._id");
 
         Assert.False(result.Success);
-        Assert.Contains("'id' is reserved", result.Errors![0].Message);
+        Assert.Contains("'_id' is reserved", result.Errors![0].Message);
     }
 }

@@ -45,29 +45,29 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 
 ## Migrations
 
-- [ ] #079 ISproutServer Interface: `GetOrCreateDatabase()`, `SelectDatabase()`, `GetDatabases()`, `Migrate()`.
-- [ ] #080 ISproutDatabase Interface: `Query()` für Query-String API.
-- [ ] #081 IMigration Interface: `int Order { get; }` und `void Up(ISproutDatabase db)`. Migration weiß nicht gegen welche Database sie läuft.
-- [ ] #082 Migration Tracking: `_migrations` Table pro Database (read-only für User). Felder: name, order, executed timestamp.
-- [ ] #083 `sprout.Migrate(assembly, database)` – Scannt Assembly für IMigration, führt fehlende aus, schreibt in `_migrations`.
+- [x] #079 ISproutServer Interface: `GetOrCreateDatabase()`, `SelectDatabase()`, `GetDatabases()`, `Migrate()`.
+- [x] #080 ISproutDatabase Interface: `Query()` für Query-String API.
+- [x] #081 IMigration Interface: `int Order { get; }` und `void Up(ISproutDatabase db)`. Migration weiß nicht gegen welche Database sie läuft. Zusätzlich: `MigrationMode Mode` (Once/OnStartup).
+- [x] #082 Migration Tracking: `_migrations` Table pro Database (read-only für User). Felder: name, order, executed timestamp.
+- [x] #083 `sprout.Migrate(assembly, database)` – Scannt Assembly für IMigration, führt fehlende aus, schreibt in `_migrations`.
 - [ ] #084 Migrations laufen VOR dem Öffnen der HTTP/SignalR Endpoints. Fehlgeschlagene Migration → Server startet nicht.
 
 ---
 
 ## Auto-Index
 
-- [ ] #085 `create index users.email` – Manueller Index erstellen. B-Tree File (.btree) wird geschrieben.
-- [ ] #086 `purge index users.email` – Manueller Index löschen.
-- [ ] #087 B-Tree Index File-Format (.btree): mappt Column-Wert → Place. Kompakt, nur indexierter Wert + Place (Long).
-- [ ] #088 Query Engine: hat die Spalte ein .btree? → B-Tree Lookup. Kein .btree? → .col File Scan.
-- [ ] #089 B-Tree Update bei Writes: Bei jedem Insert/Update/Delete prüfen ob .btree existiert für betroffene Spalten → B-Tree Update (O(log n)).
-- [ ] #090 Auto-Index: Usage Frequency Tracking – Counter wie oft Spalte in Where-Clauses genutzt wird, relativ zur Gesamtzahl Queries auf die Table.
-- [ ] #091 Auto-Index: Selektivität Tracking – Verhältnis Rows gescannt vs. Rows im Result.
-- [ ] #092 Auto-Index: Read/Write Ratio Tracking – Verhältnis Reads vs. Writes auf die Table.
-- [ ] #093 Auto-Index: Entscheidungslogik – Hohe Nutzung + Hohe Selektivität + Read-Heavy → Index anlegen. Sonst → kein Index.
-- [ ] #094 Auto-Index: Konfigurierbare Schwellwerte – Usage >30%, Selektivität >95% Verwurf, Read-Heavy >3:1 R/W Ratio. Alle Defaults konfigurierbar pro Server.
-- [ ] #095 Auto-Index: Metriken in `_system.index_metrics` Table persistieren. Abfragbar mit normalen GET Queries.
-- [ ] #096 Auto-Index: Index-Build in der Single-Writer Queue (sequentieller Scan über .col File → B-Tree aufbauen → .btree schreiben → Pointer-Swap).
+- [x] #085 `create index users.email` – Manueller Index erstellen. B-Tree File (.btree) wird geschrieben.
+- [x] #086 `purge index users.email` – Manueller Index löschen.
+- [x] #087 B-Tree Index File-Format (.btree): mappt Column-Wert → Place. Kompakt, nur indexierter Wert + Place (Long).
+- [x] #088 Query Engine: hat die Spalte ein .btree? → B-Tree Lookup. Kein .btree? → .col File Scan.
+- [x] #089 B-Tree Update bei Writes: Bei jedem Insert/Update/Delete prüfen ob .btree existiert für betroffene Spalten → B-Tree Update (O(log n)).
+- [x] #090 Auto-Index: Usage Frequency Tracking – Counter wie oft Spalte in Where-Clauses genutzt wird, relativ zur Gesamtzahl Queries auf die Table.
+- [x] #091 Auto-Index: Selektivität Tracking – Verhältnis Rows gescannt vs. Rows im Result.
+- [x] #092 Auto-Index: Read/Write Ratio Tracking – Verhältnis Reads vs. Writes auf die Table.
+- [x] #093 Auto-Index: Entscheidungslogik – Hohe Nutzung + Hohe Selektivität + Read-Heavy → Index anlegen. Sonst → kein Index.
+- [x] #094 Auto-Index: Konfigurierbare Schwellwerte – Usage >30%, Selektivität >95% Verwurf, Read-Heavy >3:1 R/W Ratio. Alle Defaults konfigurierbar pro Server.
+- [x] #095 Auto-Index: Metriken in `_system.index_metrics` Table persistieren. Abfragbar mit normalen GET Queries.
+- [x] #096 Auto-Index: Index-Build in der Single-Writer Queue (sequentieller Scan über .col File → B-Tree aufbauen → .btree schreiben → Pointer-Swap).
 - [ ] #097 Auto-Index: Ungenutzte Auto-Indizes nach 30 Tagen entfernen (konfigurierbar). Manuell erstellte Indizes werden nicht angefasst.
 - [ ] #098 Auto-Index: Logging warum ein Index erstellt oder entfernt wurde.
 
@@ -103,14 +103,16 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 ## Tests
 
 - [ ] Test-Suite optimieren — dauert aktuell 6-10 Minuten, muss deutlich schneller werden
+- [ ] `_id` Edge Cases prüfen und testen
+- [ ] Reflection im MigrationRunner prüfen und entfernen (aktuell: `assembly.GetTypes()` + `Activator.CreateInstance` — Alternative: Source Generator oder explizite Registrierung)
 
 ---
 
 ## Unkategorisiert
 
-- [ ] #116 `_system` Database: System-Database, komplett read-only für alle User. Nur SproutDB intern schreibt.
-- [ ] #117 Audit Log: Alle Schema-Änderungen werden in `_system.audit_log` geloggt. Felder: timestamp, user, database, query, operation. NICHT geloggt: Daten-Operationen (get, upsert, delete).
-- [ ] #118 Audit Log abfragbar: `get audit_log` mit Header `X-SproutDB-Database: _system`.
+- [x] #116 `_system` Database: System-Database, komplett read-only für alle User. Nur SproutDB intern schreibt.
+- [x] #117 Audit Log: Alle Schema-Änderungen werden in `_system.audit_log` geloggt. Felder: timestamp, database, query, operation. NICHT geloggt: Daten-Operationen (get, upsert, delete).
+- [x] #118 Audit Log abfragbar: `get audit_log` mit db=`_system`.
 - [ ] #119 HTTP Server: `POST /query` Endpoint. Content-Type: text/plain. Query als Plain Text im Body, Response immer JSON.
 - [ ] #120 HTTP Header `X-SproutDB-Database` (Pflicht) – Aktive Datenbank.
 - [ ] #121 HTTP Header `X-SproutDB-ApiKey` (Pflicht wenn Auth aktiv) – API Key für Authentifizierung.

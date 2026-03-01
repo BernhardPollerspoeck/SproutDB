@@ -66,19 +66,19 @@ public class RenameColumnParserTests
     [Fact]
     public void OldNameId_Error()
     {
-        var result = QueryParser.Parse("rename column users.id to newid");
+        var result = QueryParser.Parse("rename column users._id to newid");
 
         Assert.False(result.Success);
-        Assert.Contains("'id' is reserved", result.Errors![0].Message);
+        Assert.Contains("'_id' is reserved", result.Errors![0].Message);
     }
 
     [Fact]
     public void NewNameId_Error()
     {
-        var result = QueryParser.Parse("rename column users.name to id");
+        var result = QueryParser.Parse("rename column users.name to _id");
 
         Assert.False(result.Success);
-        Assert.Contains("'id' is reserved", result.Errors![0].Message);
+        Assert.Contains("'_id' is reserved", result.Errors![0].Message);
     }
 
     [Fact]

@@ -48,7 +48,7 @@ internal static class PurgeParser
         var colName = ctx.GetLowercaseText(colNameToken);
         ctx.Advance();
 
-        if (colName == "id")
+        if (colName == "_id")
             return ctx.Error(colNameToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.RESERVED_COLUMN_NAME_ID);
 
         ctx.ExpectEof();
@@ -100,7 +100,7 @@ internal static class PurgeParser
         var colName = ctx.GetLowercaseText(colNameToken);
         ctx.Advance();
 
-        if (colName == "id")
+        if (colName == "_id")
             return ctx.Error(colNameToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.RESERVED_COLUMN_NAME_ID);
 
         ctx.ExpectEof();

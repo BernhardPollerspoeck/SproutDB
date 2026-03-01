@@ -134,11 +134,11 @@ public class TokenizerTests
     [Fact]
     public void Arrow()
     {
-        var input = "users.id -> orders.user_id";
+        var input = "users._id -> orders.user_id";
         var tokens = Tokenizer.Tokenize(input);
         Assert.Equal(TokenType.Identifier, tokens[0].Type); // users
         Assert.Equal(TokenType.Dot, tokens[1].Type);
-        Assert.Equal(TokenType.Identifier, tokens[2].Type); // id
+        Assert.Equal(TokenType.Identifier, tokens[2].Type); // _id
         Assert.Equal(TokenType.Arrow, tokens[3].Type);
         Assert.Equal(TokenType.Identifier, tokens[4].Type); // orders
         Assert.Equal(TokenType.Dot, tokens[5].Type);

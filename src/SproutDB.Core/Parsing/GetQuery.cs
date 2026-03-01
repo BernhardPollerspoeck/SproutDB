@@ -141,7 +141,7 @@ internal sealed class FollowClause
     /// <summary>Source table name (e.g. "users").</summary>
     public required string SourceTable { get; init; }
 
-    /// <summary>Source column name (e.g. "id").</summary>
+    /// <summary>Source column name (e.g. "_id").</summary>
     public required string SourceColumn { get; init; }
 
     public int SourceColumnPosition { get; init; }

@@ -148,9 +148,9 @@ public class AddColumnParserTests
     [Fact]
     public void ReservedIdColumn_Error()
     {
-        var result = QueryParser.Parse("add column users.id ulong");
+        var result = QueryParser.Parse("add column users._id ulong");
         Assert.False(result.Success);
-        Assert.Contains("'id' is reserved", result.Errors![0].Message);
+        Assert.Contains("'_id' is reserved", result.Errors![0].Message);
     }
 
     [Fact]

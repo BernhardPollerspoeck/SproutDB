@@ -16,4 +16,6 @@ internal sealed class SproutDatabase : ISproutDatabase
     }
 
     public SproutResponse Query(string query) => _engine.Execute(query, Name);
+
+    internal SproutResponse QueryInternal(string query) => _engine.ExecuteInternal(query, Name);
 }

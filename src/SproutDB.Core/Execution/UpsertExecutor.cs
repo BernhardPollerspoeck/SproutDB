@@ -33,7 +33,7 @@ internal static class UpsertExecutor
             {
                 if (parsed[i].ExplicitId.HasValue)
                     return ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR,
-                        "cannot combine explicit id with 'on' clause");
+                        "cannot combine explicit _id with 'on' clause");
 
                 if (!parsed[i].FieldsByName.ContainsKey(q.OnColumn))
                     return ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR,
@@ -61,7 +61,7 @@ internal static class UpsertExecutor
                 (record, id) = WriteInsert(table, rec.FieldsByName);
             }
 
-            record["id"] = id;
+            record["_id"] = id;
             data.Add(record);
         }
 
@@ -147,13 +147,13 @@ internal static class UpsertExecutor
 
         foreach (var field in fields)
         {
-            if (field.Name == "id")
+            if (field.Name == "_id")
             {
                 if (field.Value.Kind != UpsertValueKind.Integer || field.Value.Raw is null
                     || !ulong.TryParse(field.Value.Raw, out var idVal) || idVal == 0)
                 {
                     errors ??= [];
-                    errors.Add(new SproutError { Code = ErrorCodes.TYPE_MISMATCH, Message = "id must be a positive integer", Position = field.Position, Length = field.Length });
+                    errors.Add(new SproutError { Code = ErrorCodes.TYPE_MISMATCH, Message = "_id must be a positive integer", Position = field.Position, Length = field.Length });
                 }
                 else
                 {

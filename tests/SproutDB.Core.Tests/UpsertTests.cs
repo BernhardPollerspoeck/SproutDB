@@ -33,7 +33,7 @@ public class UpsertTests : IDisposable
         Assert.Equal(1, r.Affected);
         Assert.NotNull(r.Data);
         Assert.Single(r.Data);
-        Assert.Equal((ulong)1, r.Data[0]["id"]);
+        Assert.Equal((ulong)1, r.Data[0]["_id"]);
     }
 
     [Fact]
@@ -42,7 +42,7 @@ public class UpsertTests : IDisposable
         _engine.Execute("upsert users {name: 'John'}", "testdb");
         var r2 = _engine.Execute("upsert users {name: 'Jane'}", "testdb");
 
-        Assert.Equal((ulong)2, r2.Data![0]["id"]);
+        Assert.Equal((ulong)2, r2.Data![0]["_id"]);
     }
 
     [Fact]
@@ -51,7 +51,7 @@ public class UpsertTests : IDisposable
         var r = _engine.Execute("upsert users {name: 'John', email: 'john@test.com', age: 25}", "testdb");
 
         var row = r.Data![0];
-        Assert.Equal((ulong)1, row["id"]);
+        Assert.Equal((ulong)1, row["_id"]);
         Assert.Equal("John", row["name"]);
         Assert.Equal("john@test.com", row["email"]);
         Assert.Equal((byte)25, row["age"]);
@@ -65,7 +65,7 @@ public class UpsertTests : IDisposable
         var r = _engine.Execute("upsert users {}", "testdb");
 
         var row = r.Data![0];
-        Assert.Equal((ulong)1, row["id"]);
+        Assert.Equal((ulong)1, row["_id"]);
         Assert.Null(row["name"]);
         Assert.Null(row["email"]);
         Assert.Null(row["age"]);
@@ -88,13 +88,13 @@ public class UpsertTests : IDisposable
     public void Update_WithExplicitId()
     {
         _engine.Execute("upsert users {name: 'John', age: 25}", "testdb");
-        var r = _engine.Execute("upsert users {id: 1, name: 'John Doe'}", "testdb");
+        var r = _engine.Execute("upsert users {_id: 1, name: 'John Doe'}", "testdb");
 
         Assert.Equal(SproutOperation.Upsert, r.Operation);
         Assert.Equal(1, r.Affected);
 
         var row = r.Data![0];
-        Assert.Equal((ulong)1, row["id"]);
+        Assert.Equal((ulong)1, row["_id"]);
         Assert.Equal("John Doe", row["name"]);
         Assert.Equal((byte)25, row["age"]);  // unchanged
     }
@@ -103,7 +103,7 @@ public class UpsertTests : IDisposable
     public void Update_SetToNull()
     {
         _engine.Execute("upsert users {name: 'John', age: 25}", "testdb");
-        var r = _engine.Execute("upsert users {id: 1, age: null}", "testdb");
+        var r = _engine.Execute("upsert users {_id: 1, age: null}", "testdb");
 
         Assert.Null(r.Data![0]["age"]);
         Assert.Equal("John", r.Data[0]["name"]); // unchanged
@@ -113,7 +113,7 @@ public class UpsertTests : IDisposable
     public void Update_PreservesUnchangedFields()
     {
         _engine.Execute("upsert users {name: 'John', email: 'john@test.com', age: 25, score: -100}", "testdb");
-        var r = _engine.Execute("upsert users {id: 1, email: 'new@test.com'}", "testdb");
+        var r = _engine.Execute("upsert users {_id: 1, email: 'new@test.com'}", "testdb");
 
         var row = r.Data![0];
         Assert.Equal("John", row["name"]);
@@ -126,21 +126,21 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Upsert_NewIdCreatesRecord()
     {
-        var r = _engine.Execute("upsert users {id: 42, name: 'John'}", "testdb");
+        var r = _engine.Execute("upsert users {_id: 42, name: 'John'}", "testdb");
 
         Assert.Equal(SproutOperation.Upsert, r.Operation);
-        Assert.Equal((ulong)42, r.Data![0]["id"]);
+        Assert.Equal((ulong)42, r.Data![0]["_id"]);
         Assert.Equal("John", r.Data[0]["name"]);
     }
 
     [Fact]
     public void Upsert_NewId_NextIdAdvances()
     {
-        _engine.Execute("upsert users {id: 42, name: 'John'}", "testdb");
+        _engine.Execute("upsert users {_id: 42, name: 'John'}", "testdb");
         var r = _engine.Execute("upsert users {name: 'Jane'}", "testdb");
 
         // next_id should have advanced past 42
-        Assert.Equal((ulong)43, r.Data![0]["id"]);
+        Assert.Equal((ulong)43, r.Data![0]["_id"]);
     }
 
     // ── Type handling ───────────────────────────────────────
@@ -253,7 +253,7 @@ public class UpsertTests : IDisposable
 
         Assert.Equal(SproutOperation.Upsert, r.Operation);
         Assert.Equal(1, r.Affected);
-        Assert.Equal((ulong)1, r.Data![0]["id"]);
+        Assert.Equal((ulong)1, r.Data![0]["_id"]);
         Assert.Equal("john@test.com", r.Data[0]["email"]);
         Assert.Equal("John", r.Data[0]["name"]);
     }
@@ -266,7 +266,7 @@ public class UpsertTests : IDisposable
 
         Assert.Equal(SproutOperation.Upsert, r.Operation);
         Assert.Equal(1, r.Affected);
-        Assert.Equal((ulong)1, r.Data![0]["id"]); // same record
+        Assert.Equal((ulong)1, r.Data![0]["_id"]); // same record
         Assert.Equal("John Doe", r.Data[0]["name"]);
         Assert.Equal("john@test.com", r.Data[0]["email"]);
         Assert.Equal((byte)25, r.Data[0]["age"]); // unchanged
@@ -279,7 +279,7 @@ public class UpsertTests : IDisposable
         var r = _engine.Execute("upsert users {email: 'john@test.com', age: 30} on email", "testdb");
 
         var row = r.Data![0];
-        Assert.Equal((ulong)1, row["id"]);
+        Assert.Equal((ulong)1, row["_id"]);
         Assert.Equal("John", row["name"]); // unchanged
         Assert.Equal((byte)30, row["age"]); // updated
         Assert.Equal(-50, row["score"]); // unchanged
@@ -291,7 +291,7 @@ public class UpsertTests : IDisposable
         _engine.Execute("upsert users {email: 'john@test.com', name: 'John'} on email", "testdb");
         var r = _engine.Execute("upsert users {email: 'jane@test.com', name: 'Jane'} on email", "testdb");
 
-        Assert.Equal((ulong)2, r.Data![0]["id"]); // new record
+        Assert.Equal((ulong)2, r.Data![0]["_id"]); // new record
         Assert.Equal("jane@test.com", r.Data[0]["email"]);
     }
 
@@ -301,7 +301,7 @@ public class UpsertTests : IDisposable
         _engine.Execute("upsert users {age: 25, name: 'John'}", "testdb");
         var r = _engine.Execute("upsert users {age: 25, name: 'John Updated'} on age", "testdb");
 
-        Assert.Equal((ulong)1, r.Data![0]["id"]); // same record
+        Assert.Equal((ulong)1, r.Data![0]["_id"]); // same record
         Assert.Equal("John Updated", r.Data[0]["name"]);
     }
 
@@ -327,11 +327,11 @@ public class UpsertTests : IDisposable
     [Fact]
     public void UpsertOn_WithExplicitId_Error()
     {
-        var r = _engine.Execute("upsert users {id: 1, email: 'john@test.com'} on email", "testdb");
+        var r = _engine.Execute("upsert users {_id: 1, email: 'john@test.com'} on email", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("SYNTAX_ERROR", r.Errors![0].Code);
-        Assert.Contains("id", r.Errors[0].Message);
+        Assert.Contains("_id", r.Errors[0].Message);
     }
 
     // ── Bulk upsert ─────────────────────────────────────────
@@ -344,9 +344,9 @@ public class UpsertTests : IDisposable
         Assert.Equal(SproutOperation.Upsert, r.Operation);
         Assert.Equal(2, r.Affected);
         Assert.Equal(2, r.Data!.Count);
-        Assert.Equal((ulong)1, r.Data[0]["id"]);
+        Assert.Equal((ulong)1, r.Data[0]["_id"]);
         Assert.Equal("John", r.Data[0]["name"]);
-        Assert.Equal((ulong)2, r.Data[1]["id"]);
+        Assert.Equal((ulong)2, r.Data[1]["_id"]);
         Assert.Equal("Jane", r.Data[1]["name"]);
     }
 
@@ -360,10 +360,10 @@ public class UpsertTests : IDisposable
             "testdb");
 
         Assert.Equal(2, r.Affected);
-        Assert.Equal((ulong)1, r.Data![0]["id"]); // updated existing
+        Assert.Equal((ulong)1, r.Data![0]["_id"]); // updated existing
         Assert.Equal("John Updated", r.Data[0]["name"]);
         Assert.Equal((byte)25, r.Data[0]["age"]); // unchanged
-        Assert.Equal((ulong)2, r.Data[1]["id"]); // inserted new
+        Assert.Equal((ulong)2, r.Data[1]["_id"]); // inserted new
         Assert.Equal("Jane", r.Data[1]["name"]);
     }
 
@@ -378,9 +378,9 @@ public class UpsertTests : IDisposable
             "testdb");
 
         Assert.Equal(2, r.Affected);
-        Assert.Equal((ulong)2, r.Data![0]["id"]); // b@test.com = id 2
+        Assert.Equal((ulong)2, r.Data![0]["_id"]); // b@test.com = id 2
         Assert.Equal("B Updated", r.Data[0]["name"]);
-        Assert.Equal((ulong)1, r.Data![1]["id"]); // a@test.com = id 1
+        Assert.Equal((ulong)1, r.Data![1]["_id"]); // a@test.com = id 1
         Assert.Equal("A Updated", r.Data[1]["name"]);
     }
 
@@ -391,7 +391,7 @@ public class UpsertTests : IDisposable
 
         foreach (var row in r.Data!)
         {
-            Assert.True(row.ContainsKey("id"));
+            Assert.True(row.ContainsKey("_id"));
             Assert.True(row.ContainsKey("name"));
             Assert.True(row.ContainsKey("email"));
             Assert.True(row.ContainsKey("age"));
@@ -492,12 +492,12 @@ public class UpsertTests : IDisposable
     [Fact]
     public void InvalidId_And_UnknownColumn_BothReported()
     {
-        var r = _engine.Execute("upsert users {id: -5, foo: 'x'}", "testdb");
+        var r = _engine.Execute("upsert users {_id: -5, foo: 'x'}", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal(2, r.Errors!.Count);
         Assert.Equal("TYPE_MISMATCH", r.Errors[0].Code);
-        Assert.Contains("id", r.Errors[0].Message);
+        Assert.Contains("_id", r.Errors[0].Message);
         Assert.Equal("UNKNOWN_COLUMN", r.Errors[1].Code);
         Assert.Contains("foo", r.Errors[1].Message);
     }

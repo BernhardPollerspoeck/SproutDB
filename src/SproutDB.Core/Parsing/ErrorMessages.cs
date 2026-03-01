@@ -30,7 +30,7 @@ internal static class ErrorMessages
         "expected default value";
 
     public const string RESERVED_COLUMN_NAME_ID =
-        "column name 'id' is reserved";
+        "column name '_id' is reserved";
 
     public const string EXPECTED_OPEN_BRACE =
         "expected '{'";

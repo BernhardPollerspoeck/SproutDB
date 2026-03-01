@@ -16,4 +16,5 @@ internal static class ErrorCodes
     public const string WHERE_REQUIRED = "WHERE_REQUIRED";
     public const string INDEX_EXISTS = "INDEX_EXISTS";
     public const string INDEX_NOT_FOUND = "INDEX_NOT_FOUND";
+    public const string PROTECTED_NAME = "PROTECTED_NAME";
 }

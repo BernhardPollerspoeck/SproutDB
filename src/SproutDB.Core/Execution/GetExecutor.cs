@@ -15,7 +15,7 @@ internal static class GetExecutor
         {
             foreach (var col in q.Select)
             {
-                if (col.Name != "id" && !table.HasColumn(col.Name))
+                if (col.Name != "_id" && !table.HasColumn(col.Name))
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{col.Name}' does not exist", Position = col.Position, Length = col.Length });
@@ -28,12 +28,12 @@ internal static class GetExecutor
         {
             foreach (var comp in q.ComputedSelect)
             {
-                if (comp.LeftColumn != "id" && !table.HasColumn(comp.LeftColumn))
+                if (comp.LeftColumn != "_id" && !table.HasColumn(comp.LeftColumn))
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{comp.LeftColumn}' does not exist", Position = comp.LeftPosition, Length = comp.LeftLength });
                 }
-                if (comp.RightColumn is not null && comp.RightColumn != "id" && !table.HasColumn(comp.RightColumn))
+                if (comp.RightColumn is not null && comp.RightColumn != "_id" && !table.HasColumn(comp.RightColumn))
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{comp.RightColumn}' does not exist", Position = comp.RightPosition, Length = comp.RightLength });
@@ -62,7 +62,7 @@ internal static class GetExecutor
 
             foreach (var col in q.OrderBy)
             {
-                if (col.Name != "id" && !table.HasColumn(col.Name)
+                if (col.Name != "_id" && !table.HasColumn(col.Name)
                     && (computedAliases is null || !computedAliases.Contains(col.Name)))
                 {
                     validationErrors ??= [];
@@ -74,13 +74,13 @@ internal static class GetExecutor
         // Validate aggregate column
         if (q.Aggregate.HasValue && q.AggregateColumn is not null)
         {
-            if (q.AggregateColumn != "id" && !table.HasColumn(q.AggregateColumn))
+            if (q.AggregateColumn != "_id" && !table.HasColumn(q.AggregateColumn))
             {
                 validationErrors ??= [];
                 validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{q.AggregateColumn}' does not exist", Position = q.AggregateColumnPosition, Length = q.AggregateColumnLength });
             }
             else if (q.Aggregate is AggregateFunction.Sum or AggregateFunction.Avg
-                     && q.AggregateColumn != "id" && !IsNumericColumn(table, q.AggregateColumn))
+                     && q.AggregateColumn != "_id" && !IsNumericColumn(table, q.AggregateColumn))
             {
                 validationErrors ??= [];
                 validationErrors.Add(new SproutError { Code = ErrorCodes.TYPE_MISMATCH, Message = $"'{AggregateName(q.Aggregate.Value)}' can only be used on numeric columns", Position = q.AggregateColumnPosition, Length = q.AggregateColumnLength });
@@ -102,14 +102,14 @@ internal static class GetExecutor
 
                 // Validate source column exists on appropriate table
                 var sourceTable = follow.SourceTable == q.Table ? table : tableResolver(follow.SourceTable);
-                if (follow.SourceColumn != "id" && (sourceTable is null || !sourceTable.HasColumn(follow.SourceColumn)))
+                if (follow.SourceColumn != "_id" && (sourceTable is null || !sourceTable.HasColumn(follow.SourceColumn)))
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{follow.SourceColumn}' does not exist on '{follow.SourceTable}'", Position = follow.SourceColumnPosition, Length = follow.SourceColumnLength });
                 }
 
                 // Validate target column exists
-                if (follow.TargetColumn != "id" && !targetTable.HasColumn(follow.TargetColumn))
+                if (follow.TargetColumn != "_id" && !targetTable.HasColumn(follow.TargetColumn))
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{follow.TargetColumn}' does not exist on '{follow.TargetTable}'", Position = follow.TargetColumnPosition, Length = follow.TargetColumnLength });
@@ -129,7 +129,7 @@ internal static class GetExecutor
         {
             foreach (var col in q.GroupBy)
             {
-                if (col.Name != "id" && !table.HasColumn(col.Name))
+                if (col.Name != "_id" && !table.HasColumn(col.Name))
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{col.Name}' does not exist", Position = col.Position, Length = col.Length });
@@ -363,7 +363,7 @@ internal static class GetExecutor
             var colName = q.AggregateColumn;
             var fn = q.Aggregate.Value;
             var alias = q.AggregateAlias ?? AggregateName(fn);
-            ColumnHandle? aggHandle = colName == "id" ? null : table.GetColumn(colName);
+            ColumnHandle? aggHandle = colName == "_id" ? null : table.GetColumn(colName);
 
             foreach (var (groupKey, members) in groups)
             {
@@ -373,8 +373,8 @@ internal static class GetExecutor
                 var (firstId, firstPlace) = members[0];
                 foreach (var col in groupByCols)
                 {
-                    if (col.Name == "id")
-                        row["id"] = firstId;
+                    if (col.Name == "_id")
+                        row["_id"] = firstId;
                     else
                         row[col.Name] = table.GetColumn(col.Name).ReadValue(firstPlace);
                 }
@@ -410,8 +410,8 @@ internal static class GetExecutor
                 var (firstId, firstPlace) = members[0];
                 foreach (var col in groupByCols)
                 {
-                    if (col.Name == "id")
-                        row["id"] = firstId;
+                    if (col.Name == "_id")
+                        row["_id"] = firstId;
                     else
                         row[col.Name] = table.GetColumn(col.Name).ReadValue(firstPlace);
                 }
@@ -430,8 +430,8 @@ internal static class GetExecutor
                 var (firstId, firstPlace) = members[0];
                 foreach (var col in groupByCols)
                 {
-                    if (col.Name == "id")
-                        row["id"] = firstId;
+                    if (col.Name == "_id")
+                        row["_id"] = firstId;
                     else
                         row[col.Name] = table.GetColumn(col.Name).ReadValue(firstPlace);
                 }
@@ -484,7 +484,7 @@ internal static class GetExecutor
         for (var i = 0; i < groupByCols.Count; i++)
         {
             var col = groupByCols[i];
-            handles[i] = (col.Name, col.Name == "id" ? null : table.GetColumn(col.Name));
+            handles[i] = (col.Name, col.Name == "_id" ? null : table.GetColumn(col.Name));
         }
 
         for (ulong id = 1; id < nextId; id++)
@@ -547,7 +547,7 @@ internal static class GetExecutor
                 {
                     var record = new Dictionary<string, object?>(targetColumns.Count + 1)
                     {
-                        ["id"] = id
+                        ["_id"] = id
                     };
                     foreach (var (name, handle) in targetColumns)
                         record[name] = handle.ReadValue(place);
@@ -568,7 +568,7 @@ internal static class GetExecutor
         var index = new Dictionary<string, List<(ulong, long)>>();
         var nextId = table.Index.ReadNextId();
 
-        ColumnHandle? colHandle = joinColumn == "id" ? null : table.GetColumn(joinColumn);
+        ColumnHandle? colHandle = joinColumn == "_id" ? null : table.GetColumn(joinColumn);
 
         for (ulong id = 1; id < nextId; id++)
         {
@@ -599,8 +599,8 @@ internal static class GetExecutor
         var values = new List<object>();
         var nextId = table.Index.ReadNextId();
 
-        // For "id" column, the value is the id itself
-        if (colName == "id")
+        // For "_id" column, the value is the id itself
+        if (colName == "_id")
         {
             for (ulong id = 1; id < nextId; id++)
             {
@@ -708,9 +708,9 @@ internal static class GetExecutor
         // Determine which columns to project
         bool includeId;
         if (excludeSelect)
-            includeId = selectColumns is null || !selectColumns.Exists(c => c.Name == "id");
+            includeId = selectColumns is null || !selectColumns.Exists(c => c.Name == "_id");
         else
-            includeId = selectColumns is null || selectColumns.Exists(c => c.Name == "id");
+            includeId = selectColumns is null || selectColumns.Exists(c => c.Name == "_id");
 
         var columns = ResolveColumns(table, selectColumns, excludeSelect);
 
@@ -729,7 +729,7 @@ internal static class GetExecutor
             var record = new Dictionary<string, object?>(columns.Count + 1);
 
             if (includeId)
-                record["id"] = id;
+                record["_id"] = id;
 
             foreach (var (name, handle) in columns)
                 record[name] = handle.ReadValue(place);
@@ -767,11 +767,11 @@ internal static class GetExecutor
         }
 
         {
-            // Only selected columns (excluding "id" which is handled separately)
+            // Only selected columns (excluding "_id" which is handled separately)
             var result = new List<(string, ColumnHandle)>(selectColumns.Count);
             foreach (var col in selectColumns)
             {
-                if (col.Name == "id") continue;
+                if (col.Name == "_id") continue;
                 result.Add((col.Name, table.GetColumn(col.Name)));
             }
             return result;
@@ -800,14 +800,14 @@ internal static class GetExecutor
 
         foreach (var comp in q.ComputedSelect)
         {
-            if (!selectedNames.Contains(comp.LeftColumn) && comp.LeftColumn != "id")
+            if (!selectedNames.Contains(comp.LeftColumn) && comp.LeftColumn != "_id")
             {
                 extras ??= [];
                 if (!extras.Exists(e => e.Name == comp.LeftColumn))
                     extras.Add(new SelectColumn(comp.LeftColumn, comp.LeftPosition, comp.LeftLength));
             }
 
-            if (comp.RightColumn is not null && !selectedNames.Contains(comp.RightColumn) && comp.RightColumn != "id")
+            if (comp.RightColumn is not null && !selectedNames.Contains(comp.RightColumn) && comp.RightColumn != "_id")
             {
                 extras ??= [];
                 if (!extras.Exists(e => e.Name == comp.RightColumn))
@@ -917,7 +917,7 @@ internal static class GetExecutor
         if (where is not CompareNode compare)
             return null;
 
-        if (compare.Column == "id")
+        if (compare.Column == "_id")
             return null;
 
         if (!table.HasBTree(compare.Column))
@@ -974,9 +974,9 @@ internal static class GetExecutor
     {
         bool includeId;
         if (excludeSelect)
-            includeId = selectColumns is null || !selectColumns.Exists(c => c.Name == "id");
+            includeId = selectColumns is null || !selectColumns.Exists(c => c.Name == "_id");
         else
-            includeId = selectColumns is null || selectColumns.Exists(c => c.Name == "id");
+            includeId = selectColumns is null || selectColumns.Exists(c => c.Name == "_id");
 
         var columns = ResolveColumns(table, selectColumns, excludeSelect);
         var data = new List<Dictionary<string, object?>>(places.Count);
@@ -994,7 +994,7 @@ internal static class GetExecutor
             var record = new Dictionary<string, object?>(columns.Count + 1);
 
             if (includeId)
-                record["id"] = id;
+                record["_id"] = id;
 
             foreach (var (name, handle) in columns)
                 record[name] = handle.ReadValue(place);

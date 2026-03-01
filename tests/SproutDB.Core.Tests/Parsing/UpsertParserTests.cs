@@ -44,13 +44,13 @@ public class UpsertParserTests
     [Fact]
     public void WithExplicitId()
     {
-        var result = QueryParser.Parse("upsert users {id: 42, name: 'John'}");
+        var result = QueryParser.Parse("upsert users {_id: 42, name: 'John'}");
 
         Assert.True(result.Success);
         var q = Assert.IsType<UpsertQuery>(result.Query);
         Assert.Equal(2, Fields(q).Count);
 
-        Assert.Equal("id", Fields(q)[0].Name);
+        Assert.Equal("_id", Fields(q)[0].Name);
         Assert.Equal(UpsertValueKind.Integer, Fields(q)[0].Value.Kind);
         Assert.Equal("42", Fields(q)[0].Value.Raw);
     }
@@ -58,7 +58,7 @@ public class UpsertParserTests
     [Fact]
     public void NullValue()
     {
-        var result = QueryParser.Parse("upsert users {id: 1, email: null}");
+        var result = QueryParser.Parse("upsert users {_id: 1, email: null}");
 
         Assert.True(result.Success);
         var q = Assert.IsType<UpsertQuery>(result.Query);

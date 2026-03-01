@@ -158,7 +158,7 @@ public class IndexTests : IDisposable
         _engine.Execute("create index users.email", "testdb");
 
         // Update email
-        _engine.Execute("upsert users {id: 1, email: 'newalice@test.com'}", "testdb");
+        _engine.Execute("upsert users {_id: 1, email: 'newalice@test.com'}", "testdb");
 
         // Old email should not be found
         var oldResult = _engine.Execute("get users where email = 'alice@test.com'", "testdb");

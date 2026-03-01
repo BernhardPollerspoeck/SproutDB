@@ -30,4 +30,18 @@ internal sealed class IndexMetrics
     public void AddResultRows(long count) => Interlocked.Add(ref _resultRowsTotal, count);
     public void IncrementReadCount() => Interlocked.Increment(ref _readCount);
     public void IncrementWriteCount() => Interlocked.Increment(ref _writeCount);
+
+    public void Load(long queryCount, long whereHitCount, long readCount, long writeCount,
+        long scannedTotal, long resultTotal, bool isManual, DateTime? lastUsedAt, DateTime? indexCreatedAt)
+    {
+        Interlocked.Exchange(ref _queryCount, queryCount);
+        Interlocked.Exchange(ref _whereHitCount, whereHitCount);
+        Interlocked.Exchange(ref _readCount, readCount);
+        Interlocked.Exchange(ref _writeCount, writeCount);
+        Interlocked.Exchange(ref _scannedRowsTotal, scannedTotal);
+        Interlocked.Exchange(ref _resultRowsTotal, resultTotal);
+        IsManual = isManual;
+        LastUsedAt = lastUsedAt;
+        IndexCreatedAt = indexCreatedAt;
+    }
 }

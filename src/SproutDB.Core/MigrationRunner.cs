@@ -10,8 +10,11 @@ internal static class MigrationRunner
 
     public static void Run(Assembly assembly, ISproutDatabase db)
     {
+        // Cast to SproutDatabase for internal access (bypasses _ prefix protection)
+        var internalDb = (SproutDatabase)db;
+
         // Ensure _migrations table exists (ignore TABLE_EXISTS)
-        var createResult = db.Query(CreateMigrationsTable);
+        var createResult = internalDb.QueryInternal(CreateMigrationsTable);
         if (createResult.Operation == SproutOperation.Error
             && createResult.Errors is not null
             && !createResult.Errors.Any(e => e.Code == "TABLE_EXISTS"))
@@ -23,7 +26,7 @@ internal static class MigrationRunner
         // Discover all IMigration implementations, sorted by Order
         var migrations = DiscoverMigrations(assembly);
 
-        // Load already-applied Once migrations
+        // Load already-applied Once migrations (reads are not blocked)
         var applied = LoadAppliedMigrations(db);
 
         // Execute in order
@@ -37,12 +40,12 @@ internal static class MigrationRunner
             // Run the migration
             migration.Up(db);
 
-            // Track Once migrations
+            // Track Once migrations (bypasses _ prefix protection)
             if (migration.Mode == MigrationMode.Once)
             {
                 var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
                 var trackQuery = $"upsert {MigrationsTable} {{name: '{EscapeString(name)}', migrationorder: {migration.Order}, executed: '{now}'}}";
-                var trackResult = db.Query(trackQuery);
+                var trackResult = internalDb.QueryInternal(trackQuery);
                 if (trackResult.Operation == SproutOperation.Error)
                 {
                     throw new InvalidOperationException(

@@ -891,7 +891,7 @@ public class WhereParserTests
     [Fact]
     public void Follow_Basic()
     {
-        var result = QueryParser.Parse("get users follow users.id -> orders.user_id as orders");
+        var result = QueryParser.Parse("get users follow users._id -> orders.user_id as orders");
 
         Assert.True(result.Success);
         var q = Assert.IsType<GetQuery>(result.Query);
@@ -899,7 +899,7 @@ public class WhereParserTests
         Assert.Single(q.Follow);
         var f = q.Follow[0];
         Assert.Equal("users", f.SourceTable);
-        Assert.Equal("id", f.SourceColumn);
+        Assert.Equal("_id", f.SourceColumn);
         Assert.Equal("orders", f.TargetTable);
         Assert.Equal("user_id", f.TargetColumn);
         Assert.Equal("orders", f.Alias);
@@ -910,7 +910,7 @@ public class WhereParserTests
     public void Follow_WithWhere()
     {
         var result = QueryParser.Parse(
-            "get users where active = true follow users.id -> orders.user_id as orders where status = 'completed'");
+            "get users where active = true follow users._id -> orders.user_id as orders where status = 'completed'");
 
         Assert.True(result.Success);
         var q = Assert.IsType<GetQuery>(result.Query);
@@ -929,7 +929,7 @@ public class WhereParserTests
     public void Follow_Multiple()
     {
         var result = QueryParser.Parse(
-            "get users follow users.id -> orders.user_id as orders follow orders.product_id -> products.id as product");
+            "get users follow users._id -> orders.user_id as orders follow orders.product_id -> products._id as product");
 
         Assert.True(result.Success);
         var q = Assert.IsType<GetQuery>(result.Query);
@@ -945,7 +945,7 @@ public class WhereParserTests
     public void Follow_Multiple_WithWhere()
     {
         var result = QueryParser.Parse(
-            "get users follow users.id -> orders.user_id as orders where status = 'completed' follow orders.product_id -> products.id as product");
+            "get users follow users._id -> orders.user_id as orders where status = 'completed' follow orders.product_id -> products._id as product");
 
         Assert.True(result.Success);
         var q = Assert.IsType<GetQuery>(result.Query);
@@ -958,7 +958,7 @@ public class WhereParserTests
     [Fact]
     public void Follow_CaseInsensitive()
     {
-        var result = QueryParser.Parse("GET Users FOLLOW Users.Id -> Orders.User_Id AS MyOrders");
+        var result = QueryParser.Parse("GET Users FOLLOW Users._Id -> Orders.User_Id AS MyOrders");
 
         Assert.True(result.Success);
         var q = Assert.IsType<GetQuery>(result.Query);
@@ -969,7 +969,7 @@ public class WhereParserTests
     [Fact]
     public void Follow_MissingArrow_Error()
     {
-        var result = QueryParser.Parse("get users follow users.id orders.user_id as orders");
+        var result = QueryParser.Parse("get users follow users._id orders.user_id as orders");
 
         Assert.False(result.Success);
     }
@@ -977,7 +977,7 @@ public class WhereParserTests
     [Fact]
     public void Follow_MissingAs_Error()
     {
-        var result = QueryParser.Parse("get users follow users.id -> orders.user_id orders");
+        var result = QueryParser.Parse("get users follow users._id -> orders.user_id orders");
 
         Assert.False(result.Success);
     }
@@ -993,7 +993,7 @@ public class WhereParserTests
     [Fact]
     public void Follow_NoConflict_WithSelect()
     {
-        var result = QueryParser.Parse("get users select name, email follow users.id -> orders.user_id as orders");
+        var result = QueryParser.Parse("get users select name, email follow users._id -> orders.user_id as orders");
 
         Assert.True(result.Success);
         var q = Assert.IsType<GetQuery>(result.Query);
@@ -1223,12 +1223,12 @@ public class WhereParserTests
     [Fact]
     public void Delete_ById()
     {
-        var result = QueryParser.Parse("delete users where id = 5");
+        var result = QueryParser.Parse("delete users where _id = 5");
 
         Assert.True(result.Success);
         var q = Assert.IsType<DeleteQuery>(result.Query);
         var c = Assert.IsType<CompareNode>(q.Where);
-        Assert.Equal("id", c.Column);
+        Assert.Equal("_id", c.Column);
         Assert.Equal(CompareOp.Equal, c.Operator);
         Assert.Equal("5", c.Value);
     }

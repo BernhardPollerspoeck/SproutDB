@@ -33,14 +33,14 @@ public class DescribeTests : IDisposable
 
         var columns = r.Schema?.Columns;
         Assert.NotNull(columns);
-        Assert.Equal(4, columns.Count); // id + name + age + email
+        Assert.Equal(4, columns.Count); // _id + name + age + email
     }
 
     [Fact]
     public void DescribeTable_IdColumn()
     {
         var r = _engine.Execute("describe users", "testdb");
-        var id = r.Schema?.Columns?.Find(c => c.Name == "id");
+        var id = r.Schema?.Columns?.Find(c => c.Name == "_id");
 
         Assert.NotNull(id);
         Assert.Equal("ulong", id.Type);
@@ -201,7 +201,7 @@ public class DescribeTests : IDisposable
 
         var r = _engine.Execute("describe users", "testdb");
         Assert.Null(r.Schema?.Columns?.Find(c => c.Name == "age"));
-        Assert.Equal(3, r.Schema?.Columns?.Count); // id + name + email
+        Assert.Equal(3, r.Schema?.Columns?.Count); // _id + name + email
     }
 
     [Fact]

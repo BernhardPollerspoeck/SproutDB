@@ -75,7 +75,7 @@ internal static class CreateTableParser
         var name = ctx.GetLowercaseText(nameToken);
         ctx.Advance();
 
-        if (name == "id")
+        if (name == "_id")
         {
             ctx.AddError(nameToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.RESERVED_COLUMN_NAME_ID);
             return null!;

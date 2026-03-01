@@ -7,8 +7,8 @@ internal static class PurgeColumnExecutor
 {
     public static SproutResponse Execute(string query, TableHandle table, PurgeColumnQuery q)
     {
-        // Column "id" is reserved (parser blocks this, but guard here too)
-        if (q.Column == "id")
+        // Column "_id" is reserved (parser blocks this, but guard here too)
+        if (q.Column == "_id")
             return ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR,
                 ErrorMessages.RESERVED_COLUMN_NAME_ID);
 

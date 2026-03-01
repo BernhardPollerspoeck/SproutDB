@@ -116,9 +116,9 @@ public class ConcurrencyTests : IDisposable
         var page = 1;
         while (true)
         {
-            var result = engine.Execute($"get users select id page {page} size 100", "testdb");
+            var result = engine.Execute($"get users select _id page {page} size 100", "testdb");
             if (result.Data is null || result.Data.Count == 0) break;
-            allIds.AddRange(result.Data.Select(row => (ulong)row["id"]!));
+            allIds.AddRange(result.Data.Select(row => (ulong)row["_id"]!));
             if (result.Paging?.Next is null) break;
             page++;
         }
@@ -253,10 +253,10 @@ public class ConcurrencyTests : IDisposable
         // Wait a bit to let flush cycles run
         Thread.Sleep(200);
 
-        var result = engine.Execute("get users select id, name", "testdb");
+        var result = engine.Execute("get users select _id, name", "testdb");
         Assert.Equal(totalWrites, result.Data?.Count);
 
-        var ids = result.Data?.Select(row => (ulong)row["id"]!).ToList();
+        var ids = result.Data?.Select(row => (ulong)row["_id"]!).ToList();
         Assert.Equal(totalWrites, ids?.Distinct().Count());
     }
 

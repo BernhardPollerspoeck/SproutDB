@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Reflection;
 using System.Threading.Channels;
 using SproutDB.Core.AutoIndex;
@@ -53,6 +54,10 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         // ── Startup replay: discover all databases, replay WALs ──
         ReplayAllDatabases();
 
+        // ── Ensure _system database exists ────────────────────────
+        EnsureSystemDatabase();
+        LoadIndexMetrics();
+
         // ── Start writer channel ─────────────────────────────────
         _writeChannel = Channel.CreateUnbounded<Action>(new UnboundedChannelOptions
         {
@@ -98,7 +103,44 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         if (parsedQuery is DescribeQuery describeQuery)
             return ExecuteDescribe(query, dbName, dbPath, describeQuery);
 
+        // Write protection: block writes to _-prefixed system entities
+        var protectionError = CheckWriteProtection(query, parsedQuery, dbName);
+        if (protectionError is not null)
+            return protectionError;
+
         // All mutations go through the writer channel
+        return PostWrite(() => ExecuteWrite(query, dbName, dbPath, parsedQuery));
+    }
+
+    /// <summary>
+    /// Executes a query internally, bypassing _ prefix write protection.
+    /// Used for system writes (_system, _migrations).
+    /// </summary>
+    internal SproutResponse ExecuteInternal(string query, string database)
+    {
+        var dbName = LowercaseName(database);
+
+        if (!IsValidName(dbName))
+            return ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR,
+                $"invalid database name '{database}'");
+
+        var dbPath = Path.Combine(_dataDirectory, dbName);
+
+        var parseResult = QueryParser.Parse(query);
+        if (!parseResult.Success)
+            return ResponseHelper.ParseError(parseResult);
+
+        var parsedQuery = parseResult.Query;
+        if (parsedQuery is null)
+            return ResponseHelper.ParseError(parseResult);
+
+        if (parsedQuery is GetQuery getQuery)
+            return ExecuteGet(query, dbName, dbPath, getQuery);
+
+        if (parsedQuery is DescribeQuery describeQuery)
+            return ExecuteDescribe(query, dbName, dbPath, describeQuery);
+
+        // No protection check — internal writes bypass protection
         return PostWrite(() => ExecuteWrite(query, dbName, dbPath, parsedQuery));
     }
 
@@ -137,10 +179,20 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     private SproutResponse ExecuteWrite(string query, string dbName, string dbPath, IQuery parsedQuery)
     {
         if (parsedQuery is CreateDatabaseQuery)
-            return ExecuteCreateDatabase(query, dbName, dbPath);
+        {
+            var r = ExecuteCreateDatabase(query, dbName, dbPath);
+            if (r.Errors is null)
+                LogAudit(dbName, query, "create_database");
+            return r;
+        }
 
         if (parsedQuery is PurgeDatabaseQuery)
-            return ExecutePurgeDatabase(query, dbName, dbPath);
+        {
+            var r = ExecutePurgeDatabase(query, dbName, dbPath);
+            if (r.Errors is null)
+                LogAudit(dbName, query, "purge_database");
+            return r;
+        }
 
         if (parsedQuery is BackupQuery)
             return ExecuteBackup(query, dbName, dbPath);
@@ -179,6 +231,11 @@ public sealed class SproutEngine : ISproutServer, IDisposable
                 var tablePath = Path.Combine(dbPath, ciq.Table);
                 _indexMetrics.MarkManual(tablePath, ciq.Column);
             }
+
+            // Audit log for schema changes
+            var operation = GetSchemaOperation(parsedQuery);
+            if (operation is not null)
+                LogAudit(dbName, query, operation);
         }
 
         return result;
@@ -204,6 +261,235 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         }
     }
 
+    // ── System database ────────────────────────────────────
+
+    private void EnsureSystemDatabase()
+    {
+        var systemDbPath = Path.Combine(_dataDirectory, "_system");
+
+        // Ensure database directory + _meta.bin
+        if (!Directory.Exists(systemDbPath))
+        {
+            Directory.CreateDirectory(systemDbPath);
+            MetaFile.Write(Path.Combine(systemDbPath, "_meta.bin"), DateTime.UtcNow.Ticks);
+        }
+
+        _tableCache.RegisterDatabase(systemDbPath);
+
+        // Ensure audit_log table
+        EnsureSystemTable(systemDbPath, "audit_log",
+        [
+            new() { Name = "timestamp", Type = "datetime", Size = 8, EntrySize = 9, Nullable = false, Strict = true },
+            new() { Name = "database", Type = "string", Size = 128, EntrySize = 129, Nullable = true },
+            new() { Name = "query", Type = "string", Size = 1024, EntrySize = 1025, Nullable = false },
+            new() { Name = "operation", Type = "string", Size = 64, EntrySize = 65, Nullable = false, Strict = true },
+        ]);
+
+        // Ensure index_metrics table
+        EnsureSystemTable(systemDbPath, "index_metrics",
+        [
+            new() { Name = "key", Type = "string", Size = 640, EntrySize = 641, Nullable = false, Strict = true },
+            new() { Name = "table_name", Type = "string", Size = 128, EntrySize = 129, Nullable = false },
+            new() { Name = "column_name", Type = "string", Size = 128, EntrySize = 129, Nullable = false },
+            new() { Name = "query_count", Type = "slong", Size = 8, EntrySize = 9, Nullable = false, Default = "0" },
+            new() { Name = "where_hit_count", Type = "slong", Size = 8, EntrySize = 9, Nullable = false, Default = "0" },
+            new() { Name = "read_count", Type = "slong", Size = 8, EntrySize = 9, Nullable = false, Default = "0" },
+            new() { Name = "write_count", Type = "slong", Size = 8, EntrySize = 9, Nullable = false, Default = "0" },
+            new() { Name = "scanned_total", Type = "slong", Size = 8, EntrySize = 9, Nullable = false, Default = "0" },
+            new() { Name = "result_total", Type = "slong", Size = 8, EntrySize = 9, Nullable = false, Default = "0" },
+            new() { Name = "is_manual", Type = "bool", Size = 1, EntrySize = 2, Nullable = false, Default = "false" },
+            new() { Name = "last_used_at", Type = "datetime", Size = 8, EntrySize = 9, Nullable = true },
+            new() { Name = "index_created_at", Type = "datetime", Size = 8, EntrySize = 9, Nullable = true },
+        ]);
+    }
+
+    private void EnsureSystemTable(string dbPath, string tableName, List<ColumnSchemaEntry> columns)
+    {
+        var tablePath = Path.Combine(dbPath, tableName);
+
+        if (Directory.Exists(tablePath))
+        {
+            // Already exists — just ensure it's in the cache
+            _tableCache.GetOrOpen(tablePath);
+            return;
+        }
+
+        Directory.CreateDirectory(tablePath);
+
+        var schema = new TableSchema
+        {
+            CreatedTicks = DateTime.UtcNow.Ticks,
+            Columns = columns,
+        };
+
+        SchemaFile.Write(Path.Combine(tablePath, "_schema.bin"), schema);
+
+        // Create _index file (pre-allocated)
+        var indexPath = Path.Combine(tablePath, "_index");
+        using (var fs = File.Create(indexPath))
+            fs.SetLength((long)(StorageConstants.CHUNK_SIZE + 1) * StorageConstants.INDEX_ENTRY_SIZE);
+
+        // Write initial next_id = 1
+        using (var fs = new FileStream(indexPath, FileMode.Open, FileAccess.Write, FileShare.None))
+        {
+            Span<byte> buf = stackalloc byte[8];
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(buf, 1);
+            fs.Write(buf);
+        }
+
+        // Create .col files
+        foreach (var col in columns)
+        {
+            using var fs = File.Create(Path.Combine(tablePath, $"{col.Name}.col"));
+            fs.SetLength((long)StorageConstants.CHUNK_SIZE * col.EntrySize);
+        }
+
+        _tableCache.GetOrOpen(tablePath);
+    }
+
+    // ── Audit logging ────────────────────────────────────────
+
+    private void LogAudit(string? database, string query, string operation)
+    {
+        if (_disposed) return;
+
+        var systemDbPath = Path.Combine(_dataDirectory, "_system");
+        var auditTablePath = Path.Combine(systemDbPath, "audit_log");
+
+        if (!_tableCache.TryGetTable(auditTablePath, out var table) || table is null)
+            return;
+
+        var now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
+        // Truncate query to max column size (1024)
+        if (query.Length > 1024)
+            query = query[..1024];
+
+        var auditQuery = database is not null
+            ? $"upsert audit_log {{timestamp: '{now}', database: '{EscapeString(database)}', query: '{EscapeString(query)}', operation: '{EscapeString(operation)}'}}"
+            : $"upsert audit_log {{timestamp: '{now}', query: '{EscapeString(query)}', operation: '{EscapeString(operation)}'}}";
+
+        var parseResult = QueryParser.Parse(auditQuery);
+        if (parseResult.Success && parseResult.Query is UpsertQuery uq)
+            UpsertExecutor.Execute(auditQuery, table, uq, _settings.BulkLimit);
+    }
+
+    private static string? GetSchemaOperation(IQuery parsedQuery)
+    {
+        return parsedQuery switch
+        {
+            CreateTableQuery => "create_table",
+            AddColumnQuery => "add_column",
+            PurgeColumnQuery => "purge_column",
+            RenameColumnQuery => "rename_column",
+            AlterColumnQuery => "alter_column",
+            PurgeTableQuery => "purge_table",
+            CreateIndexQuery => "create_index",
+            PurgeIndexQuery => "purge_index",
+            _ => null,
+        };
+    }
+
+    private static string EscapeString(string value)
+    {
+        return value.Replace("'", "\\'");
+    }
+
+    // ── Index metrics persistence ──────────────────────────
+
+    private void PersistIndexMetrics()
+    {
+        var systemDbPath = Path.Combine(_dataDirectory, "_system");
+        var metricsTablePath = Path.Combine(systemDbPath, "index_metrics");
+
+        if (!_tableCache.TryGetTable(metricsTablePath, out var table) || table is null)
+            return;
+
+        foreach (var (key, m) in _indexMetrics.GetAll())
+        {
+            var tableName = Path.GetFileName(Path.GetDirectoryName(key.TablePath) ?? key.TablePath);
+            var compositeKey = $"{key.TablePath}|{key.Column}";
+            var lastUsed = m.LastUsedAt is not null
+                ? $", last_used_at: '{m.LastUsedAt.Value:yyyy-MM-dd HH:mm:ss}'"
+                : "";
+            var indexCreated = m.IndexCreatedAt is not null
+                ? $", index_created_at: '{m.IndexCreatedAt.Value:yyyy-MM-dd HH:mm:ss}'"
+                : "";
+
+            var upsertQuery =
+                $"upsert index_metrics {{key: '{EscapeString(compositeKey)}', table_name: '{EscapeString(tableName)}', column_name: '{EscapeString(key.Column)}', " +
+                $"query_count: {m.QueryCount}, where_hit_count: {m.WhereHitCount}, read_count: {m.ReadCount}, write_count: {m.WriteCount}, " +
+                $"scanned_total: {m.ScannedRowsTotal}, result_total: {m.ResultRowsTotal}, is_manual: {(m.IsManual ? "true" : "false")}" +
+                $"{lastUsed}{indexCreated}}} on key";
+
+            var parseResult = QueryParser.Parse(upsertQuery);
+            if (parseResult.Success && parseResult.Query is UpsertQuery uq)
+                UpsertExecutor.Execute(upsertQuery, table, uq, _settings.BulkLimit);
+        }
+    }
+
+    private void LoadIndexMetrics()
+    {
+        var systemDbPath = Path.Combine(_dataDirectory, "_system");
+        var metricsTablePath = Path.Combine(systemDbPath, "index_metrics");
+
+        if (!_tableCache.TryGetTable(metricsTablePath, out var table) || table is null)
+            return;
+
+        var getQuery = "get index_metrics";
+        var parseResult = QueryParser.Parse(getQuery);
+        if (!parseResult.Success || parseResult.Query is not GetQuery gq)
+            return;
+
+        var result = GetExecutor.Execute(getQuery, table, gq, int.MaxValue, null);
+        if (result.Data is null)
+            return;
+
+        foreach (var row in result.Data)
+        {
+            var key = row.TryGetValue("key", out var k) ? k?.ToString() : null;
+            if (key is null) continue;
+
+            var parts = key.Split('|', 2);
+            if (parts.Length != 2) continue;
+
+            var tablePath = parts[0];
+            var column = parts[1];
+
+            var m = _indexMetrics.GetOrCreate(tablePath, column);
+            m.Load(
+                queryCount: ToLong(row, "query_count"),
+                whereHitCount: ToLong(row, "where_hit_count"),
+                readCount: ToLong(row, "read_count"),
+                writeCount: ToLong(row, "write_count"),
+                scannedTotal: ToLong(row, "scanned_total"),
+                resultTotal: ToLong(row, "result_total"),
+                isManual: row.TryGetValue("is_manual", out var manual) && manual is true,
+                lastUsedAt: ToDateTime(row, "last_used_at"),
+                indexCreatedAt: ToDateTime(row, "index_created_at")
+            );
+        }
+    }
+
+    private static long ToLong(Dictionary<string, object?> row, string key)
+    {
+        if (!row.TryGetValue(key, out var val) || val is null)
+            return 0;
+        return val is long l ? l : Convert.ToInt64(val);
+    }
+
+    private static DateTime? ToDateTime(Dictionary<string, object?> row, string key)
+    {
+        if (!row.TryGetValue(key, out var val) || val is null)
+            return null;
+        if (val is DateTime dt)
+            return dt;
+        if (val is string s && DateTime.TryParse(s, out var parsed))
+            return parsed;
+        return null;
+    }
+
+    // ── WAL replay ──────────────────────────────────────────
+
     private void ReplayWal(string dbPath, string dbName)
     {
         var walPath = Path.Combine(dbPath, "_wal");
@@ -227,11 +513,11 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             // Inject resolved ID for auto-ID upserts during replay
             if (entry.ResolvedId > 0 && replayQuery is UpsertQuery upsert
                 && upsert.Records.Count == 1
-                && !upsert.Records[0].Exists(f => f.Name == "id"))
+                && !upsert.Records[0].Exists(f => f.Name == "_id"))
             {
                 upsert.Records[0].Insert(0, new UpsertField
                 {
-                    Name = "id",
+                    Name = "_id",
                     Value = new UpsertValue
                     {
                         Kind = UpsertValueKind.Integer,
@@ -282,6 +568,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
     private void FlushAll()
     {
+        PersistIndexMetrics();
         _tableCache.FlushAll();
         _walManager.TruncateAll();
     }
@@ -336,7 +623,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         if (query is not UpsertQuery upsert)
             return 0;
 
-        if (upsert.Records.Count != 1 || upsert.Records[0].Exists(f => f.Name == "id"))
+        if (upsert.Records.Count != 1 || upsert.Records[0].Exists(f => f.Name == "_id"))
             return 0;
 
         var tablePath = Path.Combine(dbPath, upsert.Table);
@@ -553,8 +840,8 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
         if (!_tableCache.DatabaseExists(dbPath))
         {
-            // Execute create database through the writer channel (silently ignore DATABASE_EXISTS)
-            Execute("create database", dbName);
+            // Use ExecuteInternal to allow creating _-prefixed databases (e.g. _system)
+            ExecuteInternal("create database", dbName);
         }
 
         return new SproutDatabase(this, dbName);
@@ -595,6 +882,8 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
+
         // 1. Signal background loops to stop
         _disposed = true;
 
@@ -614,6 +903,66 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         _tableCache.Dispose();
         _walManager.Dispose();
     }
+
+    // ── Write protection ──────────────────────────────────────
+
+    private static bool IsProtectedName(string name) => name.Length > 0 && name[0] == '_';
+
+    private static SproutResponse? CheckWriteProtection(string query, IQuery parsedQuery, string dbName)
+    {
+        // Database-level protection: _ prefixed databases are fully read-only
+        if (IsProtectedName(dbName))
+        {
+            if (parsedQuery is CreateDatabaseQuery)
+                return ProtectionError(query, $"cannot create database '{dbName}'");
+            if (parsedQuery is PurgeDatabaseQuery)
+                return ProtectionError(query, $"cannot purge database '{dbName}'");
+
+            // All other writes into a protected database are blocked
+            return ProtectionError(query, $"cannot write to database '{dbName}'");
+        }
+
+        // Table-level protection (within non-protected databases)
+        return parsedQuery switch
+        {
+            CreateTableQuery q when IsProtectedName(q.Table)
+                => ProtectionError(query, $"cannot create table '{q.Table}'"),
+
+            UpsertQuery q when IsProtectedName(q.Table)
+                => ProtectionError(query, $"cannot write to table '{q.Table}'"),
+
+            DeleteQuery q when IsProtectedName(q.Table)
+                => ProtectionError(query, $"cannot delete from table '{q.Table}'"),
+
+            PurgeTableQuery q when IsProtectedName(q.Table)
+                => ProtectionError(query, $"cannot purge table '{q.Table}'"),
+
+            // Column-level protection
+            AddColumnQuery q when IsProtectedName(q.Column.Name)
+                => ProtectionError(query, $"cannot add column '{q.Column.Name}'"),
+
+            PurgeColumnQuery q when IsProtectedName(q.Column)
+                => ProtectionError(query, $"cannot purge column '{q.Column}'"),
+
+            RenameColumnQuery q when IsProtectedName(q.OldColumn) || IsProtectedName(q.NewColumn)
+                => ProtectionError(query, "cannot rename to or from columns starting with '_'"),
+
+            AlterColumnQuery q when IsProtectedName(q.Column)
+                => ProtectionError(query, $"cannot alter column '{q.Column}'"),
+
+            CreateIndexQuery q when IsProtectedName(q.Column)
+                => ProtectionError(query, $"cannot index column '{q.Column}'"),
+
+            PurgeIndexQuery q when IsProtectedName(q.Column)
+                => ProtectionError(query, $"cannot purge index on column '{q.Column}'"),
+
+            _ => null,
+        };
+    }
+
+    private static SproutResponse ProtectionError(string query, string detail)
+        => ResponseHelper.Error(query, ErrorCodes.PROTECTED_NAME,
+            $"{detail}: names starting with '_' are system-managed");
 
     // ── Action record ────────────────────────────────────────
 

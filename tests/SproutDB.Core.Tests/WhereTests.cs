@@ -183,7 +183,7 @@ public class WhereTests : IDisposable
     [Fact]
     public void Where_Id_Equal()
     {
-        var r = _engine.Execute("get users where id = 2", "testdb");
+        var r = _engine.Execute("get users where _id = 2", "testdb");
 
         Assert.Equal(1, r.Affected);
         Assert.Equal("Bob", r.Data![0]["name"]);
@@ -192,7 +192,7 @@ public class WhereTests : IDisposable
     [Fact]
     public void Where_Id_GreaterThan()
     {
-        var r = _engine.Execute("get users where id > 2", "testdb");
+        var r = _engine.Execute("get users where _id > 2", "testdb");
 
         Assert.Equal(2, r.Affected); // Charlie(3), Diana(4)
     }
@@ -350,11 +350,11 @@ public class WhereTests : IDisposable
     [Fact]
     public void Where_Starts_OnId_Error()
     {
-        var r = _engine.Execute("get users where id starts '1'", "testdb");
+        var r = _engine.Execute("get users where _id starts '1'", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("TYPE_MISMATCH", r.Errors![0].Code);
-        Assert.Contains("id", r.Errors[0].Message);
+        Assert.Contains("_id", r.Errors[0].Message);
     }
 
     // ── With Select ──────────────────────────────────────────
@@ -458,7 +458,7 @@ public class WhereTests : IDisposable
     [Fact]
     public void Where_IsNull_OnId_AlwaysEmpty()
     {
-        var r = _engine.Execute("get users where id is null", "testdb");
+        var r = _engine.Execute("get users where _id is null", "testdb");
 
         Assert.Equal(0, r.Affected);
     }
@@ -573,7 +573,7 @@ public class WhereTests : IDisposable
     [Fact]
     public void Where_In_Id()
     {
-        var r = _engine.Execute("get users where id in [1, 3]", "testdb");
+        var r = _engine.Execute("get users where _id in [1, 3]", "testdb");
 
         Assert.Equal(2, r.Affected);
         var names = r.Data!.Select(d => (string)d["name"]!).OrderBy(n => n).ToList();
@@ -790,7 +790,7 @@ public class WhereTests : IDisposable
     [Fact]
     public void Where_Between_Id()
     {
-        var r = _engine.Execute("get users where id between 2 and 3", "testdb");
+        var r = _engine.Execute("get users where _id between 2 and 3", "testdb");
 
         Assert.Equal(2, r.Affected); // Bob(2), Charlie(3)
     }

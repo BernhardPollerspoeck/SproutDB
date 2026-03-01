@@ -59,10 +59,10 @@ public class WalTests : IDisposable
 
         using (var engine = new SproutEngine(dataDir))
         {
-            var r = engine.Execute("get users select id, name", "testdb");
+            var r = engine.Execute("get users select _id, name", "testdb");
 
-            Assert.Equal((ulong)1, r.Data?[0]["id"]);
-            Assert.Equal((ulong)2, r.Data?[1]["id"]);
+            Assert.Equal((ulong)1, r.Data?[0]["_id"]);
+            Assert.Equal((ulong)2, r.Data?[1]["_id"]);
         }
     }
 
@@ -82,7 +82,7 @@ public class WalTests : IDisposable
         {
             // After replay, next insert should get id=2
             var r = engine.Execute("upsert users {name: 'Bob'}", "testdb");
-            Assert.Equal((ulong)2, r.Data?[0]["id"]);
+            Assert.Equal((ulong)2, r.Data?[0]["_id"]);
         }
     }
 
@@ -96,7 +96,7 @@ public class WalTests : IDisposable
             engine.Execute("create database", "testdb");
             engine.Execute("create table users (name string 100, score sint)", "testdb");
             engine.Execute("upsert users {name: 'Alice', score: 100}", "testdb");
-            engine.Execute("upsert users {id: 1, score: 200}", "testdb"); // update
+            engine.Execute("upsert users {_id: 1, score: 200}", "testdb"); // update
         }
 
         using (var engine = new SproutEngine(dataDir))
@@ -120,7 +120,7 @@ public class WalTests : IDisposable
             engine.Execute("create table users (name string 100)", "testdb");
             engine.Execute("upsert users {name: 'Alice'}", "testdb");
             engine.Execute("add column users.score sint", "testdb");
-            engine.Execute("upsert users {id: 1, score: 42}", "testdb");
+            engine.Execute("upsert users {_id: 1, score: 42}", "testdb");
         }
 
         using (var engine = new SproutEngine(dataDir))
@@ -277,15 +277,15 @@ public class WalTests : IDisposable
         {
             engine.Execute("create database", "testdb");
             engine.Execute("create table users (name string 100)", "testdb");
-            engine.Execute("upsert users {id: 42, name: 'Alice'}", "testdb");
+            engine.Execute("upsert users {_id: 42, name: 'Alice'}", "testdb");
         }
 
         using (var engine = new SproutEngine(dataDir))
         {
-            var r = engine.Execute("get users select id, name", "testdb");
+            var r = engine.Execute("get users select _id, name", "testdb");
 
             Assert.Single(r.Data ?? []);
-            Assert.Equal((ulong)42, r.Data?[0]["id"]);
+            Assert.Equal((ulong)42, r.Data?[0]["_id"]);
             Assert.Equal("Alice", r.Data?[0]["name"]);
         }
     }

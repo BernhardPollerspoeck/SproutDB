@@ -33,7 +33,7 @@ internal static class AlterColumnParser
         var colName = ctx.GetLowercaseText(colNameToken);
         ctx.Advance();
 
-        if (colName == "id")
+        if (colName == "_id")
             return ctx.Error(colNameToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.RESERVED_COLUMN_NAME_ID);
 
         // "string" keyword (only string columns can be altered for now)

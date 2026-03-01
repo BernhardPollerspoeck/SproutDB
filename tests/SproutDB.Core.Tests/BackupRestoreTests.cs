@@ -168,7 +168,7 @@ public class BackupRestoreTests : IDisposable
     public void Backup_AfterAddColumn_Preserved()
     {
         _engine.Execute("add column users.email string 320", "testdb");
-        _engine.Execute("upsert users {id: 1, email: 'alice@test.com'}", "testdb");
+        _engine.Execute("upsert users {_id: 1, email: 'alice@test.com'}", "testdb");
 
         var backup = _engine.Execute("backup", "testdb");
         _engine.Execute("purge database", "testdb");

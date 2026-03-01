@@ -41,7 +41,7 @@ public class DeleteTests : IDisposable
     [Fact]
     public void Delete_ById()
     {
-        var r = _engine.Execute("delete users where id = 1", "testdb");
+        var r = _engine.Execute("delete users where _id = 1", "testdb");
 
         Assert.Equal(SproutOperation.Delete, r.Operation);
         Assert.Equal(1, r.Affected);
@@ -100,7 +100,7 @@ public class DeleteTests : IDisposable
     public void Delete_ThenUpsert_ReusesPlace()
     {
         // Delete Alice (id=1)
-        _engine.Execute("delete users where id = 1", "testdb");
+        _engine.Execute("delete users where _id = 1", "testdb");
 
         // Insert new user — should reuse place
         var ins = _engine.Execute("upsert users {name: 'Eve', age: 30}", "testdb");
@@ -116,7 +116,7 @@ public class DeleteTests : IDisposable
     [Fact]
     public void Delete_AllRows()
     {
-        var r = _engine.Execute("delete users where id > 0", "testdb");
+        var r = _engine.Execute("delete users where _id > 0", "testdb");
 
         Assert.Equal(4, r.Affected);
 

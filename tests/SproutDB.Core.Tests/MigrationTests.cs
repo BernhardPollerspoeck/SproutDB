@@ -148,9 +148,11 @@ public class MigrationTests : IDisposable
 
         var databases = _engine.GetDatabases();
 
-        Assert.Equal(3, databases.Count);
+        // 3 user databases + _system
+        Assert.Equal(4, databases.Count);
         Assert.Contains(databases, d => d.Name == "db1");
         Assert.Contains(databases, d => d.Name == "db2");
         Assert.Contains(databases, d => d.Name == "db3");
+        Assert.Contains(databases, d => d.Name == "_system");
     }
 }

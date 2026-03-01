@@ -106,7 +106,6 @@ public class SproutEngineTests : IDisposable
     [InlineData("mydb")]
     [InlineData("db1")]
     [InlineData("a")]
-    [InlineData("_system")]
     [InlineData("my_shop")]
     public void ValidName_Accepted(string name)
     {
@@ -222,9 +221,9 @@ public class SproutEngineTests : IDisposable
         var response = _engine.Execute("create table users (name string)", "shop");
 
         var columns = response.Schema!.Columns!;
-        Assert.Equal(2, columns.Count); // id + name
+        Assert.Equal(2, columns.Count); // _id + name
 
-        Assert.Equal("id", columns[0].Name);
+        Assert.Equal("_id", columns[0].Name);
         Assert.Equal("ulong", columns[0].Type);
         Assert.False(columns[0].Nullable);
         Assert.True(columns[0].Strict);

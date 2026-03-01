@@ -155,7 +155,7 @@ public class ComputedFieldTests : IDisposable
         var first = r.Data[0];
         // Should have only total — no id, no price, no quantity
         Assert.True(first.ContainsKey("total"));
-        Assert.False(first.ContainsKey("id"));
+        Assert.False(first.ContainsKey("_id"));
         Assert.False(first.ContainsKey("price"));
         Assert.False(first.ContainsKey("quantity"));
     }

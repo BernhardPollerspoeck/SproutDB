@@ -46,7 +46,7 @@ public class GetTests : IDisposable
         var r = _engine.Execute("get users", "testdb");
 
         var row = r.Data![0];
-        Assert.True(row.ContainsKey("id"));
+        Assert.True(row.ContainsKey("_id"));
         Assert.True(row.ContainsKey("name"));
         Assert.True(row.ContainsKey("email"));
         Assert.True(row.ContainsKey("age"));
@@ -58,9 +58,9 @@ public class GetTests : IDisposable
     {
         var r = _engine.Execute("get users", "testdb");
 
-        Assert.Equal((ulong)1, r.Data![0]["id"]);
-        Assert.Equal((ulong)2, r.Data[1]["id"]);
-        Assert.Equal((ulong)3, r.Data[2]["id"]);
+        Assert.Equal((ulong)1, r.Data![0]["_id"]);
+        Assert.Equal((ulong)2, r.Data[1]["_id"]);
+        Assert.Equal((ulong)3, r.Data[2]["_id"]);
     }
 
     [Fact]
@@ -114,22 +114,22 @@ public class GetTests : IDisposable
     [Fact]
     public void GetSelect_WithId()
     {
-        var r = _engine.Execute("get users select id, name", "testdb");
+        var r = _engine.Execute("get users select _id, name", "testdb");
 
         var row = r.Data![0];
         Assert.Equal(2, row.Count);
-        Assert.Equal((ulong)1, row["id"]);
+        Assert.Equal((ulong)1, row["_id"]);
         Assert.Equal("Alice", row["name"]);
     }
 
     [Fact]
     public void GetSelect_OnlyId()
     {
-        var r = _engine.Execute("get users select id", "testdb");
+        var r = _engine.Execute("get users select _id", "testdb");
 
         var row = r.Data![0];
         Assert.Single(row);
-        Assert.Equal((ulong)1, row["id"]);
+        Assert.Equal((ulong)1, row["_id"]);
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public class GetTests : IDisposable
         var r = _engine.Execute("get users select name", "testdb");
 
         var row = r.Data![0];
-        Assert.False(row.ContainsKey("id"));
+        Assert.False(row.ContainsKey("_id"));
         Assert.False(row.ContainsKey("email"));
         Assert.False(row.ContainsKey("age"));
         Assert.False(row.ContainsKey("active"));
@@ -172,8 +172,8 @@ public class GetTests : IDisposable
     [Fact]
     public void Get_AfterUpdate_ReturnsUpdatedValues()
     {
-        _engine.Execute("upsert users {id: 1, name: 'Alice Updated'}", "testdb");
-        var r = _engine.Execute("get users select id, name", "testdb");
+        _engine.Execute("upsert users {_id: 1, name: 'Alice Updated'}", "testdb");
+        var r = _engine.Execute("get users select _id, name", "testdb");
 
         Assert.Equal("Alice Updated", r.Data![0]["name"]);
     }
@@ -271,7 +271,7 @@ public class GetTests : IDisposable
         Assert.Equal(SproutOperation.Get, r.Operation);
         Assert.Equal(3, r.Data!.Count);
         var row = r.Data[0];
-        Assert.True(row.ContainsKey("id"));
+        Assert.True(row.ContainsKey("_id"));
         Assert.True(row.ContainsKey("name"));
         Assert.True(row.ContainsKey("active"));
         Assert.False(row.ContainsKey("age"));
@@ -281,10 +281,10 @@ public class GetTests : IDisposable
     [Fact]
     public void ExcludeSelect_ExcludeId()
     {
-        var r = _engine.Execute("get users -select id", "testdb");
+        var r = _engine.Execute("get users -select _id", "testdb");
 
         var row = r.Data![0];
-        Assert.False(row.ContainsKey("id"));
+        Assert.False(row.ContainsKey("_id"));
         Assert.True(row.ContainsKey("name"));
         Assert.True(row.ContainsKey("email"));
         Assert.True(row.ContainsKey("age"));
@@ -297,7 +297,7 @@ public class GetTests : IDisposable
         var r = _engine.Execute("get users -select active", "testdb");
 
         var row = r.Data![0];
-        Assert.True(row.ContainsKey("id"));
+        Assert.True(row.ContainsKey("_id"));
         Assert.True(row.ContainsKey("name"));
         Assert.True(row.ContainsKey("email"));
         Assert.True(row.ContainsKey("age"));
@@ -311,7 +311,7 @@ public class GetTests : IDisposable
 
         Assert.Equal(1, r.Affected);
         var row = r.Data![0];
-        Assert.True(row.ContainsKey("id"));
+        Assert.True(row.ContainsKey("_id"));
         Assert.True(row.ContainsKey("name"));
         Assert.True(row.ContainsKey("age"));
         Assert.False(row.ContainsKey("email"));

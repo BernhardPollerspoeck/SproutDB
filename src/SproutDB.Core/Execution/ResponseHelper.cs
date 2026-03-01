@@ -134,7 +134,7 @@ internal static class ResponseHelper
 
     private static ColumnInfo IdColumnInfo() => new()
     {
-        Name = "id",
+        Name = "_id",
         Type = "ulong",
         Nullable = false,
         Default = null,

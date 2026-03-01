@@ -31,10 +31,10 @@ public class PurgeParserTests
     [Fact]
     public void PurgeColumn_IdReserved_Error()
     {
-        var result = QueryParser.Parse("purge column users.id");
+        var result = QueryParser.Parse("purge column users._id");
 
         Assert.False(result.Success);
-        Assert.Contains("'id' is reserved", result.Errors![0].Message);
+        Assert.Contains("'_id' is reserved", result.Errors![0].Message);
     }
 
     [Fact]

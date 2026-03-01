@@ -51,7 +51,7 @@ public class FollowTests : IDisposable
     public void Follow_Basic_JoinById()
     {
         var r = _engine.Execute(
-            "get users follow users.id -> orders.user_id as orders",
+            "get users follow users._id -> orders.user_id as orders",
             "testdb");
 
         Assert.Equal(SproutOperation.Get, r.Operation);
@@ -81,7 +81,7 @@ public class FollowTests : IDisposable
         _engine.Execute("upsert users {name: 'Diana', email: 'diana@test.com', active: true}", "testdb");
 
         var r = _engine.Execute(
-            "get users where name = 'Diana' follow users.id -> orders.user_id as orders",
+            "get users where name = 'Diana' follow users._id -> orders.user_id as orders",
             "testdb");
 
         Assert.NotNull(r.Data);
@@ -95,14 +95,14 @@ public class FollowTests : IDisposable
     public void Follow_NestedRowsContainAllColumns()
     {
         var r = _engine.Execute(
-            "get users where name = 'Bob' follow users.id -> orders.user_id as orders",
+            "get users where name = 'Bob' follow users._id -> orders.user_id as orders",
             "testdb");
 
         var bob = r.Data![0];
         var orders = (IList<Dictionary<string, object?>>)bob["orders"]!;
         var order = orders[0];
 
-        Assert.True(order.ContainsKey("id"));
+        Assert.True(order.ContainsKey("_id"));
         Assert.True(order.ContainsKey("user_id"));
         Assert.True(order.ContainsKey("product"));
         Assert.True(order.ContainsKey("amount"));
@@ -113,7 +113,7 @@ public class FollowTests : IDisposable
     public void Follow_WithMainWhere()
     {
         var r = _engine.Execute(
-            "get users where active = true follow users.id -> orders.user_id as orders",
+            "get users where active = true follow users._id -> orders.user_id as orders",
             "testdb");
 
         Assert.NotNull(r.Data);
@@ -128,7 +128,7 @@ public class FollowTests : IDisposable
     public void Follow_WithFollowWhere()
     {
         var r = _engine.Execute(
-            "get users follow users.id -> orders.user_id as orders where status = 'completed'",
+            "get users follow users._id -> orders.user_id as orders where status = 'completed'",
             "testdb");
 
         Assert.NotNull(r.Data);
@@ -144,7 +144,7 @@ public class FollowTests : IDisposable
     public void Follow_WithBothWheres()
     {
         var r = _engine.Execute(
-            "get users where active = true follow users.id -> orders.user_id as orders where status = 'completed'",
+            "get users where active = true follow users._id -> orders.user_id as orders where status = 'completed'",
             "testdb");
 
         Assert.NotNull(r.Data);
@@ -163,7 +163,7 @@ public class FollowTests : IDisposable
     public void Follow_WhereFiltersAllTarget_EmptyArray()
     {
         var r = _engine.Execute(
-            "get users where name = 'Alice' follow users.id -> orders.user_id as orders where status = 'cancelled'",
+            "get users where name = 'Alice' follow users._id -> orders.user_id as orders where status = 'cancelled'",
             "testdb");
 
         var alice = r.Data![0];
@@ -192,7 +192,7 @@ public class FollowTests : IDisposable
         _engine.Execute("upsert shipments {item_code: 200, destination: 'Hamburg', order_ref: 3}", "testdb");
 
         var r = _engine.Execute(
-            "get items follow items.code -> shipments.item_code as shipments follow items.id -> orders.user_id as user_orders",
+            "get items follow items.code -> shipments.item_code as shipments follow items._id -> orders.user_id as user_orders",
             "testdb");
 
         Assert.NotNull(r.Data);
@@ -220,7 +220,7 @@ public class FollowTests : IDisposable
         _engine.Execute("upsert tags {order_id: 3, tag: 'urgent'}", "testdb");
 
         var r = _engine.Execute(
-            "get users where name = 'Alice' follow users.id -> orders.user_id as orders where status = 'completed' follow users.id -> tags.order_id as tags where tag = 'urgent'",
+            "get users where name = 'Alice' follow users._id -> orders.user_id as orders where status = 'completed' follow users._id -> tags.order_id as tags where tag = 'urgent'",
             "testdb");
 
         Assert.NotNull(r.Data);
@@ -243,7 +243,7 @@ public class FollowTests : IDisposable
     public void Follow_UnknownTargetTable_Error()
     {
         var r = _engine.Execute(
-            "get users follow users.id -> nonexistent.user_id as stuff",
+            "get users follow users._id -> nonexistent.user_id as stuff",
             "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
@@ -255,7 +255,7 @@ public class FollowTests : IDisposable
     public void Follow_UnknownTargetColumn_Error()
     {
         var r = _engine.Execute(
-            "get users follow users.id -> orders.nonexistent as orders",
+            "get users follow users._id -> orders.nonexistent as orders",
             "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
@@ -279,7 +279,7 @@ public class FollowTests : IDisposable
     public void Follow_UnknownWhereColumn_Error()
     {
         var r = _engine.Execute(
-            "get users follow users.id -> orders.user_id as orders where nonexistent = 'x'",
+            "get users follow users._id -> orders.user_id as orders where nonexistent = 'x'",
             "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
@@ -293,7 +293,7 @@ public class FollowTests : IDisposable
     public void Follow_WithSelect()
     {
         var r = _engine.Execute(
-            "get users select name follow users.id -> orders.user_id as orders",
+            "get users select name follow users._id -> orders.user_id as orders",
             "testdb");
 
         Assert.NotNull(r.Data);
@@ -309,7 +309,7 @@ public class FollowTests : IDisposable
     public void Follow_WithOrderByAndLimit()
     {
         var r = _engine.Execute(
-            "get users order by name limit 2 follow users.id -> orders.user_id as orders",
+            "get users order by name limit 2 follow users._id -> orders.user_id as orders",
             "testdb");
 
         Assert.NotNull(r.Data);

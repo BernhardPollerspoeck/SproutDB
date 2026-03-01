@@ -55,13 +55,13 @@ public class GetParserTests
     [Fact]
     public void GetWithSelect_IncludesId()
     {
-        var result = QueryParser.Parse("get users select id, name");
+        var result = QueryParser.Parse("get users select _id, name");
 
         Assert.True(result.Success);
         var q = Assert.IsType<GetQuery>(result.Query);
         Assert.NotNull(q.Select);
         Assert.Equal(2, q.Select.Count);
-        Assert.Equal("id", q.Select[0].Name);
+        Assert.Equal("_id", q.Select[0].Name);
         Assert.Equal("name", q.Select[1].Name);
     }
 

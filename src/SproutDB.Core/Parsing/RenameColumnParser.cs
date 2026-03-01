@@ -33,7 +33,7 @@ internal static class RenameColumnParser
         var oldColName = ctx.GetLowercaseText(oldColToken);
         ctx.Advance();
 
-        if (oldColName == "id")
+        if (oldColName == "_id")
             return ctx.Error(oldColToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.RESERVED_COLUMN_NAME_ID);
 
         // "to" keyword
@@ -51,7 +51,7 @@ internal static class RenameColumnParser
         var newColName = ctx.GetLowercaseText(newColToken);
         ctx.Advance();
 
-        if (newColName == "id")
+        if (newColName == "_id")
             return ctx.Error(newColToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.RESERVED_COLUMN_NAME_ID);
 
         ctx.ExpectEof();

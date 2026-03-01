@@ -67,10 +67,10 @@ public class AlterColumnParserTests
     [Fact]
     public void IdReserved_Error()
     {
-        var result = QueryParser.Parse("alter column users.id string 100");
+        var result = QueryParser.Parse("alter column users._id string 100");
 
         Assert.False(result.Success);
-        Assert.Contains("'id' is reserved", result.Errors![0].Message);
+        Assert.Contains("'_id' is reserved", result.Errors![0].Message);
     }
 
     [Fact]

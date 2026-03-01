@@ -58,7 +58,7 @@ internal static class WhereEngine
 
             case NullCheckNode n:
             {
-                ColumnHandle? handle = n.Column == "id" ? null : table.GetColumn(n.Column);
+                ColumnHandle? handle = n.Column == "_id" ? null : table.GetColumn(n.Column);
                 return new NullFilter { Handle = handle, IsNot = n.IsNot };
             }
 
@@ -87,7 +87,7 @@ internal static class WhereEngine
 
     private static InFilter PrepareInFilter(TableHandle table, InNode i)
     {
-        if (i.Column == "id")
+        if (i.Column == "_id")
         {
             var idValues = new List<ulong>(i.Values.Count);
             foreach (var v in i.Values)
@@ -104,7 +104,7 @@ internal static class WhereEngine
 
     private static CompareFilter PrepareCompareFilter(TableHandle table, CompareNode c)
     {
-        if (c.Column == "id")
+        if (c.Column == "_id")
         {
             var idValue = ulong.Parse(c.Value);
             ulong idValue2 = IsBetweenOp(c.Operator) && c.Value2 is not null
@@ -263,7 +263,7 @@ internal static class WhereEngine
                 return ValidateCompare(table, c);
 
             case NullCheckNode n:
-                if (n.Column != "id" && !table.HasColumn(n.Column))
+                if (n.Column != "_id" && !table.HasColumn(n.Column))
                     return [new SproutError
                     {
                         Code = ErrorCodes.UNKNOWN_COLUMN,
@@ -283,7 +283,7 @@ internal static class WhereEngine
                 return ValidateWhereNode(table, not.Inner);
 
             case InNode i:
-                if (i.Column != "id" && !table.HasColumn(i.Column))
+                if (i.Column != "_id" && !table.HasColumn(i.Column))
                     return [new SproutError
                     {
                         Code = ErrorCodes.UNKNOWN_COLUMN,
@@ -299,7 +299,7 @@ internal static class WhereEngine
 
     private static List<SproutError>? ValidateCompare(TableHandle table, CompareNode c)
     {
-        if (c.Column != "id" && !table.HasColumn(c.Column))
+        if (c.Column != "_id" && !table.HasColumn(c.Column))
             return [new SproutError
             {
                 Code = ErrorCodes.UNKNOWN_COLUMN,
@@ -309,11 +309,11 @@ internal static class WhereEngine
 
         if (IsStringOp(c.Operator))
         {
-            if (c.Column == "id")
+            if (c.Column == "_id")
                 return [new SproutError
                 {
                     Code = ErrorCodes.TYPE_MISMATCH,
-                    Message = $"'{OpName(c.Operator)}' cannot be used on 'id'",
+                    Message = $"'{OpName(c.Operator)}' cannot be used on '_id'",
                     Position = c.ColumnPosition, Length = c.ColumnLength,
                 }];
 
@@ -356,12 +356,12 @@ internal static class WhereEngine
         switch (node)
         {
             case CompareNode c:
-                if (c.Column != "id")
+                if (c.Column != "_id")
                     columns.Add(c.Column);
                 break;
 
             case NullCheckNode n:
-                if (n.Column != "id")
+                if (n.Column != "_id")
                     columns.Add(n.Column);
                 break;
 
@@ -375,7 +375,7 @@ internal static class WhereEngine
                 break;
 
             case InNode i:
-                if (i.Column != "id")
+                if (i.Column != "_id")
                     columns.Add(i.Column);
                 break;
         }

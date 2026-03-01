@@ -76,7 +76,7 @@ public class OrderByLimitTests : IDisposable
     [Fact]
     public void OrderBy_Id()
     {
-        var r = _engine.Execute("get users order by id desc", "testdb");
+        var r = _engine.Execute("get users order by _id desc", "testdb");
 
         Assert.Equal(["Diana", "Charlie", "Bob", "Alice"], GetNames(r));
     }

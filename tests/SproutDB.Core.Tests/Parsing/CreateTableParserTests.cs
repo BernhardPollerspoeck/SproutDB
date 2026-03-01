@@ -194,9 +194,9 @@ public class CreateTableParserTests
     [Fact]
     public void ReservedColumnName_Id_Error()
     {
-        var result = QueryParser.Parse("create table t (id string)");
+        var result = QueryParser.Parse("create table t (_id string)");
         Assert.False(result.Success);
-        Assert.Contains("'id' is reserved", result.Errors![0].Message);
+        Assert.Contains("'_id' is reserved", result.Errors![0].Message);
     }
 
     [Fact]

@@ -26,8 +26,8 @@ public class SproutResponseTests
             Operation = SproutOperation.Get,
             Data =
             [
-                new() { ["id"] = 1ul, ["name"] = "John", ["age"] = (byte)25 },
-                new() { ["id"] = 2ul, ["name"] = "Jane", ["age"] = (byte)30 },
+                new() { ["_id"] = 1ul, ["name"] = "John", ["age"] = (byte)25 },
+                new() { ["_id"] = 2ul, ["name"] = "Jane", ["age"] = (byte)30 },
             ],
             Affected = 2,
         };
@@ -52,7 +52,7 @@ public class SproutResponseTests
             [
                 new()
                 {
-                    ["id"] = 1ul,
+                    ["_id"] = 1ul,
                     ["name"] = "John",
                     ["email"] = "john@test.com",
                     ["age"] = (byte)25,
@@ -117,7 +117,7 @@ public class SproutResponseTests
                 Table = "users",
                 Columns =
                 [
-                    new() { Name = "id", Type = "ulong", Nullable = false, Strict = true, Auto = true },
+                    new() { Name = "_id", Type = "ulong", Nullable = false, Strict = true, Auto = true },
                     new() { Name = "name", Type = "string", Size = 255, Nullable = true, Strict = false },
                     new() { Name = "email", Type = "string", Size = 320, Nullable = true, Strict = true },
                     new() { Name = "active", Type = "bool", Nullable = false, Default = "true", Strict = false },
@@ -132,7 +132,7 @@ public class SproutResponseTests
         Assert.Equal(4, response.Schema.Columns.Count);
 
         var idCol = response.Schema.Columns[0];
-        Assert.Equal("id", idCol.Name);
+        Assert.Equal("_id", idCol.Name);
         Assert.Equal("ulong", idCol.Type);
         Assert.False(idCol.Nullable);
         Assert.True(idCol.Strict);
@@ -168,7 +168,7 @@ public class SproutResponseTests
         var response = new SproutResponse
         {
             Operation = SproutOperation.Get,
-            Data = [new() { ["id"] = 1ul }],
+            Data = [new() { ["_id"] = 1ul }],
             Affected = 100,
             Paging = new PagingInfo
             {
@@ -192,7 +192,7 @@ public class SproutResponseTests
         var response = new SproutResponse
         {
             Operation = SproutOperation.Get,
-            Data = [new() { ["id"] = 1ul }],
+            Data = [new() { ["_id"] = 1ul }],
             Affected = 23,
             Paging = new PagingInfo
             {
@@ -235,7 +235,7 @@ public class SproutResponseTests
             Operation = SproutOperation.Get,
             Data =
             [
-                new() { ["id"] = 1ul, ["name"] = "John", ["email"] = null },
+                new() { ["_id"] = 1ul, ["name"] = "John", ["email"] = null },
             ],
             Affected = 1,
         };

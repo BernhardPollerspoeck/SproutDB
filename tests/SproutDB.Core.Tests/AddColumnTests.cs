@@ -39,8 +39,8 @@ public class AddColumnTests : IDisposable
         var r = _engine.Execute("add column users.email string 320", "testdb");
 
         var cols = r.Schema!.Columns!;
-        Assert.Equal(4, cols.Count); // id + name + age + email
-        Assert.Equal("id", cols[0].Name);
+        Assert.Equal(4, cols.Count); // _id + name + age + email
+        Assert.Equal("_id", cols[0].Name);
         Assert.Equal("name", cols[1].Name);
         Assert.Equal("age", cols[2].Name);
         Assert.Equal("email", cols[3].Name);
@@ -98,10 +98,10 @@ public class AddColumnTests : IDisposable
         _engine.Execute("add column users.active bool default true", "testdb");
 
         // Update row 1 to read it back — active should be true (backfilled)
-        var r = _engine.Execute("upsert users {id: 1, name: 'John'}", "testdb");
+        var r = _engine.Execute("upsert users {_id: 1, name: 'John'}", "testdb");
         Assert.Equal(true, r.Data![0]["active"]);
 
-        var r2 = _engine.Execute("upsert users {id: 2, name: 'Jane'}", "testdb");
+        var r2 = _engine.Execute("upsert users {_id: 2, name: 'Jane'}", "testdb");
         Assert.Equal(true, r2.Data![0]["active"]);
     }
 
@@ -112,7 +112,7 @@ public class AddColumnTests : IDisposable
         _engine.Execute("add column users.email string 320", "testdb");
 
         // Read back via update
-        var r = _engine.Execute("upsert users {id: 1, name: 'John'}", "testdb");
+        var r = _engine.Execute("upsert users {_id: 1, name: 'John'}", "testdb");
         Assert.Null(r.Data![0]["email"]);
     }
 

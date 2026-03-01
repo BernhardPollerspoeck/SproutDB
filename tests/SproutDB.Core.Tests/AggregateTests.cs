@@ -262,7 +262,7 @@ public class AggregateTests : IDisposable
     [Fact]
     public void Max_Id()
     {
-        var r = _engine.Execute("get orders max id", "testdb");
+        var r = _engine.Execute("get orders max _id", "testdb");
 
         Assert.Equal(5ul, (ulong)r.Data![0]["max"]!);
     }
@@ -270,7 +270,7 @@ public class AggregateTests : IDisposable
     [Fact]
     public void Min_Id()
     {
-        var r = _engine.Execute("get orders min id", "testdb");
+        var r = _engine.Execute("get orders min _id", "testdb");
 
         Assert.Equal(1ul, (ulong)r.Data![0]["min"]!);
     }
