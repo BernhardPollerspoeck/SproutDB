@@ -22,15 +22,22 @@ public class SproutOperationTests
     [InlineData(SproutOperation.PurgeIndex, 14)]
     [InlineData(SproutOperation.Backup, 15)]
     [InlineData(SproutOperation.Restore, 16)]
+    [InlineData(SproutOperation.CreateApiKey, 17)]
+    [InlineData(SproutOperation.PurgeApiKey, 18)]
+    [InlineData(SproutOperation.RotateApiKey, 19)]
+    [InlineData(SproutOperation.Grant, 20)]
+    [InlineData(SproutOperation.Revoke, 21)]
+    [InlineData(SproutOperation.Restrict, 22)]
+    [InlineData(SproutOperation.Unrestrict, 23)]
     public void Operation_HasCorrectByteValue(SproutOperation operation, byte expected)
     {
         Assert.Equal(expected, (byte)operation);
     }
 
     [Fact]
-    public void Operation_HasExactly17Members()
+    public void Operation_HasExactly24Members()
     {
         var values = Enum.GetValues<SproutOperation>();
-        Assert.Equal(17, values.Length);
+        Assert.Equal(24, values.Length);
     }
 }

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using SproutDB.Core.Auth;
 using SproutDB.Core.Server;
 
 namespace SproutDB.Core.DependencyInjection;
@@ -21,7 +22,11 @@ public static class SproutServiceCollectionExtensions
         var settings = builder.Build();
 
         services.AddSingleton(settings);
-        services.AddSingleton<SproutEngine>();
+        services.AddSingleton(sp =>
+        {
+            var authOptions = sp.GetService<SproutAuthOptions>();
+            return new SproutEngine(sp.GetRequiredService<SproutEngineSettings>(), authOptions);
+        });
         services.AddSingleton<ISproutServer>(sp => sp.GetRequiredService<SproutEngine>());
 
         if (builder.Migrations.Count > 0)
@@ -34,6 +39,20 @@ public static class SproutServiceCollectionExtensions
             services.AddHostedService<SproutMigrationHostedService>();
         }
 
+        return services;
+    }
+
+    /// <summary>
+    /// Enables authentication for SproutDB.
+    /// Must be called after <see cref="AddSproutDB"/>.
+    /// </summary>
+    public static IServiceCollection AddSproutDBAuth(
+        this IServiceCollection services,
+        Action<SproutAuthOptions> configure)
+    {
+        var options = new SproutAuthOptions { MasterKey = "" };
+        configure(options);
+        services.AddSingleton(options);
         return services;
     }
 }

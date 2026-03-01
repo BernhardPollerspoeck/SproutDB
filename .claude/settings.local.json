@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet test:*)",
+      "Bash(dotnet build --nologo -v q)",
+      "Bash(dotnet build tests/SproutDB.Core.Tests/ --nologo -v q)",
+      "Bash(dotnet sln add tests/TestMigrations.Schema/TestMigrations.Schema.csproj tests/TestMigrations.Startup/TestMigrations.Startup.csproj tests/TestMigrations.Failing/TestMigrations.Failing.csproj)",
+      "Bash(dotnet build --no-restore)",
+      "Bash(dotnet build src/SproutDB.Core/ --nologo -v q)",
+      "Bash(dotnet build src/SproutDB.Core/ --no-restore)",
+      "Bash(xargs grep -l \"IQueryable\\\\|Expression\\\\|Linq\")",
+      "Bash(dotnet build:*)"
+    ]
+  }
+}

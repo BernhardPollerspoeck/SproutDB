@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Reflection;
 using System.Threading.Channels;
+using SproutDB.Core.Auth;
 using SproutDB.Core.AutoIndex;
 using SproutDB.Core.Execution;
 using SproutDB.Core.Parsing;
@@ -21,6 +22,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     private readonly TableCache _tableCache;
     private readonly WalManager _walManager = new();
     private readonly IndexMetricsStore _indexMetrics = new();
+    private readonly SproutAuthService? _authService;
 
     // Writer channel
     private readonly Channel<Action> _writeChannel;
@@ -44,7 +46,32 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     /// Creates a new SproutDB engine with the specified settings.
     /// </summary>
     public SproutEngine(SproutEngineSettings settings)
+        : this(settings, null)
     {
+    }
+
+    /// <summary>
+    /// Creates a new SproutDB engine with settings and optional auth configuration.
+    /// Used by DI when <see cref="SproutAuthOptions"/> is registered.
+    /// </summary>
+    public SproutEngine(SproutEngineSettings settings, SproutAuthOptions? authOptions)
+    {
+        // Merge MasterKey from auth options into settings if not already set
+        if (authOptions is not null && settings.MasterKey is null)
+        {
+            settings = new SproutEngineSettings
+            {
+                DataDirectory = settings.DataDirectory,
+                FlushInterval = settings.FlushInterval,
+                WalSyncInterval = settings.WalSyncInterval,
+                BulkLimit = settings.BulkLimit,
+                DefaultPageSize = settings.DefaultPageSize,
+                ChunkSize = settings.ChunkSize,
+                AutoIndex = settings.AutoIndex,
+                MasterKey = authOptions.MasterKey,
+            };
+        }
+
         _settings = settings;
         _dataDirectory = Path.GetFullPath(settings.DataDirectory);
         _tableCache = new TableCache(settings.ChunkSize);
@@ -58,6 +85,13 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         // ── Ensure _system database exists ────────────────────────
         EnsureSystemDatabase();
         LoadIndexMetrics();
+
+        // ── Initialize auth if configured ────────────────────────
+        if (settings.MasterKey is not null)
+        {
+            _authService = new SproutAuthService();
+            _authService.Initialize(this, settings.MasterKey);
+        }
 
         // ── Start writer channel ─────────────────────────────────
         _writeChannel = Channel.CreateUnbounded<Action>(new UnboundedChannelOptions
@@ -74,6 +108,16 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         _flushTask = RunFlushCycle(settings.FlushInterval);
         _walSyncTask = RunWalSyncCycle(_walSyncInterval);
     }
+
+    /// <summary>
+    /// Auth service instance (null if auth is not configured).
+    /// </summary>
+    internal SproutAuthService? AuthService => _authService;
+
+    /// <summary>
+    /// Engine settings (needed by endpoint layer for MasterKey, BulkLimit).
+    /// </summary>
+    internal SproutEngineSettings Settings => _settings;
 
     /// <summary>
     /// Executes a query against the specified database.
@@ -96,6 +140,10 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         var parsedQuery = parseResult.Query;
         if (parsedQuery is null)
             return ResponseHelper.ParseError(parseResult);
+
+        // Auth queries bypass normal routing and write protection
+        if (SproutAuthService.IsAuthQuery(parsedQuery))
+            return PostWrite(() => ExecuteAuthQuery(query, parsedQuery));
 
         // Reads bypass the channel → run directly on caller thread
         if (parsedQuery is GetQuery getQuery)
@@ -286,6 +334,33 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             new() { Name = "operation", Type = "string", Size = 64, EntrySize = 65, Nullable = false, Strict = true },
         ]);
 
+        // Ensure _api_keys table
+        EnsureSystemTable(systemDbPath, "_api_keys",
+        [
+            new() { Name = "name", Type = "string", Size = 128, EntrySize = 129, Nullable = false, Strict = true },
+            new() { Name = "key_prefix", Type = "string", Size = 16, EntrySize = 17, Nullable = false, Strict = true },
+            new() { Name = "key_hash", Type = "string", Size = 128, EntrySize = 129, Nullable = false, Strict = true },
+            new() { Name = "created_at", Type = "datetime", Size = 8, EntrySize = 9, Nullable = false },
+            new() { Name = "last_used_at", Type = "datetime", Size = 8, EntrySize = 9, Nullable = true },
+        ]);
+
+        // Ensure _api_permissions table
+        EnsureSystemTable(systemDbPath, "_api_permissions",
+        [
+            new() { Name = "key_name", Type = "string", Size = 128, EntrySize = 129, Nullable = false, Strict = true },
+            new() { Name = "database", Type = "string", Size = 128, EntrySize = 129, Nullable = false, Strict = true },
+            new() { Name = "role", Type = "string", Size = 16, EntrySize = 17, Nullable = false, Strict = true },
+        ]);
+
+        // Ensure _api_restrictions table
+        EnsureSystemTable(systemDbPath, "_api_restrictions",
+        [
+            new() { Name = "key_name", Type = "string", Size = 128, EntrySize = 129, Nullable = false, Strict = true },
+            new() { Name = "database", Type = "string", Size = 128, EntrySize = 129, Nullable = false, Strict = true },
+            new() { Name = "table", Type = "string", Size = 128, EntrySize = 129, Nullable = false, Strict = true },
+            new() { Name = "role", Type = "string", Size = 16, EntrySize = 17, Nullable = false, Strict = true },
+        ]);
+
         // Ensure index_metrics table
         EnsureSystemTable(systemDbPath, "index_metrics",
         [
@@ -347,6 +422,58 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
         _tableCache.GetOrOpen(tablePath);
     }
+
+    // ── Auth query execution ────────────────────────────────
+
+    private SproutResponse ExecuteAuthQuery(string query, IQuery parsedQuery)
+    {
+        var systemDbPath = Path.Combine(_dataDirectory, "_system");
+
+        var apiKeysPath = Path.Combine(systemDbPath, "_api_keys");
+        var apiPermissionsPath = Path.Combine(systemDbPath, "_api_permissions");
+        var apiRestrictionsPath = Path.Combine(systemDbPath, "_api_restrictions");
+
+        if (!_tableCache.TryGetTable(apiKeysPath, out var apiKeysTable) || apiKeysTable is null)
+            return ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, "auth system tables not initialized");
+
+        if (!_tableCache.TryGetTable(apiPermissionsPath, out var apiPermissionsTable) || apiPermissionsTable is null)
+            return ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, "auth system tables not initialized");
+
+        if (!_tableCache.TryGetTable(apiRestrictionsPath, out var apiRestrictionsTable) || apiRestrictionsTable is null)
+            return ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, "auth system tables not initialized");
+
+        if (_authService is null)
+            return ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, "auth is not configured");
+
+        var result = parsedQuery switch
+        {
+            CreateApiKeyQuery q => CreateApiKeyExecutor.Execute(query, q, apiKeysTable, _authService, _settings.BulkLimit),
+            PurgeApiKeyQuery q => PurgeApiKeyExecutor.Execute(query, q, apiKeysTable, apiPermissionsTable, apiRestrictionsTable, _authService, _settings.BulkLimit),
+            RotateApiKeyQuery q => RotateApiKeyExecutor.Execute(query, q, apiKeysTable, _authService, _settings.BulkLimit),
+            GrantQuery q => GrantExecutor.Execute(query, q, apiPermissionsTable, _authService, _settings.BulkLimit),
+            RevokeQuery q => RevokeExecutor.Execute(query, q, apiPermissionsTable, apiRestrictionsTable, _authService, _settings.BulkLimit),
+            RestrictQuery q => RestrictExecutor.Execute(query, q, apiRestrictionsTable, _authService, _settings.BulkLimit),
+            UnrestrictQuery q => UnrestrictExecutor.Execute(query, q, apiRestrictionsTable, _authService, _settings.BulkLimit),
+            _ => ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, "unknown auth operation"),
+        };
+
+        if (result.Errors is null)
+            LogAudit(null, query, GetAuthOperation(parsedQuery) ?? "auth");
+
+        return result;
+    }
+
+    private static string? GetAuthOperation(IQuery query) => query switch
+    {
+        CreateApiKeyQuery => "create_apikey",
+        PurgeApiKeyQuery => "purge_apikey",
+        RotateApiKeyQuery => "rotate_apikey",
+        GrantQuery => "grant",
+        RevokeQuery => "revoke",
+        RestrictQuery => "restrict",
+        UnrestrictQuery => "unrestrict",
+        _ => null,
+    };
 
     // ── Audit logging ────────────────────────────────────────
 

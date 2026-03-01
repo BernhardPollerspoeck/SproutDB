@@ -87,7 +87,7 @@ public class QueryParserTests
         var result = QueryParser.Parse("create");
 
         Assert.False(result.Success);
-        Assert.Contains("expected 'database', 'table' or 'index'", result.Errors![0].Message);
+        Assert.Contains("expected 'database', 'table', 'index' or 'apikey'", result.Errors![0].Message);
     }
 
     [Fact]
@@ -96,7 +96,7 @@ public class QueryParserTests
         var result = QueryParser.Parse("create schema");
 
         Assert.False(result.Success);
-        Assert.Contains("expected 'database', 'table' or 'index'", result.Errors![0].Message);
+        Assert.Contains("expected 'database', 'table', 'index' or 'apikey'", result.Errors![0].Message);
         Assert.Contains("schema ##", result.AnnotatedQuery!);
     }
 

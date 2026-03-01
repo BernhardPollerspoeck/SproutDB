@@ -17,4 +17,9 @@ internal static class ErrorCodes
     public const string INDEX_EXISTS = "INDEX_EXISTS";
     public const string INDEX_NOT_FOUND = "INDEX_NOT_FOUND";
     public const string PROTECTED_NAME = "PROTECTED_NAME";
+    public const string AUTH_REQUIRED = "AUTH_REQUIRED";
+    public const string AUTH_INVALID = "AUTH_INVALID";
+    public const string PERMISSION_DENIED = "PERMISSION_DENIED";
+    public const string KEY_EXISTS = "KEY_EXISTS";
+    public const string KEY_NOT_FOUND = "KEY_NOT_FOUND";
 }

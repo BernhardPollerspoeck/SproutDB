@@ -21,6 +21,9 @@ internal static class PurgeParser
         if (ctx.MatchKeyword("index"))
             return ParseIndex(ctx);
 
+        if (ctx.MatchKeyword("apikey"))
+            return PurgeApiKeyParser.Parse(ctx);
+
         return ctx.Error(current, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_PURGE_TARGET);
     }
 

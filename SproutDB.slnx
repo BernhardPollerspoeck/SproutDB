@@ -10,6 +10,7 @@
   </Folder>
   <Folder Name="/01_Files/">
     <File Path="sproutdb-api-reference.md" />
+    <File Path="sproutdb-auth-design.md" />
     <File Path="sproutdb-autoindex-design.md" />
     <File Path="sproutdb-comparison.md" />
     <File Path="sproutdb-consors-briefing.md" />

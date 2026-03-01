@@ -22,4 +22,11 @@ public enum SproutOperation : byte
     PurgeIndex = 14,
     Backup = 15,
     Restore = 16,
+    CreateApiKey = 17,
+    PurgeApiKey = 18,
+    RotateApiKey = 19,
+    Grant = 20,
+    Revoke = 21,
+    Restrict = 22,
+    Unrestrict = 23,
 }

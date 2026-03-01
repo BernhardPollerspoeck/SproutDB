@@ -53,4 +53,10 @@ public sealed class SproutEngineSettings
     /// Configuration for automatic index creation and removal.
     /// </summary>
     public AutoIndexSettings AutoIndex { get; init; } = new();
+
+    /// <summary>
+    /// Master API key for auth bootstrap (key management, grants).
+    /// Null means auth is disabled (all queries allowed without key).
+    /// </summary>
+    public string? MasterKey { get; init; }
 }

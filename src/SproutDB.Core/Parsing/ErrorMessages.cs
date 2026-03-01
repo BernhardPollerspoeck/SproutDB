@@ -6,10 +6,10 @@ internal static class ErrorMessages
         "expected a command";
 
     public const string UNKNOWN_COMMAND =
-        "unknown command, expected 'create', 'get', 'upsert', 'delete', 'add', 'describe', 'purge', 'rename', 'alter', 'backup' or 'restore'";
+        "unknown command, expected 'create', 'get', 'upsert', 'delete', 'add', 'describe', 'purge', 'rename', 'alter', 'backup', 'restore', 'grant', 'revoke', 'restrict', 'unrestrict' or 'rotate'";
 
     public const string EXPECTED_CREATE_TARGET =
-        "expected 'database', 'table' or 'index'";
+        "expected 'database', 'table', 'index' or 'apikey'";
 
     public const string UNEXPECTED_TOKEN_EXPECTED_EOF =
         "unexpected token, expected end of query";
@@ -54,7 +54,7 @@ internal static class ErrorMessages
         "expected '.'";
 
     public const string EXPECTED_PURGE_TARGET =
-        "expected 'column', 'table', 'database' or 'index'";
+        "expected 'column', 'table', 'database', 'index' or 'apikey'";
 
     public const string EXPECTED_TO_KEYWORD =
         "expected 'to'";

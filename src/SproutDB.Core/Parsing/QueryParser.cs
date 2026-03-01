@@ -54,6 +54,21 @@ internal static class QueryParser
         if (ctx.MatchKeyword("delete"))
             return DeleteParser.Parse(ctx);
 
+        if (ctx.MatchKeyword("grant"))
+            return GrantParser.Parse(ctx);
+
+        if (ctx.MatchKeyword("revoke"))
+            return RevokeParser.Parse(ctx);
+
+        if (ctx.MatchKeyword("restrict"))
+            return RestrictParser.Parse(ctx);
+
+        if (ctx.MatchKeyword("unrestrict"))
+            return UnrestrictParser.Parse(ctx);
+
+        if (ctx.MatchKeyword("rotate"))
+            return ParseRotate(ctx);
+
         return ctx.Error(current, ErrorCodes.SYNTAX_ERROR, ErrorMessages.UNKNOWN_COMMAND);
     }
 
@@ -73,6 +88,22 @@ internal static class QueryParser
         if (ctx.MatchKeyword("index"))
             return CreateIndexParser.Parse(ctx);
 
+        if (ctx.MatchKeyword("apikey"))
+            return CreateApiKeyParser.Parse(ctx);
+
         return ctx.Error(current, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_CREATE_TARGET);
+    }
+
+    private static ParseResult ParseRotate(ParserContext ctx)
+    {
+        var current = ctx.Peek();
+
+        if (current.Type == TokenType.Eof)
+            return ctx.Error(current, ErrorCodes.SYNTAX_ERROR, "expected 'apikey'");
+
+        if (ctx.MatchKeyword("apikey"))
+            return RotateApiKeyParser.Parse(ctx);
+
+        return ctx.Error(current, ErrorCodes.SYNTAX_ERROR, "expected 'apikey'");
     }
 }

@@ -21,6 +21,8 @@ public sealed class SproutEngineSettingsBuilder
     public void AddMigrations<TMarker>(string database)
         => Migrations.Add((typeof(TMarker).Assembly, database));
 
+    public string? MasterKey { get; set; }
+
     internal SproutEngineSettings Build() => new()
     {
         DataDirectory = DataDirectory,
@@ -30,5 +32,6 @@ public sealed class SproutEngineSettingsBuilder
         DefaultPageSize = DefaultPageSize,
         ChunkSize = ChunkSize,
         AutoIndex = AutoIndex,
+        MasterKey = MasterKey,
     };
 }
