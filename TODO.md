@@ -30,12 +30,12 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 
 ## Delete
 
-- [ ] #017 `delete users where age < 18` – DELETE mit WHERE. Löscht alle Rows die matchen. Response enthält `affected_rows`.
-- [ ] #018 `delete users where id = 5` – DELETE by ID.
-- [ ] #019 `delete users` (ohne WHERE) → Fehler `WHERE_REQUIRED`. Verhindert versehentliches Löschen aller Rows.
-- [ ] #020 DELETE setzt Flag-Byte in jeder betroffenen Column auf 0x00 (gelöscht). Kein physisches Löschen, Platz wird bei nächstem Upsert wiederverwendet.
-- [ ] #021 Free-List: Gelöschte Row-Positionen in einer Free-List (im Index-File oder separates File). Upsert prüft Free-List zuerst bevor neuer Platz alloziert wird.
-- [ ] #022 DELETE + WAL: Delete-Query wird ins WAL geschrieben. Bei Replay: idempotent (bereits gelöschte Rows erneut löschen = no-op).
+- [x] #017 `delete users where age < 18` – DELETE mit WHERE. Löscht alle Rows die matchen. Response enthält `affected_rows`.
+- [x] #018 `delete users where id = 5` – DELETE by ID.
+- [x] #019 `delete users` (ohne WHERE) → Fehler `WHERE_REQUIRED`. Verhindert versehentliches Löschen aller Rows.
+- [x] #020 DELETE setzt Flag-Byte in jeder betroffenen Column auf 0x00 (gelöscht). Kein physisches Löschen, Platz wird bei nächstem Upsert wiederverwendet.
+- [x] #021 Free-List: Gelöschte Row-Positionen in einer Free-List (im Index-File oder separates File). Upsert prüft Free-List zuerst bevor neuer Platz alloziert wird.
+- [x] #022 DELETE + WAL: Delete-Query wird ins WAL geschrieben. Bei Replay: idempotent (bereits gelöschte Rows erneut löschen = no-op).
 
 ---
 
@@ -97,6 +97,12 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 - [ ] #113 LINQ: `users.Upsert(new User { ... }, on: u => u.Email)` – Upsert mit Match-Column.
 - [ ] #114 LINQ: `users.Upsert(new[] { user1, user2 }, on: u => u.Email)` – Bulk Upsert.
 - [ ] #115 LINQ: `users.Delete(u => u.Active == false)` – Typed Delete.
+
+---
+
+## Tests
+
+- [ ] Test-Suite optimieren — dauert aktuell 6-10 Minuten, muss deutlich schneller werden
 
 ---
 

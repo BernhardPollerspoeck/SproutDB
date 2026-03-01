@@ -5,6 +5,7 @@ namespace SproutDB.Core.Storage;
 internal sealed class IndexHandle : IDisposable
 {
     private readonly string _path;
+    private readonly Queue<long> _freePlaces = new();
     private FileStream _fs;
     private MemoryMappedFile _mmf;
     private MemoryMappedViewAccessor _view;
@@ -65,22 +66,38 @@ internal sealed class IndexHandle : IDisposable
     }
 
     /// <summary>
-    /// Returns the next available place and advances the counter.
-    /// O(1) — the counter is initialized once on open via ScanMaxPlace().
+    /// Marks the given ID as deleted by writing 0 into the index slot.
+    /// </summary>
+    public void ClearPlace(ulong id)
+    {
+        var offset = (long)id * StorageConstants.INDEX_ENTRY_SIZE;
+        if (offset + StorageConstants.INDEX_ENTRY_SIZE <= _capacity)
+            _view.Write(offset, (long)0);
+    }
+
+    /// <summary>
+    /// Registers a freed place for reuse by future inserts.
+    /// </summary>
+    public void AddFreePlace(long place) => _freePlaces.Enqueue(place);
+
+    /// <summary>
+    /// Returns the next available place — reuses freed places first, then allocates new.
     /// </summary>
     public long FindNextPlace()
     {
-        return _nextPlace++;
+        return _freePlaces.Count > 0 ? _freePlaces.Dequeue() : _nextPlace++;
     }
 
     /// <summary>
     /// Scans all index entries to find the highest used place.
+    /// Also rebuilds the free-place queue by identifying gaps.
     /// Called once at open time to initialize _nextPlace.
     /// </summary>
     private long ScanMaxPlace()
     {
         long maxPlace = -1;
         var entries = _capacity / StorageConstants.INDEX_ENTRY_SIZE;
+        var usedPlaces = new HashSet<long>();
 
         for (long i = 1; i < entries; i++)
         {
@@ -88,9 +105,17 @@ internal sealed class IndexHandle : IDisposable
             if (storedValue > 0)
             {
                 var place = storedValue - 1;
+                usedPlaces.Add(place);
                 if (place > maxPlace)
                     maxPlace = place;
             }
+        }
+
+        // Rebuild free-place queue: any place in [0..maxPlace) not used is free
+        for (long p = 0; p < maxPlace; p++)
+        {
+            if (!usedPlaces.Contains(p))
+                _freePlaces.Enqueue(p);
         }
 
         return maxPlace;

@@ -51,6 +51,9 @@ internal static class QueryParser
         if (ctx.MatchKeyword("restore"))
             return RestoreParser.Parse(ctx);
 
+        if (ctx.MatchKeyword("delete"))
+            return DeleteParser.Parse(ctx);
+
         return ctx.Error(current, ErrorCodes.SYNTAX_ERROR, ErrorMessages.UNKNOWN_COMMAND);
     }
 

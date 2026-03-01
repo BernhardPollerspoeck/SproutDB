@@ -1203,4 +1203,54 @@ public class WhereParserTests
         Assert.Equal("amount", q.ComputedSelect[0].LeftColumn);
         Assert.Equal("tax", q.ComputedSelect[0].Alias);
     }
+
+    // ── DELETE ──────────────────────────────────────────────
+
+    [Fact]
+    public void Delete_Simple()
+    {
+        var result = QueryParser.Parse("delete users where age < 18");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<DeleteQuery>(result.Query);
+        Assert.Equal("users", q.Table);
+        var c = Assert.IsType<CompareNode>(q.Where);
+        Assert.Equal("age", c.Column);
+        Assert.Equal(CompareOp.LessThan, c.Operator);
+        Assert.Equal("18", c.Value);
+    }
+
+    [Fact]
+    public void Delete_ById()
+    {
+        var result = QueryParser.Parse("delete users where id = 5");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<DeleteQuery>(result.Query);
+        var c = Assert.IsType<CompareNode>(q.Where);
+        Assert.Equal("id", c.Column);
+        Assert.Equal(CompareOp.Equal, c.Operator);
+        Assert.Equal("5", c.Value);
+    }
+
+    [Fact]
+    public void Delete_WithoutWhere_Error()
+    {
+        var result = QueryParser.Parse("delete users");
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Errors!, e => e.Code == "WHERE_REQUIRED");
+    }
+
+    [Fact]
+    public void Delete_CaseInsensitive()
+    {
+        var result = QueryParser.Parse("DELETE Users WHERE Age > 30");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<DeleteQuery>(result.Query);
+        Assert.Equal("users", q.Table);
+        var c = Assert.IsType<CompareNode>(q.Where);
+        Assert.Equal("age", c.Column);
+    }
 }

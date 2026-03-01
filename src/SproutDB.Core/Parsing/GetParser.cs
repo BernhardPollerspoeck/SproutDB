@@ -246,7 +246,7 @@ internal static class GetParser
 
     // ── Where (recursive-descent: OR < AND < NOT < comparison) ──
 
-    private static WhereNode? ParseWhere(ParserContext ctx)
+    internal static WhereNode? ParseWhere(ParserContext ctx)
     {
         return ParseOrExpr(ctx);
     }

@@ -300,7 +300,7 @@ public sealed class SproutEngine : IDisposable
     {
         return query is CreateTableQuery or UpsertQuery or AddColumnQuery
             or PurgeColumnQuery or PurgeTableQuery or PurgeDatabaseQuery
-            or RenameColumnQuery or AlterColumnQuery;
+            or RenameColumnQuery or AlterColumnQuery or DeleteQuery;
     }
 
     /// <summary>
@@ -368,6 +368,7 @@ public sealed class SproutEngine : IDisposable
             PurgeDatabaseQuery => ExecutePurgeDatabase(query, dbName, dbPath),
             RenameColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => RenameColumnExecutor.Execute(query, table, q)),
             AlterColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => AlterColumnExecutor.Execute(query, table, q)),
+            DeleteQuery q => ExecuteWithTable(query, dbPath, q.Table, table => DeleteExecutor.Execute(query, table, q)),
             _ => ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, "operation not supported"),
         };
     }
