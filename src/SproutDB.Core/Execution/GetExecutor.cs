@@ -23,6 +23,24 @@ internal static class GetExecutor
             }
         }
 
+        // Validate computed select columns
+        if (q.ComputedSelect is not null)
+        {
+            foreach (var comp in q.ComputedSelect)
+            {
+                if (comp.LeftColumn != "id" && !table.HasColumn(comp.LeftColumn))
+                {
+                    validationErrors ??= [];
+                    validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{comp.LeftColumn}' does not exist", Position = comp.LeftPosition, Length = comp.LeftLength });
+                }
+                if (comp.RightColumn is not null && comp.RightColumn != "id" && !table.HasColumn(comp.RightColumn))
+                {
+                    validationErrors ??= [];
+                    validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{comp.RightColumn}' does not exist", Position = comp.RightPosition, Length = comp.RightLength });
+                }
+            }
+        }
+
         // Validate where tree
         if (q.Where is not null)
         {
@@ -30,12 +48,22 @@ internal static class GetExecutor
             validationErrors = MergeErrors(validationErrors, whereErrors);
         }
 
-        // Validate order by columns
-        if (q.OrderBy is not null)
+        // Validate order by columns (skip when group by or computed fields are active — result columns may be virtual)
+        if (q.OrderBy is not null && q.GroupBy is null)
         {
+            // Collect computed aliases so we don't reject them as unknown
+            HashSet<string>? computedAliases = null;
+            if (q.ComputedSelect is not null)
+            {
+                computedAliases = new HashSet<string>(q.ComputedSelect.Count);
+                foreach (var comp in q.ComputedSelect)
+                    computedAliases.Add(comp.Alias);
+            }
+
             foreach (var col in q.OrderBy)
             {
-                if (col.Name != "id" && !table.HasColumn(col.Name))
+                if (col.Name != "id" && !table.HasColumn(col.Name)
+                    && (computedAliases is null || !computedAliases.Contains(col.Name)))
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{col.Name}' does not exist", Position = col.Position, Length = col.Length });
@@ -96,8 +124,27 @@ internal static class GetExecutor
             }
         }
 
+        // Validate group by columns
+        if (q.GroupBy is not null)
+        {
+            foreach (var col in q.GroupBy)
+            {
+                if (col.Name != "id" && !table.HasColumn(col.Name))
+                {
+                    validationErrors ??= [];
+                    validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{col.Name}' does not exist", Position = col.Position, Length = col.Length });
+                }
+            }
+        }
+
         if (validationErrors is not null)
             return ResponseHelper.Errors(query, validationErrors);
+
+        // Grouped path: aggregate or count with group by
+        if (q.GroupBy is not null)
+        {
+            return ExecuteGrouped(table, q);
+        }
 
         // Aggregate path: compute aggregate directly, skip normal row projection
         if (q.Aggregate.HasValue && q.AggregateColumn is not null)
@@ -108,7 +155,27 @@ internal static class GetExecutor
         // Prepare where filter
         var filter = PrepareFilter(table, q.Where);
 
-        var data = ReadRows(table, q.Select, q.ExcludeSelect, filter).ToList();
+        // If computed fields reference columns not in select, include them temporarily
+        var extraColumns = ResolveExtraColumnsForComputed(q);
+        var effectiveSelect = MergeSelectWithExtra(q.Select, extraColumns);
+
+        var data = ReadRows(table, effectiveSelect, q.ExcludeSelect, filter).ToList();
+
+        // Compute and add computed field values
+        if (q.ComputedSelect is not null)
+        {
+            ApplyComputedColumns(data, q.ComputedSelect, table);
+
+            // Remove extra columns that were only needed for computation
+            if (extraColumns is not null)
+            {
+                foreach (var row in data)
+                {
+                    foreach (var extra in extraColumns)
+                        row.Remove(extra.Name);
+                }
+            }
+        }
 
         // Distinct: deduplicate based on projected column values
         if (q.IsDistinct)
@@ -271,6 +338,175 @@ internal static class GetExecutor
             Data = [row],
             Affected = 1,
         };
+    }
+
+    // ── Grouped (group by) ─────────────────────────────────────
+
+    private static SproutResponse ExecuteGrouped(TableHandle table, GetQuery q)
+    {
+        var filter = PrepareFilter(table, q.Where);
+        var groupByCols = q.GroupBy!; // validated non-null before call
+
+        // Build groups: key = composite of group-by values, value = list of (id, place)
+        var groups = BuildGroups(table, groupByCols, filter);
+
+        // Build result rows
+        var data = new List<Dictionary<string, object?>>(groups.Count);
+
+        if (q.Aggregate.HasValue && q.AggregateColumn is not null)
+        {
+            // Aggregate per group
+            var colName = q.AggregateColumn;
+            var fn = q.Aggregate.Value;
+            var alias = q.AggregateAlias ?? AggregateName(fn);
+            ColumnHandle? aggHandle = colName == "id" ? null : table.GetColumn(colName);
+
+            foreach (var (groupKey, members) in groups)
+            {
+                var row = new Dictionary<string, object?>(groupByCols.Count + 1);
+
+                // Add group-by column values from the first member
+                var (firstId, firstPlace) = members[0];
+                foreach (var col in groupByCols)
+                {
+                    if (col.Name == "id")
+                        row["id"] = firstId;
+                    else
+                        row[col.Name] = table.GetColumn(col.Name).ReadValue(firstPlace);
+                }
+
+                // Compute aggregate for this group
+                var values = new List<object>(members.Count);
+                foreach (var (id, place) in members)
+                {
+                    object? val = aggHandle is null ? (object)id : aggHandle.ReadValue(place);
+                    if (val is not null)
+                        values.Add(val);
+                }
+
+                row[alias] = fn switch
+                {
+                    AggregateFunction.Sum => ComputeSum(values),
+                    AggregateFunction.Avg => ComputeAvg(values),
+                    AggregateFunction.Min => ComputeMinMax(values, min: true),
+                    AggregateFunction.Max => ComputeMinMax(values, min: false),
+                    _ => null,
+                };
+
+                data.Add(row);
+            }
+        }
+        else if (q.IsCount)
+        {
+            // Count per group
+            foreach (var (groupKey, members) in groups)
+            {
+                var row = new Dictionary<string, object?>(groupByCols.Count + 1);
+
+                var (firstId, firstPlace) = members[0];
+                foreach (var col in groupByCols)
+                {
+                    if (col.Name == "id")
+                        row["id"] = firstId;
+                    else
+                        row[col.Name] = table.GetColumn(col.Name).ReadValue(firstPlace);
+                }
+
+                row["count"] = members.Count;
+                data.Add(row);
+            }
+        }
+        else
+        {
+            // group by without aggregate or count — just return distinct groups with count
+            foreach (var (groupKey, members) in groups)
+            {
+                var row = new Dictionary<string, object?>(groupByCols.Count + 1);
+
+                var (firstId, firstPlace) = members[0];
+                foreach (var col in groupByCols)
+                {
+                    if (col.Name == "id")
+                        row["id"] = firstId;
+                    else
+                        row[col.Name] = table.GetColumn(col.Name).ReadValue(firstPlace);
+                }
+
+                row["count"] = members.Count;
+                data.Add(row);
+            }
+        }
+
+        // Order by (on grouped results)
+        if (q.OrderBy is not null && q.OrderBy.Count > 0)
+        {
+            var orderColumns = q.OrderBy;
+            data.Sort((a, b) =>
+            {
+                foreach (var col in orderColumns)
+                {
+                    a.TryGetValue(col.Name, out var valA);
+                    b.TryGetValue(col.Name, out var valB);
+                    var cmp = CompareValues(valA, valB);
+                    if (col.Descending) cmp = -cmp;
+                    if (cmp != 0) return cmp;
+                }
+                return 0;
+            });
+        }
+
+        // Limit
+        if (q.Limit.HasValue)
+        {
+            data = data.Take(q.Limit.Value).ToList();
+        }
+
+        return new SproutResponse
+        {
+            Operation = SproutOperation.Get,
+            Data = data,
+            Affected = data.Count,
+        };
+    }
+
+    private static Dictionary<string, List<(ulong Id, long Place)>> BuildGroups(
+        TableHandle table, List<SelectColumn> groupByCols, FilterNode? filter)
+    {
+        var groups = new Dictionary<string, List<(ulong, long)>>();
+        var nextId = table.Index.ReadNextId();
+
+        // Resolve group-by column handles
+        var handles = new (string Name, ColumnHandle? Handle)[groupByCols.Count];
+        for (var i = 0; i < groupByCols.Count; i++)
+        {
+            var col = groupByCols[i];
+            handles[i] = (col.Name, col.Name == "id" ? null : table.GetColumn(col.Name));
+        }
+
+        for (ulong id = 1; id < nextId; id++)
+        {
+            var place = table.Index.ReadPlace(id);
+            if (place < 0) continue;
+            if (filter is not null && !EvaluateFilter(filter, id, place)) continue;
+
+            // Build group key from column values
+            var keyParts = new string[handles.Length];
+            for (var i = 0; i < handles.Length; i++)
+            {
+                object? val = handles[i].Handle is null ? (object)id : handles[i].Handle!.ReadValue(place);
+                keyParts[i] = val?.ToString() ?? "\0null";
+            }
+            var key = string.Join("\x1F", keyParts);
+
+            if (!groups.TryGetValue(key, out var list))
+            {
+                list = [];
+                groups[key] = list;
+            }
+            list.Add((id, place));
+        }
+
+        return groups;
     }
 
     // ── Follow (join) ─────────────────────────────────────────
@@ -887,4 +1123,132 @@ internal static class GetExecutor
 
     private static bool IsBetweenOp(CompareOp op) =>
         op is CompareOp.Between or CompareOp.NotBetween;
+
+    // ── Computed fields ────────────────────────────────────────
+
+    /// <summary>
+    /// Finds columns referenced by computed fields that are not already in the select list.
+    /// Returns null if no extra columns are needed.
+    /// </summary>
+    private static List<SelectColumn>? ResolveExtraColumnsForComputed(GetQuery q)
+    {
+        if (q.ComputedSelect is null)
+            return null;
+
+        var selectedNames = new HashSet<string>();
+        if (q.Select is not null)
+        {
+            foreach (var col in q.Select)
+                selectedNames.Add(col.Name);
+        }
+
+        List<SelectColumn>? extras = null;
+
+        foreach (var comp in q.ComputedSelect)
+        {
+            if (!selectedNames.Contains(comp.LeftColumn) && comp.LeftColumn != "id")
+            {
+                extras ??= [];
+                if (!extras.Exists(e => e.Name == comp.LeftColumn))
+                    extras.Add(new SelectColumn(comp.LeftColumn, comp.LeftPosition, comp.LeftLength));
+            }
+
+            if (comp.RightColumn is not null && !selectedNames.Contains(comp.RightColumn) && comp.RightColumn != "id")
+            {
+                extras ??= [];
+                if (!extras.Exists(e => e.Name == comp.RightColumn))
+                    extras.Add(new SelectColumn(comp.RightColumn, comp.RightPosition, comp.RightLength));
+            }
+        }
+
+        return extras;
+    }
+
+    private static List<SelectColumn>? MergeSelectWithExtra(List<SelectColumn>? select, List<SelectColumn>? extras)
+    {
+        if (extras is null)
+            return select;
+
+        var merged = new List<SelectColumn>((select?.Count ?? 0) + extras.Count);
+        if (select is not null)
+            merged.AddRange(select);
+        merged.AddRange(extras);
+        return merged;
+    }
+
+    private static void ApplyComputedColumns(
+        List<Dictionary<string, object?>> data,
+        List<ComputedColumn> computedColumns,
+        TableHandle table)
+    {
+        foreach (var row in data)
+        {
+            foreach (var comp in computedColumns)
+            {
+                row.TryGetValue(comp.LeftColumn, out var leftVal);
+
+                object? rightVal;
+                if (comp.RightColumn is not null)
+                {
+                    row.TryGetValue(comp.RightColumn, out rightVal);
+                }
+                else
+                {
+                    rightVal = comp.RightLiteral;
+                }
+
+                row[comp.Alias] = ComputeArithmetic(leftVal, rightVal, comp.Operator);
+            }
+        }
+    }
+
+    private static object? ComputeArithmetic(object? left, object? right, ArithmeticOp op)
+    {
+        if (left is null || right is null)
+            return null;
+
+        // If either is float/double, or division → use double
+        if (left is float or double || right is float or double || op == ArithmeticOp.Divide)
+        {
+            var l = Convert.ToDouble(left);
+            var r = Convert.ToDouble(right);
+            return op switch
+            {
+                ArithmeticOp.Add => l + r,
+                ArithmeticOp.Subtract => l - r,
+                ArithmeticOp.Multiply => l * r,
+                ArithmeticOp.Divide => r != 0 ? l / r : null,
+                _ => null,
+            };
+        }
+
+        // Integer arithmetic — use signed long if any operand is signed, otherwise ulong
+        var isSigned = left is sbyte or short or int or long
+                    || right is sbyte or short or int or long;
+
+        if (isSigned)
+        {
+            var l = Convert.ToInt64(left);
+            var r = Convert.ToInt64(right);
+            return op switch
+            {
+                ArithmeticOp.Add => l + r,
+                ArithmeticOp.Subtract => l - r,
+                ArithmeticOp.Multiply => l * r,
+                _ => null,
+            };
+        }
+        else
+        {
+            var l = Convert.ToUInt64(left);
+            var r = Convert.ToUInt64(right);
+            return op switch
+            {
+                ArithmeticOp.Add => l + r,
+                ArithmeticOp.Subtract => l - r,
+                ArithmeticOp.Multiply => l * r,
+                _ => null,
+            };
+        }
+    }
 }

@@ -47,13 +47,14 @@ internal static class GetParser
 
         // Optional: select / -select (mutually exclusive with aggregate)
         List<SelectColumn>? selectColumns = null;
+        List<ComputedColumn>? computedColumns = null;
         var excludeSelect = false;
 
         if (aggregate is null && ctx.Peek().Type != TokenType.Eof)
         {
             if (ctx.MatchKeyword("select"))
             {
-                selectColumns = ParseSelectList(ctx);
+                (selectColumns, computedColumns) = ParseSelectList(ctx);
                 if (ctx.HasErrors) return ctx.Fail();
             }
             else if (ctx.Peek().Type == TokenType.Minus)
@@ -64,7 +65,7 @@ internal static class GetParser
                 if (ctx.MatchKeyword("select"))
                 {
                     excludeSelect = true;
-                    selectColumns = ParseSelectList(ctx);
+                    (selectColumns, computedColumns) = ParseSelectList(ctx);
                     if (ctx.HasErrors) return ctx.Fail();
                 }
                 else
@@ -98,6 +99,26 @@ internal static class GetParser
             if (ctx.HasErrors) return ctx.Fail();
         }
 
+        // Optional: count
+        var isCount = false;
+        if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("count"))
+        {
+            isCount = true;
+        }
+
+        // Optional: group by col1, col2
+        List<SelectColumn>? groupBy = null;
+
+        if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("group"))
+        {
+            if (!ctx.MatchKeyword("by"))
+            {
+                return ctx.Error(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected 'by' after 'group'");
+            }
+            groupBy = ParseGroupByList(ctx);
+            if (ctx.HasErrors) return ctx.Fail();
+        }
+
         // Optional: order by col [desc], col2 [desc]
         List<OrderByColumn>? orderBy = null;
 
@@ -123,13 +144,6 @@ internal static class GetParser
             }
             limit = int.Parse(ctx.GetText(limitToken));
             ctx.Advance();
-        }
-
-        // Optional: count
-        var isCount = false;
-        if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("count"))
-        {
-            isCount = true;
         }
 
         // Optional: page N size M
@@ -182,6 +196,7 @@ internal static class GetParser
             Table = tableName,
             Select = selectColumns,
             ExcludeSelect = excludeSelect,
+            ComputedSelect = computedColumns,
             IsDistinct = isDistinct,
             Where = where,
             OrderBy = orderBy,
@@ -194,6 +209,7 @@ internal static class GetParser
             AggregateColumnPosition = aggregateColumnPosition,
             AggregateColumnLength = aggregateColumnLength,
             AggregateAlias = aggregateAlias,
+            GroupBy = groupBy,
             Follow = followClauses,
         });
     }
@@ -217,8 +233,8 @@ internal static class GetParser
             var next = ctx.PeekAt(1);
             if (next.Type == TokenType.Identifier && !ctx.IsKeyword(next, "where")
                 && !ctx.IsKeyword(next, "order") && !ctx.IsKeyword(next, "limit")
-                && !ctx.IsKeyword(next, "count") && !ctx.IsKeyword(next, "page")
-                && !ctx.IsKeyword(next, "follow"))
+                && !ctx.IsKeyword(next, "count") && !ctx.IsKeyword(next, "group")
+                && !ctx.IsKeyword(next, "page") && !ctx.IsKeyword(next, "follow"))
             {
                 ctx.Advance();
                 return fn;
@@ -557,9 +573,166 @@ internal static class GetParser
 
     // ── Select ────────────────────────────────────────────────
 
-    private static readonly string[] SelectStopKeywords = ["distinct", "where", "order", "limit", "count", "page", "follow"];
+    private static readonly string[] SelectStopKeywords = ["distinct", "where", "order", "limit", "count", "group", "page", "follow"];
 
-    private static List<SelectColumn> ParseSelectList(ParserContext ctx)
+    private static (List<SelectColumn> Columns, List<ComputedColumn>? Computed) ParseSelectList(ParserContext ctx)
+    {
+        var columns = new List<SelectColumn>();
+        List<ComputedColumn>? computed = null;
+
+        while (true)
+        {
+            var token = ctx.Peek();
+            if (token.Type != TokenType.Identifier)
+            {
+                ctx.AddError(token, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLUMN_NAME);
+                return (columns, computed);
+            }
+
+            // Stop if this identifier is a clause keyword
+            if (IsSelectStopKeyword(ctx, token))
+                break;
+
+            var colName = ctx.GetLowercaseText(token);
+
+            // Check if next token is an arithmetic operator → computed field
+            var next = ctx.PeekAt(1);
+            if (IsArithmeticOp(next.Type))
+            {
+                var comp = ParseComputedColumn(ctx, token, colName);
+                if (ctx.HasErrors) return (columns, computed);
+                if (comp is not null)
+                {
+                    computed ??= [];
+                    computed.Add(comp);
+                }
+            }
+            else
+            {
+                columns.Add(new SelectColumn(colName, token.Start, token.Length));
+                ctx.Advance();
+            }
+
+            if (ctx.Peek().Type == TokenType.Comma)
+            {
+                ctx.Advance();
+                continue;
+            }
+
+            break;
+        }
+
+        if (columns.Count == 0 && computed is null)
+        {
+            ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLUMN_NAME);
+        }
+
+        return (columns, computed);
+    }
+
+    private static bool IsArithmeticOp(TokenType type) =>
+        type is TokenType.Plus or TokenType.Minus or TokenType.Star or TokenType.Slash;
+
+    private static ArithmeticOp ToArithmeticOp(TokenType type) => type switch
+    {
+        TokenType.Plus => ArithmeticOp.Add,
+        TokenType.Minus => ArithmeticOp.Subtract,
+        TokenType.Star => ArithmeticOp.Multiply,
+        TokenType.Slash => ArithmeticOp.Divide,
+        _ => ArithmeticOp.Add, // unreachable
+    };
+
+    private static ComputedColumn? ParseComputedColumn(ParserContext ctx, Token leftToken, string leftCol)
+    {
+        ctx.Advance(); // consume left column
+
+        var opToken = ctx.Peek();
+        var op = ToArithmeticOp(opToken.Type);
+        ctx.Advance(); // consume operator
+
+        // Right operand: column name or numeric literal
+        var rightToken = ctx.Peek();
+        string? rightColumn = null;
+        double? rightLiteral = null;
+        var rightPos = rightToken.Start;
+        var rightLen = rightToken.Length;
+
+        if (rightToken.Type == TokenType.Identifier)
+        {
+            rightColumn = ctx.GetLowercaseText(rightToken);
+            ctx.Advance();
+        }
+        else if (rightToken.Type is TokenType.IntegerLiteral or TokenType.FloatLiteral)
+        {
+            rightLiteral = double.Parse(ctx.GetText(rightToken), System.Globalization.CultureInfo.InvariantCulture);
+            ctx.Advance();
+        }
+        else if (rightToken.Type == TokenType.Minus)
+        {
+            // Negative literal
+            ctx.Advance();
+            var numToken = ctx.Peek();
+            if (numToken.Type is TokenType.IntegerLiteral or TokenType.FloatLiteral)
+            {
+                rightLiteral = -double.Parse(ctx.GetText(numToken), System.Globalization.CultureInfo.InvariantCulture);
+                rightLen = numToken.Start + numToken.Length - rightPos;
+                ctx.Advance();
+            }
+            else
+            {
+                ctx.AddError(numToken, ErrorCodes.SYNTAX_ERROR, "expected number after '-'");
+                return null;
+            }
+        }
+        else
+        {
+            ctx.AddError(rightToken, ErrorCodes.SYNTAX_ERROR, "expected column name or number after operator");
+            return null;
+        }
+
+        // Required: as <alias>
+        if (!ctx.MatchKeyword("as"))
+        {
+            ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "computed field requires 'as <alias>'");
+            return null;
+        }
+
+        var aliasToken = ctx.Peek();
+        if (aliasToken.Type != TokenType.Identifier)
+        {
+            ctx.AddError(aliasToken, ErrorCodes.SYNTAX_ERROR, "expected alias name after 'as'");
+            return null;
+        }
+        var alias = ctx.GetLowercaseText(aliasToken);
+        ctx.Advance();
+
+        return new ComputedColumn
+        {
+            LeftColumn = leftCol,
+            LeftPosition = leftToken.Start,
+            LeftLength = leftToken.Length,
+            Operator = op,
+            RightColumn = rightColumn,
+            RightPosition = rightPos,
+            RightLength = rightLen,
+            RightLiteral = rightLiteral,
+            Alias = alias,
+        };
+    }
+
+    private static bool IsSelectStopKeyword(ParserContext ctx, Token token)
+    {
+        foreach (var kw in SelectStopKeywords)
+        {
+            if (ctx.IsKeyword(token, kw))
+                return true;
+        }
+        return false;
+    }
+
+    // ── Group by ──────────────────────────────────────────────
+
+    private static List<SelectColumn> ParseGroupByList(ParserContext ctx)
     {
         var columns = new List<SelectColumn>();
 
@@ -573,7 +746,7 @@ internal static class GetParser
             }
 
             // Stop if this identifier is a clause keyword
-            if (IsSelectStopKeyword(ctx, token))
+            if (IsGroupByStopKeyword(ctx, token))
                 break;
 
             columns.Add(new SelectColumn(ctx.GetLowercaseText(token), token.Start, token.Length));
@@ -596,14 +769,10 @@ internal static class GetParser
         return columns;
     }
 
-    private static bool IsSelectStopKeyword(ParserContext ctx, Token token)
+    private static bool IsGroupByStopKeyword(ParserContext ctx, Token token)
     {
-        foreach (var kw in SelectStopKeywords)
-        {
-            if (ctx.IsKeyword(token, kw))
-                return true;
-        }
-        return false;
+        return ctx.IsKeyword(token, "order") || ctx.IsKeyword(token, "limit")
+            || ctx.IsKeyword(token, "page") || ctx.IsKeyword(token, "follow");
     }
 
     // ── Follow (join) ──────────────────────────────────────────

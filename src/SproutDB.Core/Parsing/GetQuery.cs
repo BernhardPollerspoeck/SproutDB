@@ -17,6 +17,11 @@ internal sealed class GetQuery : IQuery
     public bool ExcludeSelect { get; init; }
 
     /// <summary>
+    /// Computed select columns (arithmetic expressions with alias). Null means none.
+    /// </summary>
+    public List<ComputedColumn>? ComputedSelect { get; init; }
+
+    /// <summary>
     /// When true, only distinct rows (based on projected columns) are returned.
     /// Only valid when <see cref="Select"/> is set.
     /// </summary>
@@ -74,6 +79,11 @@ internal sealed class GetQuery : IQuery
     public string? AggregateAlias { get; init; }
 
     /// <summary>
+    /// Optional GROUP BY columns. Null means no grouping.
+    /// </summary>
+    public List<SelectColumn>? GroupBy { get; init; }
+
+    /// <summary>
     /// Optional follow (join) clauses. Null means no joins.
     /// </summary>
     public List<FollowClause>? Follow { get; init; }
@@ -100,6 +110,30 @@ internal readonly struct OrderByColumn(string name, int position, int length, bo
     public int Position { get; } = position;
     public int Length { get; } = length;
     public bool Descending { get; } = descending;
+}
+
+internal enum ArithmeticOp { Add, Subtract, Multiply, Divide }
+
+internal sealed class ComputedColumn
+{
+    /// <summary>Left operand column name.</summary>
+    public required string LeftColumn { get; init; }
+    public int LeftPosition { get; init; }
+    public int LeftLength { get; init; }
+
+    /// <summary>Arithmetic operator.</summary>
+    public required ArithmeticOp Operator { get; init; }
+
+    /// <summary>Right operand column name (null if right is a literal).</summary>
+    public string? RightColumn { get; init; }
+    public int RightPosition { get; init; }
+    public int RightLength { get; init; }
+
+    /// <summary>Right operand literal value (null if right is a column).</summary>
+    public double? RightLiteral { get; init; }
+
+    /// <summary>Alias for the computed result.</summary>
+    public required string Alias { get; init; }
 }
 
 internal sealed class FollowClause

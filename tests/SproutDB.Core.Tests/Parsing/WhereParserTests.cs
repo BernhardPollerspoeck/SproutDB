@@ -1001,4 +1001,206 @@ public class WhereParserTests
         Assert.Equal(2, q.Select.Count);
         Assert.NotNull(q.Follow);
     }
+
+    // ── GROUP BY ─────────────────────────────────────────────
+
+    [Fact]
+    public void GroupBy_WithAggregate()
+    {
+        var result = QueryParser.Parse("get orders sum amount as revenue group by status");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.Equal(AggregateFunction.Sum, q.Aggregate);
+        Assert.Equal("amount", q.AggregateColumn);
+        Assert.Equal("revenue", q.AggregateAlias);
+        Assert.NotNull(q.GroupBy);
+        Assert.Single(q.GroupBy);
+        Assert.Equal("status", q.GroupBy[0].Name);
+    }
+
+    [Fact]
+    public void GroupBy_WithCount()
+    {
+        var result = QueryParser.Parse("get orders count group by city");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.True(q.IsCount);
+        Assert.NotNull(q.GroupBy);
+        Assert.Single(q.GroupBy);
+        Assert.Equal("city", q.GroupBy[0].Name);
+    }
+
+    [Fact]
+    public void GroupBy_MultipleColumns()
+    {
+        var result = QueryParser.Parse("get orders count group by status, city");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.NotNull(q.GroupBy);
+        Assert.Equal(2, q.GroupBy.Count);
+        Assert.Equal("status", q.GroupBy[0].Name);
+        Assert.Equal("city", q.GroupBy[1].Name);
+    }
+
+    [Fact]
+    public void GroupBy_WithOrderByAndLimit()
+    {
+        var result = QueryParser.Parse("get orders avg amount as avg_amount group by customer_id order by avg_amount desc limit 10");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.Equal(AggregateFunction.Avg, q.Aggregate);
+        Assert.NotNull(q.GroupBy);
+        Assert.Equal("customer_id", q.GroupBy[0].Name);
+        Assert.NotNull(q.OrderBy);
+        Assert.Equal("avg_amount", q.OrderBy[0].Name);
+        Assert.True(q.OrderBy[0].Descending);
+        Assert.Equal(10, q.Limit);
+    }
+
+    [Fact]
+    public void GroupBy_WithWhere()
+    {
+        var result = QueryParser.Parse("get orders sum amount as revenue where status != 'cancelled' group by city");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.NotNull(q.Where);
+        Assert.NotNull(q.GroupBy);
+        Assert.Equal("city", q.GroupBy[0].Name);
+    }
+
+    [Fact]
+    public void GroupBy_CaseInsensitive()
+    {
+        var result = QueryParser.Parse("GET Orders COUNT GROUP BY Status");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.True(q.IsCount);
+        Assert.NotNull(q.GroupBy);
+        Assert.Equal("status", q.GroupBy[0].Name);
+    }
+
+    [Fact]
+    public void GroupBy_MissingBy_Error()
+    {
+        var result = QueryParser.Parse("get orders count group status");
+
+        Assert.False(result.Success);
+    }
+
+    [Fact]
+    public void GroupBy_TableNamedGroup_NoConflict()
+    {
+        // "get groups" should not trigger group by parsing
+        var result = QueryParser.Parse("get groups");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.Equal("groups", q.Table);
+        Assert.Null(q.GroupBy);
+    }
+
+    // ── COMPUTED FIELDS ──────────────────────────────────────
+
+    [Fact]
+    public void Computed_MultiplyLiteral()
+    {
+        var result = QueryParser.Parse("get orders select amount, amount * 0.19 as tax");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.NotNull(q.Select);
+        Assert.Single(q.Select);
+        Assert.Equal("amount", q.Select[0].Name);
+
+        Assert.NotNull(q.ComputedSelect);
+        Assert.Single(q.ComputedSelect);
+        var c = q.ComputedSelect[0];
+        Assert.Equal("amount", c.LeftColumn);
+        Assert.Equal(ArithmeticOp.Multiply, c.Operator);
+        Assert.Equal(0.19, c.RightLiteral);
+        Assert.Null(c.RightColumn);
+        Assert.Equal("tax", c.Alias);
+    }
+
+    [Fact]
+    public void Computed_MultiplyColumns()
+    {
+        var result = QueryParser.Parse("get orders select name, price, quantity, price * quantity as total");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.NotNull(q.Select);
+        Assert.Equal(3, q.Select.Count);
+
+        Assert.NotNull(q.ComputedSelect);
+        Assert.Single(q.ComputedSelect);
+        var c = q.ComputedSelect[0];
+        Assert.Equal("price", c.LeftColumn);
+        Assert.Equal("quantity", c.RightColumn);
+        Assert.Equal("total", c.Alias);
+    }
+
+    [Fact]
+    public void Computed_AllOperators()
+    {
+        var ops = new[] { ("+", ArithmeticOp.Add), ("-", ArithmeticOp.Subtract), ("*", ArithmeticOp.Multiply), ("/", ArithmeticOp.Divide) };
+
+        foreach (var (sym, expectedOp) in ops)
+        {
+            var result = QueryParser.Parse($"get t select a {sym} b as r");
+            Assert.True(result.Success, $"Failed for operator {sym}");
+            var q = Assert.IsType<GetQuery>(result.Query);
+            Assert.NotNull(q.ComputedSelect);
+            Assert.Equal(expectedOp, q.ComputedSelect[0].Operator);
+        }
+    }
+
+    [Fact]
+    public void Computed_NegativeLiteral()
+    {
+        var result = QueryParser.Parse("get orders select amount + -5 as adjusted");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.NotNull(q.ComputedSelect);
+        Assert.Equal(-5.0, q.ComputedSelect[0].RightLiteral);
+    }
+
+    [Fact]
+    public void Computed_MissingAlias_Error()
+    {
+        var result = QueryParser.Parse("get orders select amount * 0.19");
+
+        Assert.False(result.Success);
+    }
+
+    [Fact]
+    public void Computed_OnlyComputed_NoSimpleSelect()
+    {
+        var result = QueryParser.Parse("get orders select price * quantity as total");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        // select list has no simple columns, but computed is present
+        Assert.NotNull(q.ComputedSelect);
+        Assert.Single(q.ComputedSelect);
+    }
+
+    [Fact]
+    public void Computed_CaseInsensitive()
+    {
+        var result = QueryParser.Parse("GET Orders SELECT Amount * 0.19 AS Tax");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.NotNull(q.ComputedSelect);
+        Assert.Equal("amount", q.ComputedSelect[0].LeftColumn);
+        Assert.Equal("tax", q.ComputedSelect[0].Alias);
+    }
 }

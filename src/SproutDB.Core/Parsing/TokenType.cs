@@ -22,8 +22,10 @@ internal enum TokenType : byte
     Dot,
 
     // Operators
+    Plus,
     Minus,
     Star,
+    Slash,
     Equals,
     GreaterThan,
     LessThan,
