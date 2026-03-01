@@ -38,13 +38,6 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 
 ## Migrations
 
-- [x] #079 ISproutServer Interface: `GetOrCreateDatabase()`, `SelectDatabase()`, `GetDatabases()`, `Migrate()`.
-- [x] #080 ISproutDatabase Interface: `Query()` für Query-String API.
-- [x] #081 IMigration Interface: `int Order { get; }` und `void Up(ISproutDatabase db)`. Migration weiß nicht gegen welche Database sie läuft. Zusätzlich: `MigrationMode Mode` (Once/OnStartup).
-- [x] #082 Migration Tracking: `_migrations` Table pro Database (read-only für User). Felder: name, order, executed timestamp.
-- [x] #083 `sprout.Migrate(assembly, database)` – Scannt Assembly für IMigration, führt fehlende aus, schreibt in `_migrations`.
-- [x] #084 Migrations laufen VOR dem Öffnen der HTTP/SignalR Endpoints. Fehlgeschlagene Migration → Server startet nicht.
-
 ---
 
 ## Auto-Index
@@ -95,13 +88,35 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 
 ## Auth & Permissions
 
-- [ ] #127 `AddSproutDBAuth(options => ...)` DI Extension – aktiviert Auth.
-- [ ] #138 3 Rollen – `admin` (alles), `writer` (upsert, delete, get, describe), `reader` (get, describe).
-- [ ] #139 API Key pro User (JWT Bearer als Alternative möglich). ASP.NET Middleware handelt Auth.
-- [ ] #140 v1 auf Database-Ebene, v2 Table-Level und Column-Level.
-- [ ] #141 Error Code `AUTH_REQUIRED` – Auth fehlend.
-- [ ] #142 Error Code `AUTH_INVALID` – Auth ungültig.
-- [ ] #143 Error Code `PERMISSION_DENIED` – Rolle hat keine Berechtigung.
+Design-Dokument: `sproutdb-auth-design.md`
+
+### DI & Middleware
+- [ ] #127 `AddSproutDBAuth(options => { options.MasterKey = "..."; })` DI Extension – aktiviert Auth.
+- [ ] #121 `X-SproutDB-ApiKey` Header im Endpoint auswerten (Pflicht wenn Auth aktiv).
+- [ ] #141 Error Code `AUTH_REQUIRED` (401) – Kein API Key mitgegeben.
+- [ ] #142 Error Code `AUTH_INVALID` (401) – API Key unbekannt.
+- [ ] #143 Error Code `PERMISSION_DENIED` (403) – Rolle hat keine Berechtigung.
+
+### Rollen & Permissions
+- [ ] #138 3 Rollen – `admin` (alles), `writer` (upsert, delete, get, describe), `reader` (get, describe). Rolle immer pro Database, keine globale Rolle.
+- [ ] #140 Table-Level Permissions – Restrict-only (nie expanden). `reader` oder `none`.
+
+### System-Tabellen
+- [ ] #146 `_api_keys` Tabelle in `_system` – name, key_prefix, key_hash, created_at, last_used_at.
+- [ ] #147 `_api_permissions` Tabelle in `_system` – key_name, database, role.
+- [ ] #148 `_api_restrictions` Tabelle in `_system` – key_name, database, table, role.
+
+### Query-Syntax (Parser)
+- [ ] #149 `create apikey '<name>'` – Key erstellen (nur MasterKey).
+- [ ] #150 `purge apikey '<name>'` – Key löschen (nur MasterKey).
+- [ ] #151 `rotate apikey '<name>'` – Key rotieren, selbe Permissions (nur MasterKey).
+- [ ] #152 `grant <role> on <db> to '<name>'` – DB-Zugriff gewähren (MasterKey + admin).
+- [ ] #153 `revoke <db> from '<name>'` – DB-Zugriff entziehen (MasterKey + admin).
+- [ ] #154 `restrict <table|*> to <reader|none> for '<name>' on <db>` – Table einschränken (MasterKey + admin).
+- [ ] #155 `unrestrict <table> for '<name>' on <db>` – Restriction entfernen (MasterKey + admin).
+
+### Key-Format
+- [ ] #156 Key-Format: `sdb_ak_<32 random base62>`. key_prefix = erste 8 Zeichen für Logs.
 
 ---
 
