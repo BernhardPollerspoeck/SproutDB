@@ -8,6 +8,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="SproutDB.Core.Tests" />
     <InternalsVisibleTo Include="SproutDB.Benchmarks" />
   </ItemGroup>
