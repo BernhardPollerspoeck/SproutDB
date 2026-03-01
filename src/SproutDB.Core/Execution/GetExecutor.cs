@@ -159,7 +159,11 @@ internal static class GetExecutor
         var extraColumns = ResolveExtraColumnsForComputed(q);
         var effectiveSelect = MergeSelectWithExtra(q.Select, extraColumns);
 
-        var data = ReadRows(table, effectiveSelect, q.ExcludeSelect, filter).ToList();
+        // Try B-Tree shortcut for simple WHERE conditions
+        var btreeResult = TryBTreeLookup(table, q.Where, filter);
+        var data = btreeResult is not null
+            ? ReadRowsByPlaces(table, effectiveSelect, q.ExcludeSelect, btreeResult, filter)
+            : ReadRows(table, effectiveSelect, q.ExcludeSelect, filter).ToList();
 
         // Compute and add computed field values
         if (q.ComputedSelect is not null)
@@ -900,5 +904,104 @@ internal static class GetExecutor
                 _ => null,
             };
         }
+    }
+
+    // ── B-Tree shortcut ──────────────────────────────────────
+
+    /// <summary>
+    /// Checks if the WHERE clause is a simple top-level comparison on a B-Tree-indexed column.
+    /// Returns a list of candidate places from the B-Tree, or null if no shortcut is possible.
+    /// </summary>
+    private static List<long>? TryBTreeLookup(TableHandle table, WhereNode? where, WhereEngine.FilterNode? filter)
+    {
+        if (where is not CompareNode compare)
+            return null;
+
+        if (compare.Column == "id")
+            return null;
+
+        if (!table.HasBTree(compare.Column))
+            return null;
+
+        if (WhereEngine.IsStringOp(compare.Operator))
+            return null;
+
+        var btree = table.GetBTree(compare.Column);
+        var colHandle = table.GetColumn(compare.Column);
+
+        switch (compare.Operator)
+        {
+            case CompareOp.Equal:
+            {
+                var encoded = colHandle.EncodeValueToBytes(compare.Value);
+                return btree.Lookup(encoded);
+            }
+
+            case CompareOp.GreaterThan:
+            case CompareOp.GreaterThanOrEqual:
+            {
+                var encoded = colHandle.EncodeValueToBytes(compare.Value);
+                return btree.RangeLookup(encoded, null);
+            }
+
+            case CompareOp.LessThan:
+            case CompareOp.LessThanOrEqual:
+            {
+                var encoded = colHandle.EncodeValueToBytes(compare.Value);
+                return btree.RangeLookup(null, encoded);
+            }
+
+            case CompareOp.Between:
+            {
+                if (compare.Value2 is null) return null;
+                var low = colHandle.EncodeValueToBytes(compare.Value);
+                var high = colHandle.EncodeValueToBytes(compare.Value2);
+                return btree.RangeLookup(low, high);
+            }
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
+    /// Reads rows from a pre-computed list of places (from B-Tree lookup).
+    /// Still applies the full filter for operators like GT/LT that return inclusive ranges.
+    /// </summary>
+    private static List<Dictionary<string, object?>> ReadRowsByPlaces(
+        TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect,
+        List<long> places, WhereEngine.FilterNode? filter)
+    {
+        bool includeId;
+        if (excludeSelect)
+            includeId = selectColumns is null || !selectColumns.Exists(c => c.Name == "id");
+        else
+            includeId = selectColumns is null || selectColumns.Exists(c => c.Name == "id");
+
+        var columns = ResolveColumns(table, selectColumns, excludeSelect);
+        var data = new List<Dictionary<string, object?>>(places.Count);
+
+        foreach (var place in places)
+        {
+            // Resolve ID for this place
+            var id = table.Index.FindIdForPlace(place);
+            if (id == 0) continue; // place no longer valid (deleted)
+
+            // Apply the full filter to handle GT vs GTE, etc.
+            if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place))
+                continue;
+
+            var record = new Dictionary<string, object?>(columns.Count + 1);
+
+            if (includeId)
+                record["id"] = id;
+
+            foreach (var (name, handle) in columns)
+                record[name] = handle.ReadValue(place);
+
+            data.Add(record);
+        }
+
+        return data;
     }
 }

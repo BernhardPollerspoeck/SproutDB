@@ -1,3 +1,5 @@
+using SproutDB.Core.AutoIndex;
+
 namespace SproutDB.Core;
 
 /// <summary>
@@ -38,4 +40,9 @@ public sealed class SproutEngineSettings
     /// Default: 100.
     /// </summary>
     public int DefaultPageSize { get; init; } = 100;
+
+    /// <summary>
+    /// Configuration for automatic index creation and removal.
+    /// </summary>
+    public AutoIndexSettings AutoIndex { get; init; } = new();
 }

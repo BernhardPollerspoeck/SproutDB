@@ -5,7 +5,9 @@ internal sealed class TableHandle : IDisposable
     private readonly string _tablePath;
     private readonly string _schemaPath;
     private readonly Dictionary<string, ColumnHandle> _columns = [];
+    private readonly Dictionary<string, BTreeHandle> _btrees = [];
 
+    public string TablePath => _tablePath;
     public TableSchema Schema { get; private set; }
     public IndexHandle Index { get; }
 
@@ -27,11 +29,18 @@ internal sealed class TableHandle : IDisposable
 
         var handle = new TableHandle(tablePath, schema, index);
 
-        // Open all column handles
+        // Open all column handles + B-Trees
         foreach (var col in schema.Columns)
         {
             var colPath = Path.Combine(tablePath, $"{col.Name}.col");
             handle._columns[col.Name] = new ColumnHandle(colPath, col);
+
+            var btreePath = Path.Combine(tablePath, $"{col.Name}.btree");
+            if (File.Exists(btreePath))
+            {
+                ColumnTypes.TryParse(col.Type, out var colType);
+                handle._btrees[col.Name] = BTreeHandle.Open(btreePath, colType, col.Size);
+            }
         }
 
         return handle;
@@ -40,6 +49,28 @@ internal sealed class TableHandle : IDisposable
     public ColumnHandle GetColumn(string name) => _columns[name];
 
     public bool HasColumn(string name) => _columns.ContainsKey(name);
+
+    public bool HasBTree(string colName) => _btrees.ContainsKey(colName);
+
+    public BTreeHandle GetBTree(string colName) => _btrees[colName];
+
+    public void AddBTree(string colName, BTreeHandle handle)
+    {
+        _btrees[colName] = handle;
+    }
+
+    public void RemoveBTree(string colName)
+    {
+        if (_btrees.TryGetValue(colName, out var handle))
+        {
+            handle.Dispose();
+            _btrees.Remove(colName);
+        }
+
+        var btreePath = Path.Combine(_tablePath, $"{colName}.btree");
+        if (File.Exists(btreePath))
+            File.Delete(btreePath);
+    }
 
     /// <summary>
     /// Adds a new column to this table (creates .col file, opens handle, updates schema).
@@ -93,6 +124,9 @@ internal sealed class TableHandle : IDisposable
         if (File.Exists(colPath))
             File.Delete(colPath);
 
+        // Remove B-Tree if exists
+        RemoveBTree(name);
+
         Schema.Columns.RemoveAll(c => c.Name == name);
         SaveSchema();
     }
@@ -125,6 +159,25 @@ internal sealed class TableHandle : IDisposable
         // Reopen handle with new name
         if (entry is not null)
             _columns[newName] = new ColumnHandle(newPath, entry);
+
+        // Rename B-Tree if exists
+        if (_btrees.TryGetValue(oldName, out var btree))
+        {
+            btree.Dispose();
+            _btrees.Remove(oldName);
+
+            var oldBtreePath = Path.Combine(_tablePath, $"{oldName}.btree");
+            var newBtreePath = Path.Combine(_tablePath, $"{newName}.btree");
+            if (File.Exists(oldBtreePath))
+            {
+                File.Move(oldBtreePath, newBtreePath);
+                if (entry is not null)
+                {
+                    ColumnTypes.TryParse(entry.Type, out var colType);
+                    _btrees[newName] = BTreeHandle.Open(newBtreePath, colType, entry.Size);
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -195,6 +248,8 @@ internal sealed class TableHandle : IDisposable
         Index.Flush();
         foreach (var col in _columns.Values)
             col.Flush();
+        foreach (var btree in _btrees.Values)
+            btree.Flush();
     }
 
     public void SaveSchema()
@@ -208,5 +263,8 @@ internal sealed class TableHandle : IDisposable
         foreach (var col in _columns.Values)
             col.Dispose();
         _columns.Clear();
+        foreach (var btree in _btrees.Values)
+            btree.Dispose();
+        _btrees.Clear();
     }
 }

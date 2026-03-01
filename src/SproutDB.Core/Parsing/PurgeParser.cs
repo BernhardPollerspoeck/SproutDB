@@ -18,6 +18,9 @@ internal static class PurgeParser
         if (ctx.MatchKeyword("database"))
             return ParseDatabase(ctx);
 
+        if (ctx.MatchKeyword("index"))
+            return ParseIndex(ctx);
+
         return ctx.Error(current, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_PURGE_TARGET);
     }
 
@@ -71,6 +74,43 @@ internal static class PurgeParser
         if (ctx.HasErrors) return ctx.Fail();
 
         return ParseResult.Ok(new PurgeTableQuery { Table = tableName });
+    }
+
+    private static ParseResult ParseIndex(ParserContext ctx)
+    {
+        // table.column (dot-separated) — same pattern as ParseColumn
+        var tableToken = ctx.Peek();
+        if (tableToken.Type != TokenType.Identifier)
+            return ctx.Error(tableToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_TABLE_NAME);
+
+        var tableName = ctx.GetLowercaseText(tableToken);
+        ctx.Advance();
+
+        // Dot
+        var dotToken = ctx.Peek();
+        if (dotToken.Type != TokenType.Dot)
+            return ctx.Error(dotToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_DOT);
+        ctx.Advance();
+
+        // Column name
+        var colNameToken = ctx.Peek();
+        if (colNameToken.Type != TokenType.Identifier)
+            return ctx.Error(colNameToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLUMN_NAME);
+
+        var colName = ctx.GetLowercaseText(colNameToken);
+        ctx.Advance();
+
+        if (colName == "id")
+            return ctx.Error(colNameToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.RESERVED_COLUMN_NAME_ID);
+
+        ctx.ExpectEof();
+        if (ctx.HasErrors) return ctx.Fail();
+
+        return ParseResult.Ok(new PurgeIndexQuery
+        {
+            Table = tableName,
+            Column = colName,
+        });
     }
 
     private static ParseResult ParseDatabase(ParserContext ctx)

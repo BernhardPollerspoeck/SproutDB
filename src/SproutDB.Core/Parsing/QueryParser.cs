@@ -70,6 +70,9 @@ internal static class QueryParser
         if (ctx.MatchKeyword("table"))
             return CreateTableParser.Parse(ctx);
 
+        if (ctx.MatchKeyword("index"))
+            return CreateIndexParser.Parse(ctx);
+
         return ctx.Error(current, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_CREATE_TARGET);
     }
 }

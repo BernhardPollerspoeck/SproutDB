@@ -338,6 +338,49 @@ internal static class WhereEngine
         return a;
     }
 
+    // ── Column extraction ──────────────────────────────────────
+
+    /// <summary>
+    /// Extracts all column names referenced in a WHERE tree.
+    /// </summary>
+    internal static HashSet<string> ExtractWhereColumns(WhereNode? node)
+    {
+        var columns = new HashSet<string>();
+        if (node is not null)
+            CollectColumns(node, columns);
+        return columns;
+    }
+
+    private static void CollectColumns(WhereNode node, HashSet<string> columns)
+    {
+        switch (node)
+        {
+            case CompareNode c:
+                if (c.Column != "id")
+                    columns.Add(c.Column);
+                break;
+
+            case NullCheckNode n:
+                if (n.Column != "id")
+                    columns.Add(n.Column);
+                break;
+
+            case LogicalNode l:
+                CollectColumns(l.Left, columns);
+                CollectColumns(l.Right, columns);
+                break;
+
+            case NotNode not:
+                CollectColumns(not.Inner, columns);
+                break;
+
+            case InNode i:
+                if (i.Column != "id")
+                    columns.Add(i.Column);
+                break;
+        }
+    }
+
     // ── Helpers ────────────────────────────────────────────────
 
     internal static bool IsStringOp(CompareOp op) =>

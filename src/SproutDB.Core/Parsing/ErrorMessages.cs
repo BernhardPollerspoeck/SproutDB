@@ -54,7 +54,7 @@ internal static class ErrorMessages
         "expected '.'";
 
     public const string EXPECTED_PURGE_TARGET =
-        "expected 'column', 'table' or 'database'";
+        "expected 'column', 'table', 'database' or 'index'";
 
     public const string EXPECTED_TO_KEYWORD =
         "expected 'to'";

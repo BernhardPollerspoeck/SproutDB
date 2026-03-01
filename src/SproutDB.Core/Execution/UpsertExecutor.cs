@@ -267,16 +267,39 @@ internal static class UpsertExecutor
             var colHandle = table.GetColumn(colSchema.Name);
             colHandle.EnsureCapacity(place + 1);
 
+            // Read old encoded value for B-Tree removal (only on update when B-Tree exists)
+            byte[]? oldEncoded = null;
+            if (!isNew && table.HasBTree(colSchema.Name) && !colHandle.IsNullAtPlace(place))
+            {
+                var oldVal = colHandle.ReadValue(place);
+                if (oldVal is not null)
+                    oldEncoded = colHandle.EncodeValueToBytes(oldVal.ToString() ?? "");
+            }
+
             if (fieldsByName.TryGetValue(colSchema.Name, out var field))
             {
                 if (field.Value.Kind == UpsertValueKind.Null)
                 {
                     colHandle.WriteNull(place);
                     record[colSchema.Name] = null;
+
+                    // Remove old value from B-Tree
+                    if (oldEncoded is not null)
+                        table.GetBTree(colSchema.Name).Remove(oldEncoded, place);
                 }
                 else
                 {
                     record[colSchema.Name] = colHandle.WriteValue(place, field.Value.Raw!);
+
+                    // Update B-Tree: remove old, insert new
+                    if (table.HasBTree(colSchema.Name))
+                    {
+                        var btree = table.GetBTree(colSchema.Name);
+                        if (oldEncoded is not null)
+                            btree.Remove(oldEncoded, place);
+                        var newEncoded = colHandle.EncodeValueToBytes(field.Value.Raw!);
+                        btree.Insert(newEncoded, place);
+                    }
                 }
             }
             else if (isNew)
@@ -284,6 +307,13 @@ internal static class UpsertExecutor
                 if (colSchema.Default is not null)
                 {
                     record[colSchema.Name] = colHandle.WriteValue(place, colSchema.Default);
+
+                    // Insert default value into B-Tree
+                    if (table.HasBTree(colSchema.Name))
+                    {
+                        var newEncoded = colHandle.EncodeValueToBytes(colSchema.Default);
+                        table.GetBTree(colSchema.Name).Insert(newEncoded, place);
+                    }
                 }
                 else
                 {

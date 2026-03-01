@@ -106,6 +106,8 @@ public class SproutEngineTests : IDisposable
     [InlineData("mydb")]
     [InlineData("db1")]
     [InlineData("a")]
+    [InlineData("_system")]
+    [InlineData("my_shop")]
     public void ValidName_Accepted(string name)
     {
         var response = _engine.Execute("create database", name);
@@ -115,9 +117,7 @@ public class SproutEngineTests : IDisposable
     [Theory]
     [InlineData("")]
     [InlineData("1shop")]
-    [InlineData("_system")]
     [InlineData("my-shop")]
-    [InlineData("my_shop")]
     [InlineData("my.shop")]
     [InlineData("123")]
     public void InvalidName_Error(string name)

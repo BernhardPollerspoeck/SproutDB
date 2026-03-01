@@ -1,4 +1,6 @@
+using System.Reflection;
 using System.Threading.Channels;
+using SproutDB.Core.AutoIndex;
 using SproutDB.Core.Execution;
 using SproutDB.Core.Parsing;
 using SproutDB.Core.Storage;
@@ -11,12 +13,13 @@ namespace SproutDB.Core;
 /// Reads (GetQuery) run lock-free on the caller thread against MMFs.
 /// Background: WAL group commit (fsync), flush cycle (MMF flush + WAL truncate).
 /// </summary>
-public sealed class SproutEngine : IDisposable
+public sealed class SproutEngine : ISproutServer, IDisposable
 {
     private readonly string _dataDirectory;
     private readonly SproutEngineSettings _settings;
     private readonly TableCache _tableCache = new();
     private readonly WalManager _walManager = new();
+    private readonly IndexMetricsStore _indexMetrics = new();
 
     // Writer channel
     private readonly Channel<Action> _writeChannel;
@@ -159,7 +162,26 @@ public sealed class SproutEngine : IDisposable
         if (_walSyncInterval == TimeSpan.Zero)
             wal.SyncToDisk();
 
-        return Dispatch(query, dbName, dbPath, parsedQuery);
+        var result = Dispatch(query, dbName, dbPath, parsedQuery);
+
+        // Track write metrics for index columns
+        if (result.Errors is null)
+        {
+            if (parsedQuery is UpsertQuery uq)
+            {
+                var tablePath = Path.Combine(dbPath, uq.Table);
+                foreach (var rec in uq.Records)
+                    foreach (var f in rec)
+                        _indexMetrics.RecordWrite(tablePath, f.Name);
+            }
+            else if (parsedQuery is CreateIndexQuery ciq)
+            {
+                var tablePath = Path.Combine(dbPath, ciq.Table);
+                _indexMetrics.MarkManual(tablePath, ciq.Column);
+            }
+        }
+
+        return result;
     }
 
     // ── Startup replay ──────────────────────────────────────
@@ -300,7 +322,8 @@ public sealed class SproutEngine : IDisposable
     {
         return query is CreateTableQuery or UpsertQuery or AddColumnQuery
             or PurgeColumnQuery or PurgeTableQuery or PurgeDatabaseQuery
-            or RenameColumnQuery or AlterColumnQuery or DeleteQuery;
+            or RenameColumnQuery or AlterColumnQuery or DeleteQuery
+            or CreateIndexQuery or PurgeIndexQuery;
     }
 
     /// <summary>
@@ -335,8 +358,23 @@ public sealed class SproutEngine : IDisposable
             ? name => ResolveTable(dbPath, name)
             : null;
 
-        return ExecuteWithTable(query, dbPath, q.Table,
+        var tablePath = Path.Combine(dbPath, q.Table);
+
+        var result = ExecuteWithTable(query, dbPath, q.Table,
             table => GetExecutor.Execute(query, table, q, _settings.DefaultPageSize, tableResolver));
+
+        // Track index metrics for WHERE columns
+        if (result.Errors is null)
+        {
+            var whereColumns = WhereEngine.ExtractWhereColumns(q.Where);
+            foreach (var col in whereColumns)
+            {
+                _indexMetrics.RecordWhereUsage(tablePath, col);
+                _indexMetrics.RecordRead(tablePath, col);
+            }
+        }
+
+        return result;
     }
 
     private SproutResponse ExecuteDescribe(string query, string dbName, string dbPath, DescribeQuery q)
@@ -369,6 +407,8 @@ public sealed class SproutEngine : IDisposable
             RenameColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => RenameColumnExecutor.Execute(query, table, q)),
             AlterColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => AlterColumnExecutor.Execute(query, table, q)),
             DeleteQuery q => ExecuteWithTable(query, dbPath, q.Table, table => DeleteExecutor.Execute(query, table, q)),
+            CreateIndexQuery q => ExecuteWithTable(query, dbPath, q.Table, table => CreateIndexExecutor.Execute(query, table, q)),
+            PurgeIndexQuery q => ExecuteWithTable(query, dbPath, q.Table, table => PurgeIndexExecutor.Execute(query, table, q)),
             _ => ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, "operation not supported"),
         };
     }
@@ -484,11 +524,11 @@ public sealed class SproutEngine : IDisposable
     {
         if (string.IsNullOrEmpty(name))
             return false;
-        if (!char.IsAsciiLetter(name[0]))
+        if (!char.IsAsciiLetter(name[0]) && name[0] != '_')
             return false;
         for (var i = 1; i < name.Length; i++)
         {
-            if (!char.IsAsciiLetterOrDigit(name[i]))
+            if (!char.IsAsciiLetterOrDigit(name[i]) && name[i] != '_')
                 return false;
         }
         return true;
@@ -503,6 +543,55 @@ public sealed class SproutEngine : IDisposable
                 span[i] = char.ToLowerInvariant(span[i]);
         });
     }
+
+    // ── ISproutServer ─────────────────────────────────────
+
+    public ISproutDatabase GetOrCreateDatabase(string name)
+    {
+        var dbName = LowercaseName(name);
+        var dbPath = Path.Combine(_dataDirectory, dbName);
+
+        if (!_tableCache.DatabaseExists(dbPath))
+        {
+            // Execute create database through the writer channel (silently ignore DATABASE_EXISTS)
+            Execute("create database", dbName);
+        }
+
+        return new SproutDatabase(this, dbName);
+    }
+
+    public ISproutDatabase SelectDatabase(string name)
+    {
+        var dbName = LowercaseName(name);
+        var dbPath = Path.Combine(_dataDirectory, dbName);
+
+        if (!_tableCache.DatabaseExists(dbPath))
+            throw new InvalidOperationException($"database '{dbName}' does not exist");
+
+        return new SproutDatabase(this, dbName);
+    }
+
+    public IReadOnlyList<ISproutDatabase> GetDatabases()
+    {
+        var databases = new List<ISproutDatabase>();
+
+        if (!Directory.Exists(_dataDirectory))
+            return databases;
+
+        foreach (var dbDir in Directory.GetDirectories(_dataDirectory))
+        {
+            var dbName = Path.GetFileName(dbDir);
+            databases.Add(new SproutDatabase(this, dbName));
+        }
+
+        return databases;
+    }
+
+    public void Migrate(Assembly assembly, ISproutDatabase database)
+    {
+        MigrationRunner.Run(assembly, database);
+    }
+
 
     public void Dispose()
     {

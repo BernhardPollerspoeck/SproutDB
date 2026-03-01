@@ -17,6 +17,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\SproutDB.Core\SproutDB.Core.csproj" />
+    <ProjectReference Include="..\TestMigrations.Schema\TestMigrations.Schema.csproj" />
+    <ProjectReference Include="..\TestMigrations.Startup\TestMigrations.Startup.csproj" />
+    <ProjectReference Include="..\TestMigrations.Failing\TestMigrations.Failing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

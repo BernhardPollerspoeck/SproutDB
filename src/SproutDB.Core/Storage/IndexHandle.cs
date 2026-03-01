@@ -122,6 +122,25 @@ internal sealed class IndexHandle : IDisposable
     }
 
     /// <summary>
+    /// Reverse lookup: finds the ID that maps to a given place.
+    /// Returns 0 if no ID maps to this place (deleted/invalid).
+    /// </summary>
+    public ulong FindIdForPlace(long place)
+    {
+        var entries = _capacity / StorageConstants.INDEX_ENTRY_SIZE;
+        var target = place + 1; // stored values are place+1
+
+        for (long i = 1; i < entries; i++)
+        {
+            var storedValue = _view.ReadInt64(i * StorageConstants.INDEX_ENTRY_SIZE);
+            if (storedValue == target)
+                return (ulong)i;
+        }
+
+        return 0;
+    }
+
+    /// <summary>
     /// Iterates all used ID → Place mappings. Calls action(id, place) for each.
     /// </summary>
     public void ForEachUsed(Action<ulong, long> action)

@@ -147,7 +147,7 @@ public class PurgeParserTests
         var result = QueryParser.Parse("purge");
 
         Assert.False(result.Success);
-        Assert.Contains("expected 'column', 'table' or 'database'", result.Errors![0].Message);
+        Assert.Contains("expected 'column', 'table', 'database' or 'index'", result.Errors![0].Message);
     }
 
     [Fact]
@@ -156,6 +156,6 @@ public class PurgeParserTests
         var result = QueryParser.Parse("purge something");
 
         Assert.False(result.Success);
-        Assert.Contains("expected 'column', 'table' or 'database'", result.Errors![0].Message);
+        Assert.Contains("expected 'column', 'table', 'database' or 'index'", result.Errors![0].Message);
     }
 }

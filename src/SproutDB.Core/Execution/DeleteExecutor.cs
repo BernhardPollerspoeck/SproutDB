@@ -29,6 +29,24 @@ internal static class DeleteExecutor
             if (!WhereEngine.EvaluateFilter(filter, id, place))
                 continue;
 
+            // Remove from B-Trees before clearing data
+            foreach (var col in table.Schema.Columns)
+            {
+                if (table.HasBTree(col.Name))
+                {
+                    var colHandle = table.GetColumn(col.Name);
+                    if (!colHandle.IsNullAtPlace(place))
+                    {
+                        var val = colHandle.ReadValue(place);
+                        if (val is not null)
+                        {
+                            var encoded = colHandle.EncodeValueToBytes(val.ToString() ?? "");
+                            table.GetBTree(col.Name).Remove(encoded, place);
+                        }
+                    }
+                }
+            }
+
             // Clear index slot (marks row as deleted)
             table.Index.ClearPlace(id);
 

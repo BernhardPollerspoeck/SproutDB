@@ -14,4 +14,6 @@ internal static class ErrorCodes
     public const string UNKNOWN_DATABASE = "UNKNOWN_DATABASE";
     public const string BULK_LIMIT = "BULK_LIMIT";
     public const string WHERE_REQUIRED = "WHERE_REQUIRED";
+    public const string INDEX_EXISTS = "INDEX_EXISTS";
+    public const string INDEX_NOT_FOUND = "INDEX_NOT_FOUND";
 }
