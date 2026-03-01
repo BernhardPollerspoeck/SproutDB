@@ -1,4 +1,5 @@
 using SproutDB.Core.AutoIndex;
+using SproutDB.Core.Storage;
 
 namespace SproutDB.Core;
 
@@ -40,6 +41,13 @@ public sealed class SproutEngineSettings
     /// Default: 100.
     /// </summary>
     public int DefaultPageSize { get; init; } = 100;
+
+    /// <summary>
+    /// Pre-allocation chunk size for index and column files.
+    /// Controls how many rows are pre-allocated per growth step.
+    /// Default: 10,000.
+    /// </summary>
+    public int ChunkSize { get; init; } = StorageConstants.CHUNK_SIZE;
 
     /// <summary>
     /// Configuration for automatic index creation and removal.

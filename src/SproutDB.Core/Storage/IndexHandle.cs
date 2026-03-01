@@ -5,6 +5,7 @@ namespace SproutDB.Core.Storage;
 internal sealed class IndexHandle : IDisposable
 {
     private readonly string _path;
+    private readonly int _chunkSize;
     private readonly Queue<long> _freePlaces = new();
     private FileStream _fs;
     private MemoryMappedFile _mmf;
@@ -12,9 +13,10 @@ internal sealed class IndexHandle : IDisposable
     private long _capacity;
     private long _nextPlace;
 
-    public IndexHandle(string path)
+    public IndexHandle(string path, int chunkSize = StorageConstants.CHUNK_SIZE)
     {
         _path = path;
+        _chunkSize = chunkSize;
         _fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
         _capacity = _fs.Length;
         (_mmf, _view) = CreateMapping(_fs, _capacity);
@@ -167,7 +169,7 @@ internal sealed class IndexHandle : IDisposable
 
         var newCapacity = _capacity;
         while (newCapacity < requiredBytes)
-            newCapacity += (long)(StorageConstants.CHUNK_SIZE + 1) * StorageConstants.INDEX_ENTRY_SIZE;
+            newCapacity += (long)(_chunkSize + 1) * StorageConstants.INDEX_ENTRY_SIZE;
 
         Remap(newCapacity);
     }

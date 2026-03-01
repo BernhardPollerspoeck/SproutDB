@@ -7,11 +7,18 @@ internal sealed class TableCache : IDisposable
 {
     private readonly ConcurrentDictionary<string, Lazy<TableHandle>> _tables = new();
     private readonly ConcurrentDictionary<string, byte> _knownDatabases = new();
+    private readonly int _chunkSize;
+
+    public TableCache(int chunkSize = StorageConstants.CHUNK_SIZE)
+    {
+        _chunkSize = chunkSize;
+    }
 
     public TableHandle GetOrOpen(string tablePath)
     {
+        var chunkSize = _chunkSize;
         var lazy = _tables.GetOrAdd(tablePath,
-            static path => new Lazy<TableHandle>(() => TableHandle.Open(path)));
+            path => new Lazy<TableHandle>(() => TableHandle.Open(path, chunkSize)));
         return lazy.Value;
     }
 

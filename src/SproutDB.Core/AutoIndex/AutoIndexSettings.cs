@@ -31,6 +31,13 @@ public sealed class AutoIndexSettings
     public int UnusedRetentionDays { get; init; } = 30;
 
     /// <summary>
+    /// Minimum number of queries on a column before auto-index evaluation kicks in.
+    /// Prevents premature index creation during the first few queries.
+    /// Default: 100.
+    /// </summary>
+    public int MinimumQueryCount { get; init; } = 100;
+
+    /// <summary>
     /// Whether auto-indexing is enabled.
     /// Default: true.
     /// </summary>

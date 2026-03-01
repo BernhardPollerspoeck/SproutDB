@@ -9,6 +9,7 @@ namespace SproutDB.Core.Storage;
 internal sealed class ColumnHandle : IDisposable
 {
     private readonly string _path;
+    private readonly int _chunkSize;
     private FileStream _fs;
     private MemoryMappedFile _mmf;
     private volatile MemoryMappedViewAccessor _view;
@@ -17,9 +18,10 @@ internal sealed class ColumnHandle : IDisposable
     public ColumnSchemaEntry Schema { get; }
     public ColumnType Type { get; }
 
-    public ColumnHandle(string path, ColumnSchemaEntry schema)
+    public ColumnHandle(string path, ColumnSchemaEntry schema, int chunkSize = StorageConstants.CHUNK_SIZE)
     {
         _path = path;
+        _chunkSize = chunkSize;
         Schema = schema;
         ColumnTypes.TryParse(schema.Type, out var type);
         Type = type;
@@ -298,7 +300,7 @@ internal sealed class ColumnHandle : IDisposable
 
         var newCapacity = _capacity;
         while (newCapacity < requiredBytes)
-            newCapacity += (long)StorageConstants.CHUNK_SIZE * Schema.EntrySize;
+            newCapacity += (long)_chunkSize * Schema.EntrySize;
 
         Remap(newCapacity);
     }

@@ -18,7 +18,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 {
     private readonly string _dataDirectory;
     private readonly SproutEngineSettings _settings;
-    private readonly TableCache _tableCache = new();
+    private readonly TableCache _tableCache;
     private readonly WalManager _walManager = new();
     private readonly IndexMetricsStore _indexMetrics = new();
 
@@ -47,6 +47,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     {
         _settings = settings;
         _dataDirectory = Path.GetFullPath(settings.DataDirectory);
+        _tableCache = new TableCache(settings.ChunkSize);
         Directory.CreateDirectory(_dataDirectory);
 
         _walSyncInterval = settings.WalSyncInterval;
@@ -327,7 +328,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         // Create _index file (pre-allocated)
         var indexPath = Path.Combine(tablePath, "_index");
         using (var fs = File.Create(indexPath))
-            fs.SetLength((long)(StorageConstants.CHUNK_SIZE + 1) * StorageConstants.INDEX_ENTRY_SIZE);
+            fs.SetLength((long)(_settings.ChunkSize + 1) * StorageConstants.INDEX_ENTRY_SIZE);
 
         // Write initial next_id = 1
         using (var fs = new FileStream(indexPath, FileMode.Open, FileAccess.Write, FileShare.None))
@@ -341,7 +342,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         foreach (var col in columns)
         {
             using var fs = File.Create(Path.Combine(tablePath, $"{col.Name}.col"));
-            fs.SetLength((long)StorageConstants.CHUNK_SIZE * col.EntrySize);
+            fs.SetLength((long)_settings.ChunkSize * col.EntrySize);
         }
 
         _tableCache.GetOrOpen(tablePath);
@@ -351,8 +352,6 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
     private void LogAudit(string? database, string query, string operation)
     {
-        if (_disposed) return;
-
         var systemDbPath = Path.Combine(_dataDirectory, "_system");
         var auditTablePath = Path.Combine(systemDbPath, "audit_log");
 
@@ -569,8 +568,66 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     private void FlushAll()
     {
         PersistIndexMetrics();
+        EvaluateAutoIndexes();
         _tableCache.FlushAll();
         _walManager.TruncateAll();
+    }
+
+    private void EvaluateAutoIndexes()
+    {
+        if (!_settings.AutoIndex.Enabled) return;
+
+        var now = DateTime.UtcNow;
+
+        foreach (var (key, metrics) in _indexMetrics.GetAll())
+        {
+            // Skip columns that don't have enough WHERE hits yet
+            if (metrics.WhereHitCount < _settings.AutoIndex.MinimumQueryCount)
+                continue;
+
+            // Derive dbName and tableName from the tablePath
+            // tablePath = {dataDir}/{db}/{table}
+            var tableName = Path.GetFileName(key.TablePath);
+            var dbPath = Path.GetDirectoryName(key.TablePath);
+            if (dbPath is null) continue;
+            var dbName = Path.GetFileName(dbPath);
+
+            if (!_tableCache.TryGetTable(key.TablePath, out var table) || table is null)
+                continue;
+
+            if (!table.HasBTree(key.Column)
+                && AutoIndexEvaluator.ShouldCreate(metrics, _settings.AutoIndex))
+            {
+                var createQuery = $"create index {tableName}.{key.Column}";
+                var parseResult = QueryParser.Parse(createQuery);
+                if (parseResult.Success && parseResult.Query is not null)
+                {
+                    Dispatch(createQuery, dbName, dbPath, parseResult.Query);
+                    metrics.IndexCreatedAt = now;
+
+                    var reason = $"auto-index created: where_hits={metrics.WhereHitCount}, queries={metrics.QueryCount}, reads={metrics.ReadCount}, writes={metrics.WriteCount}";
+                    LogAudit(dbName, $"{createQuery} -- {reason}", "auto_create_index");
+                }
+            }
+            else if (table.HasBTree(key.Column)
+                     && !metrics.IsManual
+                     && AutoIndexEvaluator.ShouldRemove(metrics, _settings.AutoIndex, now))
+            {
+                var purgeQuery = $"purge index {tableName}.{key.Column}";
+                var parseResult = QueryParser.Parse(purgeQuery);
+                if (parseResult.Success && parseResult.Query is not null)
+                {
+                    Dispatch(purgeQuery, dbName, dbPath, parseResult.Query);
+                    metrics.IndexCreatedAt = null;
+
+                    var daysSinceUsed = metrics.LastUsedAt is not null
+                        ? (int)(now - metrics.LastUsedAt.Value).TotalDays
+                        : -1;
+                    var reason = $"auto-index removed: unused for {daysSinceUsed} days (threshold={_settings.AutoIndex.UnusedRetentionDays})";
+                    LogAudit(dbName, $"{purgeQuery} -- {reason}", "auto_purge_index");
+                }
+            }
+        }
     }
 
     private async Task RunWalSyncCycle(TimeSpan interval)
@@ -653,6 +710,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         // Track index metrics for WHERE columns
         if (result.Errors is null)
         {
+            _indexMetrics.RecordQuery(tablePath);
             var whereColumns = WhereEngine.ExtractWhereColumns(q.Where);
             foreach (var col in whereColumns)
             {
@@ -716,7 +774,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_DATABASE,
                 $"database '{dbName}' does not exist");
 
-        return CreateTableExecutor.Execute(query, dbName, dbPath, q);
+        return CreateTableExecutor.Execute(query, dbName, dbPath, q, _settings.ChunkSize);
     }
 
     private SproutResponse ExecuteBackup(string query, string dbName, string dbPath)

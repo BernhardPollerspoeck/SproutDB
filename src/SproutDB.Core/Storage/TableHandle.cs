@@ -4,6 +4,7 @@ internal sealed class TableHandle : IDisposable
 {
     private readonly string _tablePath;
     private readonly string _schemaPath;
+    private readonly int _chunkSize;
     private readonly Dictionary<string, ColumnHandle> _columns = [];
     private readonly Dictionary<string, BTreeHandle> _btrees = [];
 
@@ -11,29 +12,30 @@ internal sealed class TableHandle : IDisposable
     public TableSchema Schema { get; private set; }
     public IndexHandle Index { get; }
 
-    private TableHandle(string tablePath, TableSchema schema, IndexHandle index)
+    private TableHandle(string tablePath, TableSchema schema, IndexHandle index, int chunkSize)
     {
         _tablePath = tablePath;
         _schemaPath = Path.Combine(tablePath, "_schema.bin");
+        _chunkSize = chunkSize;
         Schema = schema;
         Index = index;
     }
 
-    public static TableHandle Open(string tablePath)
+    public static TableHandle Open(string tablePath, int chunkSize = StorageConstants.CHUNK_SIZE)
     {
         var schemaPath = Path.Combine(tablePath, "_schema.bin");
         var schema = SchemaFile.Read(schemaPath);
 
         var indexPath = Path.Combine(tablePath, "_index");
-        var index = new IndexHandle(indexPath);
+        var index = new IndexHandle(indexPath, chunkSize);
 
-        var handle = new TableHandle(tablePath, schema, index);
+        var handle = new TableHandle(tablePath, schema, index, chunkSize);
 
         // Open all column handles + B-Trees
         foreach (var col in schema.Columns)
         {
             var colPath = Path.Combine(tablePath, $"{col.Name}.col");
-            handle._columns[col.Name] = new ColumnHandle(colPath, col);
+            handle._columns[col.Name] = new ColumnHandle(colPath, col, chunkSize);
 
             var btreePath = Path.Combine(tablePath, $"{col.Name}.btree");
             if (File.Exists(btreePath))
@@ -83,11 +85,11 @@ internal sealed class TableHandle : IDisposable
         var colPath = Path.Combine(_tablePath, $"{entry.Name}.col");
         using (var fs = File.Create(colPath))
         {
-            fs.SetLength((long)StorageConstants.CHUNK_SIZE * entry.EntrySize);
+            fs.SetLength((long)_chunkSize * entry.EntrySize);
         }
 
         // Open handle
-        _columns[entry.Name] = new ColumnHandle(colPath, entry);
+        _columns[entry.Name] = new ColumnHandle(colPath, entry, _chunkSize);
     }
 
     /// <summary>

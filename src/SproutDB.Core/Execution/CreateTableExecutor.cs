@@ -5,7 +5,7 @@ namespace SproutDB.Core.Execution;
 
 internal static class CreateTableExecutor
 {
-    public static SproutResponse Execute(string query, string database, string dbPath, CreateTableQuery q)
+    public static SproutResponse Execute(string query, string database, string dbPath, CreateTableQuery q, int chunkSize = StorageConstants.CHUNK_SIZE)
     {
         if (!Directory.Exists(dbPath))
             return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_DATABASE,
@@ -48,7 +48,7 @@ internal static class CreateTableExecutor
         var indexPath = Path.Combine(tablePath, "_index");
         CreatePreAllocatedFile(
             indexPath,
-            (long)(StorageConstants.CHUNK_SIZE + 1) * StorageConstants.INDEX_ENTRY_SIZE);
+            (long)(chunkSize + 1) * StorageConstants.INDEX_ENTRY_SIZE);
 
         // Write initial next_id = 1 into index header
         using (var fs = new FileStream(indexPath, FileMode.Open, FileAccess.Write, FileShare.None))
@@ -63,7 +63,7 @@ internal static class CreateTableExecutor
         {
             CreatePreAllocatedFile(
                 Path.Combine(tablePath, $"{col.Name}.col"),
-                (long)StorageConstants.CHUNK_SIZE * col.EntrySize);
+                (long)chunkSize * col.EntrySize);
         }
 
         return new SproutResponse
