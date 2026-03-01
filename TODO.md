@@ -43,7 +43,7 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 - [x] #081 IMigration Interface: `int Order { get; }` und `void Up(ISproutDatabase db)`. Migration weiß nicht gegen welche Database sie läuft. Zusätzlich: `MigrationMode Mode` (Once/OnStartup).
 - [x] #082 Migration Tracking: `_migrations` Table pro Database (read-only für User). Felder: name, order, executed timestamp.
 - [x] #083 `sprout.Migrate(assembly, database)` – Scannt Assembly für IMigration, führt fehlende aus, schreibt in `_migrations`.
-- [ ] #084 Migrations laufen VOR dem Öffnen der HTTP/SignalR Endpoints. Fehlgeschlagene Migration → Server startet nicht.
+- [x] #084 Migrations laufen VOR dem Öffnen der HTTP/SignalR Endpoints. Fehlgeschlagene Migration → Server startet nicht.
 
 ---
 
@@ -69,12 +69,12 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 
 ## HTTP Server
 
-- [ ] #119 `POST /query` Endpoint. Content-Type: text/plain. Query als Plain Text im Body, Response immer JSON.
-- [ ] #120 HTTP Header `X-SproutDB-Database` (Pflicht) – Aktive Datenbank.
+- [x] #119 `POST /query` Endpoint. Content-Type: text/plain. Query als Plain Text im Body, Response immer JSON.
+- [x] #120 HTTP Header `X-SproutDB-Database` (Pflicht) – Aktive Datenbank.
 - [ ] #121 HTTP Header `X-SproutDB-ApiKey` (Pflicht wenn Auth aktiv) – API Key für Authentifizierung.
-- [ ] #122 HTTP Status Code Mapping: 200 OK, 400 Query-Fehler, 401 Auth fehlend, 403 Keine Berechtigung, 404 Not Found, 409 Conflict.
-- [ ] #123 SproutDB.Server Projekt: ASP.NET Host mit Kestrel.
-- [ ] #124 `MapSproutDB()` Extension Method – registriert POST /query Endpoint.
+- [x] #122 HTTP Status Code Mapping: 200 OK, 400 Query-Fehler, 401 Auth fehlend, 403 Keine Berechtigung, 404 Not Found, 409 Conflict.
+- [x] #123 SproutDB.Server Projekt: ASP.NET Host mit Kestrel.
+- [x] #124 `MapSproutDB()` Extension Method – registriert POST /query Endpoint.
 
 ---
 
