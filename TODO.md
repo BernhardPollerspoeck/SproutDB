@@ -64,7 +64,7 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 
 - [x] #119 `POST /query` Endpoint. Content-Type: text/plain. Query als Plain Text im Body, Response immer JSON.
 - [x] #120 HTTP Header `X-SproutDB-Database` (Pflicht) – Aktive Datenbank.
-- [ ] #121 HTTP Header `X-SproutDB-ApiKey` (Pflicht wenn Auth aktiv) – API Key für Authentifizierung.
+- [x] #121 HTTP Header `X-SproutDB-ApiKey` (Pflicht wenn Auth aktiv) – API Key für Authentifizierung.
 - [x] #122 HTTP Status Code Mapping: 200 OK, 400 Query-Fehler, 401 Auth fehlend, 403 Keine Berechtigung, 404 Not Found, 409 Conflict.
 - [x] #123 SproutDB.Server Projekt: ASP.NET Host mit Kestrel.
 - [x] #124 `MapSproutDB()` Extension Method – registriert POST /query Endpoint.
@@ -73,16 +73,16 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 
 ## SignalR
 
-- [ ] #125 `MapSproutDBHub()` Extension Method – registriert SignalR Hub auf `/sproutdb/changes`.
-- [ ] #130 SignalR Hub: `/sproutdb/changes` Endpoint. Auth via `X-SproutDB-ApiKey` per Query String oder Header.
-- [ ] #131 `Subscribe(string database, string table)` – Client tritt Group bei, empfängt Changes.
-- [ ] #132 `Unsubscribe(string database, string table)` – Client verlässt Group.
-- [ ] #133 `OnChange(SproutResponse event)` – Server → Client Push. Selbes Response-Objekt wie HTTP.
-- [ ] #134 SignalR Groups: Data-Changes auf `{database}.{table}`, Schema-Changes auf `{database}._schema`.
-- [ ] #135 Kein Listener in Group → kein Overhead. Bei Disconnect räumt SignalR Group-Membership auf.
-- [ ] #136 Permissions greifen – nur Databases für die der API Key Zugriff hat.
-- [ ] #137 Schema Change Events an `{database}._schema` Group: `add_column`, `purge_column`, `rename_column`, `purge_table`, `create_table`.
-- [ ] #144 In-Process Change Notifications: `users.OnChange(change => { ... })` – Selbes Event wie SignalR, nur als Callback ohne Serialisierung.
+- [x] #125 `MapSproutDBHub()` Extension Method – registriert SignalR Hub auf `/sproutdb/changes`.
+- [x] #130 SignalR Hub: `/sproutdb/changes` Endpoint. Auth via `X-SproutDB-ApiKey` per Query String oder Header.
+- [x] #131 `Subscribe(string database, string table)` – Client tritt Group bei, empfängt Changes.
+- [x] #132 `Unsubscribe(string database, string table)` – Client verlässt Group.
+- [x] #133 `OnChange(SproutResponse event)` – Server → Client Push. Selbes Response-Objekt wie HTTP.
+- [x] #134 SignalR Groups: Data-Changes auf `{database}.{table}`, Schema-Changes auf `{database}._schema`.
+- [x] #135 Kein Listener in Group → kein Overhead. Bei Disconnect räumt SignalR Group-Membership auf.
+- [x] #136 Permissions greifen – nur Databases für die der API Key Zugriff hat.
+- [x] #137 Schema Change Events an `{database}._schema` Group: `add_column`, `purge_column`, `rename_column`, `purge_table`, `create_table`.
+- [x] #144 In-Process Change Notifications: `users.OnChange(change => { ... })` – Selbes Event wie SignalR, nur als Callback ohne Serialisierung.
 
 ---
 
@@ -91,32 +91,32 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 Design-Dokument: `sproutdb-auth-design.md`
 
 ### DI & Middleware
-- [ ] #127 `AddSproutDBAuth(options => { options.MasterKey = "..."; })` DI Extension – aktiviert Auth.
-- [ ] #121 `X-SproutDB-ApiKey` Header im Endpoint auswerten (Pflicht wenn Auth aktiv).
-- [ ] #141 Error Code `AUTH_REQUIRED` (401) – Kein API Key mitgegeben.
-- [ ] #142 Error Code `AUTH_INVALID` (401) – API Key unbekannt.
-- [ ] #143 Error Code `PERMISSION_DENIED` (403) – Rolle hat keine Berechtigung.
+- [x] #127 `AddSproutDBAuth(options => { options.MasterKey = "..."; })` DI Extension – aktiviert Auth.
+- [x] #121 `X-SproutDB-ApiKey` Header im Endpoint auswerten (Pflicht wenn Auth aktiv).
+- [x] #141 Error Code `AUTH_REQUIRED` (401) – Kein API Key mitgegeben.
+- [x] #142 Error Code `AUTH_INVALID` (401) – API Key unbekannt.
+- [x] #143 Error Code `PERMISSION_DENIED` (403) – Rolle hat keine Berechtigung.
 
 ### Rollen & Permissions
-- [ ] #138 3 Rollen – `admin` (alles), `writer` (upsert, delete, get, describe), `reader` (get, describe). Rolle immer pro Database, keine globale Rolle.
-- [ ] #140 Table-Level Permissions – Restrict-only (nie expanden). `reader` oder `none`.
+- [x] #138 3 Rollen – `admin` (alles), `writer` (upsert, delete, get, describe), `reader` (get, describe). Rolle immer pro Database, keine globale Rolle.
+- [x] #140 Table-Level Permissions – Restrict-only (nie expanden). `reader` oder `none`.
 
 ### System-Tabellen
-- [ ] #146 `_api_keys` Tabelle in `_system` – name, key_prefix, key_hash, created_at, last_used_at.
-- [ ] #147 `_api_permissions` Tabelle in `_system` – key_name, database, role.
-- [ ] #148 `_api_restrictions` Tabelle in `_system` – key_name, database, table, role.
+- [x] #146 `_api_keys` Tabelle in `_system` – name, key_prefix, key_hash, created_at, last_used_at.
+- [x] #147 `_api_permissions` Tabelle in `_system` – key_name, database, role.
+- [x] #148 `_api_restrictions` Tabelle in `_system` – key_name, database, table, role.
 
 ### Query-Syntax (Parser)
-- [ ] #149 `create apikey '<name>'` – Key erstellen (nur MasterKey).
-- [ ] #150 `purge apikey '<name>'` – Key löschen (nur MasterKey).
-- [ ] #151 `rotate apikey '<name>'` – Key rotieren, selbe Permissions (nur MasterKey).
-- [ ] #152 `grant <role> on <db> to '<name>'` – DB-Zugriff gewähren (MasterKey + admin).
-- [ ] #153 `revoke <db> from '<name>'` – DB-Zugriff entziehen (MasterKey + admin).
-- [ ] #154 `restrict <table|*> to <reader|none> for '<name>' on <db>` – Table einschränken (MasterKey + admin).
-- [ ] #155 `unrestrict <table> for '<name>' on <db>` – Restriction entfernen (MasterKey + admin).
+- [x] #149 `create apikey '<name>'` – Key erstellen (nur MasterKey).
+- [x] #150 `purge apikey '<name>'` – Key löschen (nur MasterKey).
+- [x] #151 `rotate apikey '<name>'` – Key rotieren, selbe Permissions (nur MasterKey).
+- [x] #152 `grant <role> on <db> to '<name>'` – DB-Zugriff gewähren (MasterKey + admin).
+- [x] #153 `revoke <db> from '<name>'` – DB-Zugriff entziehen (MasterKey + admin).
+- [x] #154 `restrict <table|*> to <reader|none> for '<name>' on <db>` – Table einschränken (MasterKey + admin).
+- [x] #155 `unrestrict <table> for '<name>' on <db>` – Restriction entfernen (MasterKey + admin).
 
 ### Key-Format
-- [ ] #156 Key-Format: `sdb_ak_<32 random base62>`. key_prefix = erste 8 Zeichen für Logs.
+- [x] #156 Key-Format: `sdb_ak_<32 random base62>`. key_prefix = erste 8 Zeichen für Logs.
 
 ---
 
