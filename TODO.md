@@ -123,5 +123,5 @@ Design-Dokument: `sproutdb-auth-design.md`
 ## Config & Deployment
 
 - [x] #126 `AddSproutDB(options => ...)` DI Extension – SproutEngineSettingsBuilder + SproutServiceCollectionExtensions. Registriert SproutEngine + ISproutServer als Singleton.
-- [ ] #128 appsettings.json Konfiguration: DataDirectory, DefaultPageSize, WalFlushIntervalSeconds, PreAllocateChunkSize, AutoIndex Settings, Auth Settings.
+- [x] #128 appsettings.json Konfiguration: DataDirectory, DefaultPageSize, WalFlushIntervalSeconds, PreAllocateChunkSize, AutoIndex Settings, Auth Settings.
 - [x] #145 Pre-Allocation Chunk Size konfigurierbar: `SproutEngineSettings.ChunkSize`. Durchgereicht durch TableCache → TableHandle → ColumnHandle/IndexHandle → CreateTableExecutor.
