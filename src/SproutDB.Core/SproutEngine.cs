@@ -23,6 +23,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     private readonly WalManager _walManager = new();
     private readonly IndexMetricsStore _indexMetrics = new();
     private readonly SproutAuthService? _authService;
+    private readonly SproutChangeNotifier _changeNotifier = new();
 
     // Writer channel
     private readonly Channel<Action> _writeChannel;
@@ -118,6 +119,11 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     /// Engine settings (needed by endpoint layer for MasterKey, BulkLimit).
     /// </summary>
     internal SproutEngineSettings Settings => _settings;
+
+    /// <summary>
+    /// Change notification service for real-time events.
+    /// </summary>
+    internal SproutChangeNotifier ChangeNotifier => _changeNotifier;
 
     /// <summary>
     /// Executes a query against the specified database.
@@ -231,7 +237,10 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         {
             var r = ExecuteCreateDatabase(query, dbName, dbPath);
             if (r.Errors is null)
+            {
                 LogAudit(dbName, query, "create_database");
+                _changeNotifier.Enqueue(dbName, "_schema", r);
+            }
             return r;
         }
 
@@ -239,7 +248,10 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         {
             var r = ExecutePurgeDatabase(query, dbName, dbPath);
             if (r.Errors is null)
+            {
                 LogAudit(dbName, query, "purge_database");
+                _changeNotifier.Enqueue(dbName, "_schema", r);
+            }
             return r;
         }
 
@@ -285,6 +297,15 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             var operation = GetSchemaOperation(parsedQuery);
             if (operation is not null)
                 LogAudit(dbName, query, operation);
+
+            // Change notifications (non-blocking enqueue)
+            var tableName = GetTableNameForNotify(parsedQuery);
+            if (tableName is not null)
+            {
+                _changeNotifier.Enqueue(dbName, tableName, result);
+                if (operation is not null)
+                    _changeNotifier.Enqueue(dbName, "_schema", result);
+            }
         }
 
         return result;
@@ -514,6 +535,21 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             _ => null,
         };
     }
+
+    private static string? GetTableNameForNotify(IQuery query) => query switch
+    {
+        UpsertQuery q => q.Table,
+        DeleteQuery q => q.Table,
+        CreateTableQuery q => q.Table,
+        PurgeTableQuery q => q.Table,
+        AddColumnQuery q => q.Table,
+        PurgeColumnQuery q => q.Table,
+        RenameColumnQuery q => q.Table,
+        AlterColumnQuery q => q.Table,
+        CreateIndexQuery q => q.Table,
+        PurgeIndexQuery q => q.Table,
+        _ => null,
+    };
 
     private static string EscapeString(string value)
     {
@@ -1085,6 +1121,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         FlushAll();
 
         // 5. Dispose handles
+        _changeNotifier.Dispose();
         _tableCache.Dispose();
         _walManager.Dispose();
     }

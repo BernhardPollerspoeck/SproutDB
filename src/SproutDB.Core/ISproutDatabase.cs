@@ -14,4 +14,11 @@ public interface ISproutDatabase
     /// Executes a query string against this database.
     /// </summary>
     SproutResponse Query(string query);
+
+    /// <summary>
+    /// Subscribes to change notifications for the specified table.
+    /// The callback fires after each successful mutation (upsert, delete, schema change).
+    /// Dispose the returned handle to unsubscribe.
+    /// </summary>
+    IDisposable OnChange(string table, Action<SproutResponse> callback);
 }
