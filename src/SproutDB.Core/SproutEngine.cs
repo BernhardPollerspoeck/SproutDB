@@ -33,6 +33,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     private readonly Task _flushTask;
     private readonly Task _walSyncTask;
     private readonly TimeSpan _walSyncInterval;
+    private readonly CancellationTokenSource _disposeCts = new();
     private volatile bool _disposed;
 
     /// <summary>
@@ -705,15 +706,16 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
         using var timer = new PeriodicTimer(interval);
 
-        while (!_disposed)
+        try
         {
-            if (!await timer.WaitForNextTickAsync())
-                break;
-
-            if (_disposed)
-                break;
-
-            PostFlushAll();
+            while (await timer.WaitForNextTickAsync(_disposeCts.Token))
+            {
+                PostFlushAll();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on dispose
         }
     }
 
@@ -800,15 +802,16 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
         using var timer = new PeriodicTimer(interval);
 
-        while (!_disposed)
+        try
         {
-            if (!await timer.WaitForNextTickAsync())
-                break;
-
-            if (_disposed)
-                break;
-
-            PostSyncAllWals();
+            while (await timer.WaitForNextTickAsync(_disposeCts.Token))
+            {
+                PostSyncAllWals();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on dispose
         }
     }
 
@@ -1105,8 +1108,9 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     {
         if (_disposed) return;
 
-        // 1. Signal background loops to stop
+        // 1. Signal background loops to stop immediately
         _disposed = true;
+        _disposeCts.Cancel();
 
         // 2. Wait for timer loops to exit
         _flushTask.GetAwaiter().GetResult();
@@ -1124,6 +1128,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         _changeNotifier.Dispose();
         _tableCache.Dispose();
         _walManager.Dispose();
+        _disposeCts.Dispose();
     }
 
     // ── Write protection ──────────────────────────────────────

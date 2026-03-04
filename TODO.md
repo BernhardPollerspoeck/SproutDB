@@ -54,7 +54,7 @@ Jeder Punkt ist ein Feature, Syntax-Element, Konzept oder Anforderung aus den De
 
 ## Tests
 
-- [ ] Test-Suite optimieren — dauert aktuell 6-10 Minuten, muss deutlich schneller werden
+- [x] Test-Suite optimieren — dauert aktuell 6-10 Minuten, muss deutlich schneller werden
 - [ ] `_id` Edge Cases prüfen und testen
 - [ ] Reflection im MigrationRunner prüfen und entfernen (aktuell: `assembly.GetTypes()` + `Activator.CreateInstance` — Alternative: Source Generator oder explizite Registrierung)
 
