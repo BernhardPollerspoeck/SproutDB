@@ -1,0 +1,168 @@
+@inherits LayoutComponentBase
+
+@{
+    var currentPath = NavigationManager.Uri;
+    bool IsActive(string page) => currentPath.Contains(page, StringComparison.OrdinalIgnoreCase);
+    bool IsQuery = !IsActive("/schema") && !IsActive("/monitoring") && !IsActive("/settings");
+    int totalTables = databases.Sum(d => d.Tables.Count);
+}
+
+<!-- Topbar -->
+<div class="topbar">
+    <a class="logo" href="/sproutdb/admin">
+        <div class="logo-icon">&#127793;</div>
+        <span>Sprout</span>DB
+    </a>
+    <div class="topbar-nav">
+        <a href="/sproutdb/admin" class="@(IsQuery ? "active" : "")">Query</a>
+        <a href="/sproutdb/admin/schema" class="@(IsActive("/schema") ? "active" : "")">Schema</a>
+        <a href="/sproutdb/admin/monitoring" class="@(IsActive("/monitoring") ? "active" : "")">Monitoring</a>
+        <a href="/sproutdb/admin/settings" class="@(IsActive("/settings") ? "active" : "")">Admin</a>
+    </div>
+    <div class="topbar-right">
+        <div class="status-dot"></div>
+        <span class="topbar-info">@databases.Count db · @totalTables tables</span>
+        <button class="theme-toggle">&#9728;</button>
+    </div>
+</div>
+
+<div class="main">
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <span class="sidebar-title">Databases</span>
+            <button class="sidebar-action">+</button>
+        </div>
+        <div class="sidebar-search">
+            <span class="sidebar-search-icon">&#8981;</span>
+            <input type="text" placeholder="Filter tables..." @bind="filterText" @bind:event="oninput" />
+        </div>
+        <div class="sidebar-tree">
+            @if (databases.Count == 0)
+            {
+                <div class="tree-item">
+                    <span class="tree-chevron">&#9654;</span>
+                    <span class="tree-icon db">&#9670;</span>
+                    <span style="color: var(--text-3); font-style: italic; font-size: 11.5px;">No databases loaded</span>
+                </div>
+            }
+            else
+            {
+                @foreach (var db in sortedDatabases)
+                {
+                    var filteredTables = string.IsNullOrEmpty(filterText)
+                        ? db.Tables
+                        : db.Tables.Where(t => t.Contains(filterText, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                    <div class="tree-item @(db.Expanded ? "expanded" : "")" @onclick="() => ToggleDb(db)" style="cursor: pointer;">
+                        <span class="tree-chevron">&#9654;</span>
+                        <span class="tree-icon db">&#9670;</span>
+                        <span>@db.Name</span>
+                        @if (db.Tables.Count > 0)
+                        {
+                            <span class="tree-badge">@db.Tables.Count</span>
+                        }
+                    </div>
+                    @if (db.Expanded && filteredTables.Count > 0)
+                    {
+                        <div class="tree-children">
+                            @foreach (var table in filteredTables)
+                            {
+                                <div class="tree-item" @onclick="() => NavigateToTable(db.Name, table)" style="cursor: pointer;">
+                                    <span class="tree-icon table">&#9632;</span>
+                                    <span>@table</span>
+                                </div>
+                            }
+                        </div>
+                    }
+                }
+            }
+        </div>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+        @Body
+    </div>
+
+    <!-- Right Panel -->
+    <div class="right-panel">
+        <div class="panel-section">
+            <div class="panel-section-title">Live Metrics <span class="live-dot"></span></div>
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-value green">—</div>
+                    <div class="metric-label">Writes/s</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value blue">—</div>
+                    <div class="metric-label">Reads/s</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">—</div>
+                    <div class="metric-label">Storage</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value orange">—</div>
+                    <div class="metric-label">WAL</div>
+                </div>
+            </div>
+        </div>
+        <div class="panel-section">
+            <div class="panel-section-title">Auto-Index</div>
+            <div style="font-size: 11.5px; color: var(--text-3); font-style: italic;">No indexes</div>
+        </div>
+        <div class="panel-section" style="border-bottom: none; padding-bottom: 6px;">
+            <div class="panel-section-title">Activity <span class="live-dot"></span></div>
+        </div>
+        <div class="activity-feed">
+            <div style="font-size: 11.5px; color: var(--text-3); font-style: italic; padding: 8px 0;">No activity yet</div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Inject]
+    private NavigationManager NavigationManager { get; set; } = default!;
+
+    [Inject]
+    private SproutEngine Engine { get; set; } = default!;
+
+    private List<DbNode> databases = new();
+    private string filterText = string.Empty;
+
+    private IEnumerable<DbNode> sortedDatabases =>
+        databases.OrderByDescending(d => d.Name.StartsWith('_')).ThenBy(d => d.Name);
+
+    protected override void OnInitialized()
+    {
+        var dbs = Engine.GetDatabases();
+        foreach (var db in dbs)
+        {
+            var node = new DbNode { Name = db.Name, Expanded = true };
+            var describeResponse = Engine.Execute("describe", db.Name);
+            if (describeResponse.Schema?.Tables is { } tables)
+            {
+                node.Tables = tables;
+            }
+            databases.Add(node);
+        }
+    }
+
+    private void ToggleDb(DbNode db)
+    {
+        db.Expanded = !db.Expanded;
+    }
+
+    private void NavigateToTable(string dbName, string table)
+    {
+        NavigationManager.NavigateTo($"/sproutdb/admin?db={Uri.EscapeDataString(dbName)}&q={Uri.EscapeDataString($"get {table}")}");
+    }
+
+    private sealed class DbNode
+    {
+        public string Name { get; set; } = string.Empty;
+        public List<string> Tables { get; set; } = new();
+        public bool Expanded { get; set; }
+    }
+}

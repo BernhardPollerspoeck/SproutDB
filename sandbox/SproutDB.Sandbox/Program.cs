@@ -10,9 +10,13 @@ builder.Services.AddSproutDB(options =>
 {
     options.DataDirectory = dataDir;
 });
+builder.Services.AddSproutDBAdmin();
 
 var app = builder.Build();
+app.UseStaticFiles();
+app.UseAntiforgery();
 app.MapSproutDB();
+app.MapSproutDBAdmin();
 
 var engine = app.Services.GetRequiredService<SproutEngine>();
 var server = app.Services.GetRequiredService<ISproutServer>();

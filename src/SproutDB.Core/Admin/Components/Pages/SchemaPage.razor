@@ -1,0 +1,200 @@
+@page "/sproutdb/admin/schema"
+
+<!-- Schema Toolbar -->
+<div class="schema-toolbar">
+    <select class="query-db-select" @bind="selectedDatabase" @bind:after="OnDatabaseChanged">
+        <option value="">(select database)</option>
+        @foreach (var db in databases)
+        {
+            <option value="@db.Name">@db.Name</option>
+        }
+    </select>
+    @if (tables is not null)
+    {
+        <div class="query-toolbar-sep"></div>
+        <span class="schema-table-count">@tables.Count table@(tables.Count != 1 ? "s" : "")</span>
+    }
+</div>
+
+<!-- Table List -->
+<div class="schema-table-list">
+    @if (string.IsNullOrEmpty(selectedDatabase))
+    {
+        <div class="placeholder-page">
+            <div class="placeholder-icon">&#128209;</div>
+            <div class="placeholder-title" style="font-size: 14px;">Select a database</div>
+            <div class="placeholder-subtitle">Choose a database above to browse its schema</div>
+        </div>
+    }
+    else if (tables is { Count: 0 })
+    {
+        <div class="placeholder-page">
+            <div class="placeholder-title" style="font-size: 14px;">No tables</div>
+            <div class="placeholder-subtitle">This database has no tables yet</div>
+        </div>
+    }
+    else if (tables is not null)
+    {
+        @foreach (var table in tables)
+        {
+            var isExpanded = expandedTable == table;
+
+            <div class="schema-table-header @(isExpanded ? "expanded" : "")" @onclick="() => ToggleTable(table)">
+                <span class="tree-chevron">&#9654;</span>
+                <span class="tree-icon table">&#9632;</span>
+                <span class="schema-table-name">@table</span>
+                @if (columnCache.TryGetValue(table, out var cached))
+                {
+                    <span class="tree-badge">@cached.Count col@(cached.Count != 1 ? "s" : "")</span>
+                }
+            </div>
+
+            @if (isExpanded && columnCache.TryGetValue(table, out var cols))
+            {
+                <div class="schema-columns">
+                    <table class="results-table">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Type</th>
+                                <th>Nullable</th>
+                                <th>Default</th>
+                                <th>Strict</th>
+                                <th>Auto</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var col in cols)
+                            {
+                                <tr>
+                                    <td class="cell-id" style="font-weight: 600;">@col.Name</td>
+                                    <td><span class="schema-type-badge @GetTypeBadgeClass(col.Type)">@FormatType(col)</span></td>
+                                    <td class="schema-prop @(col.Nullable ? "yes" : "no")">@(col.Nullable ? "\u2713" : "\u2717")</td>
+                                    <td class="cell-null">@(col.Default ?? "\u2014")</td>
+                                    <td class="schema-prop @(col.Strict ? "yes" : "no")">@(col.Strict ? "\u2713" : "\u2717")</td>
+                                    <td>
+                                        @if (col.Auto)
+                                        {
+                                            <span class="schema-auto-badge">AUTO</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+    }
+</div>
+
+@code {
+    [Inject]
+    private SproutEngine Engine { get; set; } = default!;
+
+    [SupplyParameterFromQuery(Name = "db")]
+    private string? DbParam { get; set; }
+
+    [SupplyParameterFromQuery(Name = "table")]
+    private string? TableParam { get; set; }
+
+    private IReadOnlyList<ISproutDatabase> databases = [];
+    private string selectedDatabase = string.Empty;
+    private List<string>? tables;
+    private string? expandedTable;
+    private Dictionary<string, List<ColumnInfo>> columnCache = new(StringComparer.OrdinalIgnoreCase);
+
+    private bool initialized;
+
+    protected override void OnInitialized()
+    {
+        databases = Engine.GetDatabases();
+        if (databases.Count == 1)
+        {
+            selectedDatabase = databases[0].Name;
+            LoadTables();
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (!initialized)
+        {
+            initialized = true;
+
+            if (!string.IsNullOrEmpty(DbParam))
+            {
+                selectedDatabase = DbParam;
+                LoadTables();
+            }
+
+            if (!string.IsNullOrEmpty(TableParam) && tables is not null && tables.Contains(TableParam, StringComparer.OrdinalIgnoreCase))
+            {
+                ExpandTable(TableParam);
+            }
+        }
+    }
+
+    private void OnDatabaseChanged()
+    {
+        tables = null;
+        expandedTable = null;
+        columnCache.Clear();
+
+        if (!string.IsNullOrEmpty(selectedDatabase))
+        {
+            LoadTables();
+        }
+    }
+
+    private void LoadTables()
+    {
+        var response = Engine.Execute("describe", selectedDatabase);
+        tables = response.Schema?.Tables ?? [];
+    }
+
+    private void ToggleTable(string table)
+    {
+        if (expandedTable == table)
+        {
+            expandedTable = null;
+        }
+        else
+        {
+            ExpandTable(table);
+        }
+    }
+
+    private void ExpandTable(string table)
+    {
+        expandedTable = table;
+
+        if (!columnCache.ContainsKey(table))
+        {
+            var response = Engine.Execute($"describe {table}", selectedDatabase);
+            columnCache[table] = response.Schema?.Columns ?? [];
+        }
+    }
+
+    private static string FormatType(ColumnInfo col)
+    {
+        if (col.Size.HasValue)
+        {
+            return $"{col.Type}({col.Size})";
+        }
+        return col.Type;
+    }
+
+    private static string GetTypeBadgeClass(string type)
+    {
+        return type.ToLowerInvariant() switch
+        {
+            "string" => "type-string",
+            "bool" => "type-bool",
+            "datetime" => "type-datetime",
+            "ulong" or "long" or "int" or "uint" or "byte" or "sbyte"
+                or "short" or "ushort" or "float" or "double" or "decimal" => "type-number",
+            _ => "type-default"
+        };
+    }
+}

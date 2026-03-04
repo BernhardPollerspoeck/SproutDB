@@ -1,0 +1,326 @@
+@page "/sproutdb/admin"
+
+<!-- Query Editor -->
+<div class="query-section">
+    <div class="query-toolbar">
+        <select class="query-db-select" @bind="selectedDatabase">
+            <option value="">(select database)</option>
+            @foreach (var db in databases)
+            {
+                <option value="@db.Name">@db.Name</option>
+            }
+        </select>
+        <div class="query-toolbar-sep"></div>
+        <button class="btn btn-ghost" style="font-size: 11px; padding: 3px 8px;">History</button>
+        <span class="auto-paged-badge">&#9889; auto-paged</span>
+        <span class="query-hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span>
+    </div>
+    <textarea class="query-editor"
+              spellcheck="false"
+              placeholder="Enter SproutDB query..."
+              @bind="queryText"
+              @onkeydown="HandleKeyDown"></textarea>
+    <div class="query-actions">
+        <button class="btn btn-primary" @onclick="RunQuery">&#9654; Run</button>
+        <button class="btn btn-ghost">Format</button>
+        @if (lastResponse is not null)
+        {
+            <div class="query-stats">
+                <span><span class="stat-value">@FormatElapsed(elapsedMs)</span> <span class="stat-label">time</span></span>
+                <span><span class="stat-value">@rowCount</span> <span class="stat-label">rows</span></span>
+                <span><span class="stat-value">@FormatBytes(payloadBytes)</span> <span class="stat-label">size</span></span>
+            </div>
+        }
+    </div>
+</div>
+
+<!-- Results / Error -->
+<div class="results-section">
+    @if (lastResponse is not null && lastResponse.Operation == SproutOperation.Error)
+    {
+        <!-- Error display -->
+        <div class="error-panel">
+            <div class="error-panel-header">Query Error</div>
+            @if (lastResponse.Errors is { Count: > 0 } errors)
+            {
+                @foreach (var err in errors)
+                {
+                    <div class="error-item">
+                        <span class="error-code">@err.Code</span>
+                        <span class="error-message">@err.Message</span>
+                    </div>
+                }
+            }
+            @if (!string.IsNullOrEmpty(lastResponse.AnnotatedQuery))
+            {
+                <pre class="error-annotated">@lastResponse.AnnotatedQuery</pre>
+            }
+        </div>
+    }
+    else if (lastResponse?.Data is { Count: > 0 } data)
+    {
+        <!-- Results table -->
+        <div class="results-tabs">
+            <button class="results-tab active">Results <span class="tab-count">@data.Count</span></button>
+        </div>
+        <div class="results-table-wrap">
+            <table class="results-table">
+                <thead>
+                    <tr>
+                        @foreach (var col in columns)
+                        {
+                            <th>
+                                <div class="th-content">
+                                    @col.Name
+                                    <span class="th-type">@col.Type</span>
+                                </div>
+                            </th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in data)
+                    {
+                        <tr>
+                            @foreach (var col in columns)
+                            {
+                                row.TryGetValue(col.Name, out var cellValue);
+                                <td class="@GetCellClass(col, cellValue)">@FormatCell(cellValue)</td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    else if (lastResponse is not null)
+    {
+        <!-- Non-data response (e.g. upsert, delete, describe) -->
+        <div class="results-tabs">
+            <button class="results-tab active">Result</button>
+        </div>
+        <div class="results-table-wrap">
+            <div class="placeholder-page">
+                <div class="placeholder-title" style="font-size: 14px;">@lastResponse.Operation completed</div>
+                <div class="placeholder-subtitle">@lastResponse.Affected row(s) affected</div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <!-- No query run yet -->
+        <div class="results-tabs">
+            <button class="results-tab active">Results</button>
+        </div>
+        <div class="results-table-wrap">
+            <div class="placeholder-page">
+                <div class="placeholder-title" style="font-size: 14px;">Run a query to see results</div>
+                <div class="placeholder-subtitle">Use the editor above or click a table in the sidebar</div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Inject]
+    private SproutEngine Engine { get; set; } = default!;
+
+    [SupplyParameterFromQuery(Name = "db")]
+    private string? DbParam { get; set; }
+
+    [SupplyParameterFromQuery(Name = "q")]
+    private string? QParam { get; set; }
+
+    private IReadOnlyList<ISproutDatabase> databases = [];
+    private string selectedDatabase = string.Empty;
+    private string queryText = string.Empty;
+
+    private SproutResponse? lastResponse;
+    private double elapsedMs;
+    private int rowCount;
+    private int payloadBytes;
+    private List<ColumnMeta> columns = new();
+
+    private bool autoExecuted;
+
+    protected override void OnInitialized()
+    {
+        databases = Engine.GetDatabases();
+        if (databases.Count == 1)
+        {
+            selectedDatabase = databases[0].Name;
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrEmpty(DbParam))
+        {
+            selectedDatabase = DbParam;
+        }
+
+        if (!string.IsNullOrEmpty(QParam) && !autoExecuted)
+        {
+            queryText = QParam;
+            autoExecuted = true;
+            RunQuery();
+        }
+    }
+
+    private void HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e is { CtrlKey: true, Key: "Enter" })
+        {
+            RunQuery();
+        }
+    }
+
+    private void RunQuery()
+    {
+        if (string.IsNullOrWhiteSpace(selectedDatabase) || string.IsNullOrWhiteSpace(queryText))
+            return;
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        lastResponse = Engine.Execute(queryText.Trim(), selectedDatabase);
+        sw.Stop();
+
+        elapsedMs = sw.Elapsed.TotalMilliseconds;
+        rowCount = lastResponse.Data?.Count ?? lastResponse.Affected;
+        payloadBytes = EstimatePayload(lastResponse);
+
+        columns.Clear();
+        if (lastResponse.Data is { Count: > 0 } data)
+        {
+            // Try to get schema info for type badges
+            var firstRow = data[0];
+            var tableName = ExtractTableName(queryText);
+            Dictionary<string, ColumnInfo>? schemaMap = null;
+
+            if (tableName is not null)
+            {
+                var describeResponse = Engine.Execute($"describe {tableName}", selectedDatabase);
+                if (describeResponse.Schema?.Columns is { } cols)
+                {
+                    schemaMap = new Dictionary<string, ColumnInfo>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var c in cols)
+                    {
+                        schemaMap[c.Name] = c;
+                    }
+                }
+            }
+
+            foreach (var key in firstRow.Keys)
+            {
+                var type = "unknown";
+                if (schemaMap is not null && schemaMap.TryGetValue(key, out var colInfo))
+                {
+                    type = colInfo.Type;
+                }
+                else
+                {
+                    // Infer type from value
+                    var val = firstRow[key];
+                    type = val switch
+                    {
+                        null => "null",
+                        string => "string",
+                        bool => "bool",
+                        DateTime => "datetime",
+                        int or long or ulong or uint => "long",
+                        float or double or decimal => "double",
+                        _ => val.GetType().Name.ToLowerInvariant()
+                    };
+                }
+                columns.Add(new ColumnMeta { Name = key, Type = type });
+            }
+        }
+    }
+
+    private static string? ExtractTableName(string query)
+    {
+        // Simple extraction: "get <table>", "get from <table>", etc.
+        var parts = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        for (int i = 0; i < parts.Length; i++)
+        {
+            if (parts[i].Equals("from", StringComparison.OrdinalIgnoreCase) && i + 1 < parts.Length)
+                return parts[i + 1];
+        }
+        // "get <table>" pattern — second word is table name
+        if (parts.Length >= 2 && parts[0].Equals("get", StringComparison.OrdinalIgnoreCase)
+            && !parts[1].Equals("from", StringComparison.OrdinalIgnoreCase))
+        {
+            return parts[1];
+        }
+        return null;
+    }
+
+    private static string GetCellClass(ColumnMeta col, object? value)
+    {
+        if (value is null) return "cell-null";
+        if (col.Name == "_id") return "cell-id";
+
+        return col.Type switch
+        {
+            "string" => "cell-string",
+            "ulong" or "long" or "int" or "double" or "float" or "decimal" => "cell-number",
+            "bool" => value is true ? "cell-bool-true" : "cell-bool-false",
+            "datetime" => "cell-datetime",
+            _ => value switch
+            {
+                string => "cell-string",
+                bool b => b ? "cell-bool-true" : "cell-bool-false",
+                DateTime => "cell-datetime",
+                int or long or ulong or uint or float or double or decimal => "cell-number",
+                _ => ""
+            }
+        };
+    }
+
+    private static string FormatCell(object? value)
+    {
+        return value switch
+        {
+            null => "null",
+            bool b => b ? "true" : "false",
+            DateTime dt => dt.ToString("yyyy-MM-dd HH:mm:ss"),
+            _ => value.ToString() ?? ""
+        };
+    }
+
+    private static string FormatElapsed(double ms)
+    {
+        if (ms < 1) return $"{ms:F2}ms";
+        if (ms < 1000) return $"{ms:F1}ms";
+        return $"{ms / 1000:F2}s";
+    }
+
+    private static string FormatBytes(int bytes)
+    {
+        if (bytes < 1024) return $"{bytes}B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1}KB";
+        return $"{bytes / (1024.0 * 1024.0):F1}MB";
+    }
+
+    private static int EstimatePayload(SproutResponse response)
+    {
+        if (response.Data is not { Count: > 0 } data)
+            return 0;
+
+        int size = 0;
+        foreach (var row in data)
+        {
+            foreach (var kvp in row)
+            {
+                size += kvp.Key.Length * 2; // key
+                size += kvp.Value?.ToString()?.Length ?? 4; // value
+            }
+        }
+        return size;
+    }
+
+    private sealed class ColumnMeta
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+    }
+}
