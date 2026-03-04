@@ -1,7 +1,144 @@
 @page "/sproutdb/admin/monitoring"
+@implements IDisposable
 
-<div class="placeholder-page">
-    <div class="placeholder-icon">&#128200;</div>
-    <div class="placeholder-title">Monitoring</div>
-    <div class="placeholder-subtitle">Coming soon — live metrics, storage, and index status</div>
+<div class="schema-toolbar">
+    <span class="schema-table-count" style="font-weight: 600;">Monitoring</span>
+    <span class="schema-table-count" style="margin-left: auto;">Uptime @FormatUptime(_metrics?.Uptime ?? TimeSpan.Zero)</span>
 </div>
+
+<div class="schema-table-list">
+    @if (_metrics is not null)
+    {
+        <!-- Overview cards -->
+        <div style="padding: 14px;">
+            <div class="monitoring-cards">
+                <div class="metric-card">
+                    <div class="metric-value">@FormatUptime(_metrics.Uptime)</div>
+                    <div class="metric-label">Uptime</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value blue">@_metrics.TotalReads.ToString("N0")</div>
+                    <div class="metric-label">Total Reads</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value green">@_metrics.TotalWrites.ToString("N0")</div>
+                    <div class="metric-label">Total Writes</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">@_metrics.TotalRows.ToString("N0")</div>
+                    <div class="metric-label">Rows</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">@FormatSize(_metrics.StorageSizeBytes)</div>
+                    <div class="metric-label">Storage</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value orange">@FormatSize(_metrics.WalSizeBytes)</div>
+                    <div class="metric-label">WAL</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Database list -->
+        @foreach (var db in _metrics.Databases)
+        {
+            var isExpanded = _expandedDb == db.Name;
+
+            <div class="schema-table-header @(isExpanded ? "expanded" : "")" @onclick="() => ToggleDb(db.Name)">
+                <span class="tree-chevron">&#9654;</span>
+                <span class="tree-icon db">&#9670;</span>
+                <span class="schema-table-name">@db.Name</span>
+                <span class="tree-badge" style="margin-left: 12px;">@db.TableCount tables</span>
+                <span class="tree-badge">@db.TotalRows.ToString("N0") rows</span>
+                <span class="tree-badge" style="margin-left: auto;">@FormatSize(db.StorageSizeBytes)</span>
+            </div>
+
+            @if (isExpanded && db.Tables.Count > 0)
+            {
+                <div class="schema-columns">
+                    <table class="results-table">
+                        <thead>
+                            <tr>
+                                <th>Table</th>
+                                <th>Rows</th>
+                                <th>Columns</th>
+                                <th>Indexes</th>
+                                <th>Storage</th>
+                                <th>Created</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var t in db.Tables)
+                            {
+                                <tr>
+                                    <td><span style="font-weight: 600; color: var(--text-0);">@t.Name</span></td>
+                                    <td><span class="cell-number">@t.RowCount.ToString("N0")</span></td>
+                                    <td>@t.ColumnCount</td>
+                                    <td>@t.IndexCount</td>
+                                    <td><span style="font-family: var(--font-mono);">@FormatSize(t.StorageSizeBytes)</span></td>
+                                    <td><span class="cell-datetime">@FormatCreatedAt(t.CreatedAt)</span></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+    }
+</div>
+
+@code {
+    [Inject]
+    private SproutEngine Engine { get; set; } = default!;
+
+    private SproutMetrics? _metrics;
+    private string? _expandedDb;
+    private System.Threading.Timer? _refreshTimer;
+
+    protected override void OnInitialized()
+    {
+        _metrics = Engine.GetMetrics();
+        _refreshTimer = new System.Threading.Timer(Refresh, null, 2000, 2000);
+    }
+
+    private void Refresh(object? state)
+    {
+        _metrics = Engine.GetMetrics();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void ToggleDb(string dbName)
+    {
+        _expandedDb = _expandedDb == dbName ? null : dbName;
+    }
+
+    private static string FormatUptime(TimeSpan ts)
+    {
+        if (ts.TotalDays >= 1)
+            return $"{(int)ts.TotalDays}d {ts.Hours}h {ts.Minutes}m";
+        if (ts.TotalHours >= 1)
+            return $"{(int)ts.TotalHours}h {ts.Minutes}m {ts.Seconds}s";
+        if (ts.TotalMinutes >= 1)
+            return $"{(int)ts.TotalMinutes}m {ts.Seconds}s";
+        return $"{(int)ts.TotalSeconds}s";
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
+        return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
+    }
+
+    private static string FormatCreatedAt(DateTime dt)
+    {
+        if (dt == DateTime.MinValue) return "—";
+        return dt.ToString("yyyy-MM-dd HH:mm");
+    }
+
+    public void Dispose()
+    {
+        _refreshTimer?.Dispose();
+    }
+}

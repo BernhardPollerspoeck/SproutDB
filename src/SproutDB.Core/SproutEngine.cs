@@ -36,6 +36,11 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     private readonly CancellationTokenSource _disposeCts = new();
     private volatile bool _disposed;
 
+    // Monitoring counters
+    private readonly DateTime _startedAtUtc = DateTime.UtcNow;
+    private long _totalReads;
+    private long _totalWrites;
+
     /// <summary>
     /// Creates a new SproutDB engine with default settings.
     /// </summary>
@@ -281,6 +286,8 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         // Track write metrics for index columns
         if (result.Errors is null)
         {
+            Interlocked.Increment(ref _totalWrites);
+
             if (parsedQuery is UpsertQuery uq)
             {
                 var tablePath = Path.Combine(dbPath, uq.Table);
@@ -876,6 +883,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         // Track index metrics for WHERE columns
         if (result.Errors is null)
         {
+            Interlocked.Increment(ref _totalReads);
             _indexMetrics.RecordQuery(tablePath);
             var whereColumns = WhereEngine.ExtractWhereColumns(q.Where);
             foreach (var col in whereColumns)
@@ -896,9 +904,13 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
         // describe (no table) → list all tables
         if (q.Table is null)
+        {
+            Interlocked.Increment(ref _totalReads);
             return DescribeExecutor.ExecuteAll(query, dbPath);
+        }
 
         // describe <table> → show columns
+        Interlocked.Increment(ref _totalReads);
         return ExecuteWithTable(query, dbPath, q.Table,
             table => DescribeExecutor.ExecuteTable(query, table, q.Table));
     }
@@ -1080,6 +1092,95 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             throw new InvalidOperationException($"database '{dbName}' does not exist");
 
         return new SproutDatabase(this, dbName);
+    }
+
+    public SproutMetrics GetMetrics()
+    {
+        var dbMetrics = new List<DatabaseMetrics>();
+        long totalStorage = 0;
+        int totalTableCount = 0;
+        long totalRows = 0;
+
+        if (Directory.Exists(_dataDirectory))
+        {
+            foreach (var dbDir in Directory.GetDirectories(_dataDirectory))
+            {
+                var dbName = Path.GetFileName(dbDir);
+                var tableMetrics = new List<TableMetrics>();
+                long dbStorage = 0;
+                long dbRows = 0;
+
+                foreach (var tableDir in Directory.GetDirectories(dbDir))
+                {
+                    var schemaPath = Path.Combine(tableDir, "_schema.bin");
+                    if (!File.Exists(schemaPath))
+                        continue;
+
+                    var tableName = Path.GetFileName(tableDir);
+                    long rowCount = 0;
+                    long storageBytes = 0;
+                    int columnCount = 0;
+                    int indexCount = 0;
+                    long createdTicks = 0;
+
+                    if (_tableCache.TryGetTable(tableDir, out var table) && table is not null)
+                    {
+                        rowCount = table.Index.ActiveRowCount;
+                        storageBytes = table.GetStorageSizeBytes();
+                        columnCount = table.Schema.Columns.Count;
+                        indexCount = table.IndexCount;
+                        createdTicks = table.Schema.CreatedTicks;
+                    }
+                    else
+                    {
+                        // Table not opened — estimate storage from file sizes
+                        foreach (var file in Directory.EnumerateFiles(tableDir))
+                            storageBytes += new FileInfo(file).Length;
+                    }
+
+                    tableMetrics.Add(new TableMetrics
+                    {
+                        Name = tableName,
+                        RowCount = rowCount,
+                        StorageSizeBytes = storageBytes,
+                        ColumnCount = columnCount,
+                        IndexCount = indexCount,
+                        CreatedAt = createdTicks > 0
+                            ? new DateTime(createdTicks, DateTimeKind.Utc)
+                            : DateTime.MinValue,
+                    });
+
+                    dbStorage += storageBytes;
+                    dbRows += rowCount;
+                }
+
+                dbMetrics.Add(new DatabaseMetrics
+                {
+                    Name = dbName,
+                    TableCount = tableMetrics.Count,
+                    TotalRows = dbRows,
+                    StorageSizeBytes = dbStorage,
+                    Tables = tableMetrics,
+                });
+
+                totalStorage += dbStorage;
+                totalTableCount += tableMetrics.Count;
+                totalRows += dbRows;
+            }
+        }
+
+        return new SproutMetrics
+        {
+            Uptime = DateTime.UtcNow - _startedAtUtc,
+            TotalReads = Interlocked.Read(ref _totalReads),
+            TotalWrites = Interlocked.Read(ref _totalWrites),
+            StorageSizeBytes = totalStorage,
+            WalSizeBytes = _walManager.GetTotalSizeBytes(),
+            DatabaseCount = dbMetrics.Count,
+            TableCount = totalTableCount,
+            TotalRows = totalRows,
+            Databases = dbMetrics,
+        };
     }
 
     public IReadOnlyList<ISproutDatabase> GetDatabases()

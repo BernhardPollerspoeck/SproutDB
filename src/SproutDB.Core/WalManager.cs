@@ -32,6 +32,14 @@ internal sealed class WalManager : IDisposable
         }
     }
 
+    public long GetTotalSizeBytes()
+    {
+        long total = 0;
+        foreach (var wal in _wals.Values)
+            total += wal.SizeBytes;
+        return total;
+    }
+
     public void Evict(string dbPath)
     {
         if (_wals.TryGetValue(dbPath, out var wal))

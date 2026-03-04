@@ -52,6 +52,8 @@ internal sealed class TableHandle : IDisposable
 
     public bool HasColumn(string name) => _columns.ContainsKey(name);
 
+    public int IndexCount => _btrees.Count;
+
     public bool HasBTree(string colName) => _btrees.ContainsKey(colName);
 
     public BTreeHandle GetBTree(string colName) => _btrees[colName];
@@ -243,6 +245,14 @@ internal sealed class TableHandle : IDisposable
 
         // Reopen handle
         _columns[name] = new ColumnHandle(colPath, entry);
+    }
+
+    public long GetStorageSizeBytes()
+    {
+        long total = 0;
+        foreach (var file in Directory.EnumerateFiles(_tablePath))
+            total += new FileInfo(file).Length;
+        return total;
     }
 
     public void Flush()

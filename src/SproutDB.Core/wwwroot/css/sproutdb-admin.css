@@ -500,6 +500,7 @@ body {
     font-size: 12px;
     color: var(--text-1);
     white-space: nowrap;
+    position: relative;
 }
 
 .results-table tbody tr:hover td { background: var(--bg-2); }
@@ -862,6 +863,88 @@ body {
     border: 1px solid var(--sprout-border);
     padding: 1px 7px;
     border-radius: 10px;
+}
+
+/* ─── Monitoring ─── */
+.monitoring-cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+}
+
+/* ─── Flash Animations ─── */
+@keyframes flash-green {
+    0% { background: rgba(74, 222, 128, 0.25); }
+    100% { background: transparent; }
+}
+
+@keyframes flash-red {
+    0% { background: rgba(248, 113, 113, 0.25); }
+    100% { background: transparent; }
+}
+
+.row-flash-green td {
+    animation: flash-green 1.5s ease-out;
+}
+
+.row-flash-red td {
+    background: rgba(248, 113, 113, 0.12);
+    color: var(--text-3);
+    text-decoration: line-through;
+}
+
+/* ─── Inline Editing ─── */
+.cell-edit-icon {
+    display: none;
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 11px;
+    color: var(--text-3);
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+    line-height: 1;
+}
+
+.cell-edit-icon:hover {
+    color: var(--sprout);
+    background: var(--sprout-bg);
+}
+
+.results-table td:hover .cell-edit-icon {
+    display: inline-block;
+}
+
+.cell-edit-input {
+    width: 100%;
+    background: var(--bg-2);
+    border: 1px solid var(--sprout);
+    border-radius: var(--radius-sm);
+    color: var(--text-0);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 3px 6px;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.15);
+}
+
+.cell-edit-error {
+    font-size: 10px;
+    color: var(--red);
+    margin-top: 2px;
+    line-height: 1.3;
+}
+
+/* ─── Activity Feed Entrance ─── */
+@keyframes slide-in {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.activity-item:first-child {
+    animation: slide-in 0.2s ease-out;
 }
 
 /* ─── Scrollbar ─── */

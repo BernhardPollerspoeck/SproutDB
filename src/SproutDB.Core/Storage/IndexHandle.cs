@@ -23,6 +23,8 @@ internal sealed class IndexHandle : IDisposable
         _nextPlace = ScanMaxPlace() + 1;
     }
 
+    public long ActiveRowCount => _nextPlace - _freePlaces.Count;
+
     // ── NextId (stored at position 0 in the index file) ────
 
     /// <summary>

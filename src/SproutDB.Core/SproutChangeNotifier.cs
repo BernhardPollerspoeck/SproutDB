@@ -16,6 +16,7 @@ public sealed class SproutChangeNotifier : IDisposable
 
     // In-Process Callbacks: "{database}.{table}" → List<callback>
     private readonly ConcurrentDictionary<string, List<Action<SproutResponse>>> _callbacks = new();
+    private readonly List<Action<string, string, SproutResponse>> _globalCallbacks = new();
     private readonly object _callbackLock = new();
 
     /// <summary>
@@ -49,6 +50,20 @@ public sealed class SproutChangeNotifier : IDisposable
     }
 
     /// <summary>
+    /// Subscribe to ALL change events across all tables and databases.
+    /// Returns an <see cref="IDisposable"/> to unsubscribe.
+    /// </summary>
+    public IDisposable SubscribeAll(Action<string, string, SproutResponse> callback)
+    {
+        lock (_callbackLock)
+        {
+            _globalCallbacks.Add(callback);
+        }
+
+        return new GlobalSubscription(this, callback);
+    }
+
+    /// <summary>
     /// Subscribe to change events for a specific table.
     /// Returns an <see cref="IDisposable"/> to unsubscribe.
     /// </summary>
@@ -67,6 +82,14 @@ public sealed class SproutChangeNotifier : IDisposable
         }
 
         return new Subscription(this, key, callback);
+    }
+
+    private void UnsubscribeGlobal(Action<string, string, SproutResponse> callback)
+    {
+        lock (_callbackLock)
+        {
+            _globalCallbacks.Remove(callback);
+        }
     }
 
     private void Unsubscribe(string key, Action<SproutResponse> callback)
@@ -107,12 +130,15 @@ public sealed class SproutChangeNotifier : IDisposable
     {
         var key = $"{evt.Database}.{evt.Table}";
 
-        // In-process callbacks
+        // In-process per-key callbacks
         List<Action<SproutResponse>>? snapshot = null;
+        List<Action<string, string, SproutResponse>>? globalSnapshot = null;
         lock (_callbackLock)
         {
             if (_callbacks.TryGetValue(key, out var list))
                 snapshot = new List<Action<SproutResponse>>(list);
+            if (_globalCallbacks.Count > 0)
+                globalSnapshot = new List<Action<string, string, SproutResponse>>(_globalCallbacks);
         }
 
         if (snapshot is not null)
@@ -122,6 +148,22 @@ public sealed class SproutChangeNotifier : IDisposable
                 try
                 {
                     callback(evt.Response);
+                }
+                catch
+                {
+                    // Swallow — callback exceptions must never block dispatch
+                }
+            }
+        }
+
+        // Global callbacks
+        if (globalSnapshot is not null)
+        {
+            foreach (var callback in globalSnapshot)
+            {
+                try
+                {
+                    callback(evt.Database, evt.Table, evt.Response);
                 }
                 catch
                 {
@@ -163,6 +205,20 @@ public sealed class SproutChangeNotifier : IDisposable
         }
 
         public void Dispose() => _notifier.Unsubscribe(_key, _callback);
+    }
+
+    private sealed class GlobalSubscription : IDisposable
+    {
+        private readonly SproutChangeNotifier _notifier;
+        private readonly Action<string, string, SproutResponse> _callback;
+
+        public GlobalSubscription(SproutChangeNotifier notifier, Action<string, string, SproutResponse> callback)
+        {
+            _notifier = notifier;
+            _callback = callback;
+        }
+
+        public void Dispose() => _notifier.UnsubscribeGlobal(_callback);
     }
 }
 

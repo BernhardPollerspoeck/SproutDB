@@ -94,6 +94,8 @@ internal sealed class WalFile : IDisposable
 
     public bool IsEmpty => _fs.Length == 0;
 
+    public long SizeBytes => _fs.Length;
+
     private long ScanLastSequence()
     {
         long last = 0;

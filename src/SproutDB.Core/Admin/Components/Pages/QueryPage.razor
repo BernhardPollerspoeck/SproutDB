@@ -1,4 +1,5 @@
 @page "/sproutdb/admin"
+@implements IDisposable
 
 <!-- Query Editor -->
 <div class="query-section">
@@ -57,7 +58,7 @@
             }
         </div>
     }
-    else if (lastResponse?.Data is { Count: > 0 } data)
+    else if (_displayData is { Count: > 0 } data)
     {
         <!-- Results table -->
         <div class="results-tabs">
@@ -81,11 +82,36 @@
                 <tbody>
                     @foreach (var row in data)
                     {
-                        <tr>
+                        var rowId = GetRowId(row);
+                        <tr @key="rowId" class="@GetRowFlashClass(rowId)">
                             @foreach (var col in columns)
                             {
                                 row.TryGetValue(col.Name, out var cellValue);
-                                <td class="@GetCellClass(col, cellValue)">@FormatCell(cellValue)</td>
+                                @if (_editingRowId is not null && _editingRowId == rowId && _editingColumn == col.Name)
+                                {
+                                    <td class="@GetCellClass(col, cellValue)">
+                                        <input @ref="_editInputRef"
+                                               class="cell-edit-input"
+                                               type="text"
+                                               value="@_editValue"
+                                               @oninput="OnEditInput"
+                                               @onkeyup="HandleEditKeyUp" />
+                                        @if (_editError is not null)
+                                        {
+                                            <div class="cell-edit-error">@_editError</div>
+                                        }
+                                    </td>
+                                }
+                                else
+                                {
+                                    <td class="@GetCellClass(col, cellValue)">
+                                        @FormatCell(cellValue)
+                                        @if (_canEdit && col.Name != "_id" && _hasIdColumn)
+                                        {
+                                            <span class="cell-edit-icon" @onclick="() => StartEdit(rowId, col.Name, cellValue)" @onclick:stopPropagation="true">&#9998;</span>
+                                        }
+                                    </td>
+                                }
                             }
                         </tr>
                     }
@@ -143,6 +169,26 @@
 
     private bool autoExecuted;
 
+    // Live-update state
+    private IDisposable? _tableSubscription;
+    private string? _subscribedDb;
+    private string? _subscribedTable;
+    private List<Dictionary<string, object?>>? _displayData;
+    private readonly HashSet<ulong> _flashGreenIds = new();
+    private readonly HashSet<ulong> _flashRedIds = new();
+    private System.Threading.Timer? _flashTimer;
+    private List<Dictionary<string, object?>>? _pendingData;
+    private bool _canEdit;
+    private bool _hasIdColumn;
+
+    // Inline editing state
+    private ElementReference _editInputRef;
+    private bool _shouldFocusEdit;
+    private ulong? _editingRowId;
+    private string? _editingColumn;
+    private string _editValue = string.Empty;
+    private string? _editError;
+
     protected override void OnInitialized()
     {
         databases = Engine.GetDatabases();
@@ -167,6 +213,15 @@
         }
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_shouldFocusEdit)
+        {
+            _shouldFocusEdit = false;
+            try { await _editInputRef.FocusAsync(); } catch { }
+        }
+    }
+
     private void HandleKeyDown(KeyboardEventArgs e)
     {
         if (e is { CtrlKey: true, Key: "Enter" })
@@ -180,6 +235,9 @@
         if (string.IsNullOrWhiteSpace(selectedDatabase) || string.IsNullOrWhiteSpace(queryText))
             return;
 
+        // Clear editing state
+        CancelEdit();
+
         var sw = System.Diagnostics.Stopwatch.StartNew();
         lastResponse = Engine.Execute(queryText.Trim(), selectedDatabase);
         sw.Stop();
@@ -188,64 +246,279 @@
         rowCount = lastResponse.Data?.Count ?? lastResponse.Affected;
         payloadBytes = EstimatePayload(lastResponse);
 
+        RebuildColumns(lastResponse, queryText);
+        _displayData = lastResponse.Data;
+
+        // Set up live subscription for Get queries
+        SetupLiveSubscription();
+    }
+
+    private void RebuildColumns(SproutResponse response, string query)
+    {
         columns.Clear();
-        if (lastResponse.Data is { Count: > 0 } data)
+        _hasIdColumn = false;
+
+        if (response.Data is not { Count: > 0 } data)
+            return;
+
+        var firstRow = data[0];
+        var tableName = ExtractTableName(query);
+        Dictionary<string, ColumnInfo>? schemaMap = null;
+
+        if (tableName is not null)
         {
-            // Try to get schema info for type badges
-            var firstRow = data[0];
-            var tableName = ExtractTableName(queryText);
-            Dictionary<string, ColumnInfo>? schemaMap = null;
-
-            if (tableName is not null)
+            var describeResponse = Engine.Execute($"describe {tableName}", selectedDatabase);
+            if (describeResponse.Schema?.Columns is { } cols)
             {
-                var describeResponse = Engine.Execute($"describe {tableName}", selectedDatabase);
-                if (describeResponse.Schema?.Columns is { } cols)
+                schemaMap = new Dictionary<string, ColumnInfo>(StringComparer.OrdinalIgnoreCase);
+                foreach (var c in cols)
                 {
-                    schemaMap = new Dictionary<string, ColumnInfo>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var c in cols)
-                    {
-                        schemaMap[c.Name] = c;
-                    }
+                    schemaMap[c.Name] = c;
                 }
             }
+        }
 
-            foreach (var key in firstRow.Keys)
+        foreach (var key in firstRow.Keys)
+        {
+            if (key == "_id") _hasIdColumn = true;
+
+            var type = "unknown";
+            if (schemaMap is not null && schemaMap.TryGetValue(key, out var colInfo))
             {
-                var type = "unknown";
-                if (schemaMap is not null && schemaMap.TryGetValue(key, out var colInfo))
-                {
-                    type = colInfo.Type;
-                }
-                else
-                {
-                    // Infer type from value
-                    var val = firstRow[key];
-                    type = val switch
-                    {
-                        null => "null",
-                        string => "string",
-                        bool => "bool",
-                        DateTime => "datetime",
-                        int or long or ulong or uint => "long",
-                        float or double or decimal => "double",
-                        _ => val.GetType().Name.ToLowerInvariant()
-                    };
-                }
-                columns.Add(new ColumnMeta { Name = key, Type = type });
+                type = colInfo.Type;
             }
+            else
+            {
+                var val = firstRow[key];
+                type = val switch
+                {
+                    null => "null",
+                    string => "string",
+                    bool => "bool",
+                    DateTime => "datetime",
+                    int or long or ulong or uint => "long",
+                    float or double or decimal => "double",
+                    _ => val.GetType().Name.ToLowerInvariant()
+                };
+            }
+            columns.Add(new ColumnMeta { Name = key, Type = type });
         }
     }
 
+    private void SetupLiveSubscription()
+    {
+        // Dispose previous subscription
+        _tableSubscription?.Dispose();
+        _tableSubscription = null;
+        _subscribedDb = null;
+        _subscribedTable = null;
+        _canEdit = false;
+        _flashGreenIds.Clear();
+        _flashRedIds.Clear();
+
+        if (lastResponse?.Operation != SproutOperation.Get || lastResponse.Data is not { Count: > 0 })
+            return;
+
+        var tableName = ExtractTableName(queryText);
+        if (tableName is null)
+            return;
+
+        _subscribedDb = selectedDatabase;
+        _subscribedTable = tableName;
+        _canEdit = _hasIdColumn;
+
+        _tableSubscription = Engine.ChangeNotifier.Subscribe(selectedDatabase, tableName, OnTableChanged);
+    }
+
+    private void OnTableChanged(SproutResponse _)
+    {
+        // Skip live updates while inline editing is active
+        if (_editingRowId is not null)
+            return;
+
+        if (_subscribedDb is null || _subscribedTable is null)
+            return;
+
+        // Re-run the query to get fresh data
+        var freshResponse = Engine.Execute(queryText.Trim(), _subscribedDb);
+        if (freshResponse.Operation == SproutOperation.Error || freshResponse.Data is null)
+            return;
+
+        var oldIds = CollectIds(_displayData);
+        var newIds = CollectIds(freshResponse.Data);
+
+        // New rows: in new but not in old
+        foreach (var id in newIds)
+        {
+            if (!oldIds.Contains(id))
+                _flashGreenIds.Add(id);
+        }
+
+        // Deleted rows: in old but not in new
+        var deletedIds = new HashSet<ulong>();
+        foreach (var id in oldIds)
+        {
+            if (!newIds.Contains(id))
+                deletedIds.Add(id);
+        }
+
+        if (deletedIds.Count > 0)
+        {
+            // Keep old data visible during flash, mark deleted rows red
+            foreach (var id in deletedIds)
+                _flashRedIds.Add(id);
+
+            // Store new data for later swap
+            _pendingData = freshResponse.Data;
+        }
+        else
+        {
+            _displayData = freshResponse.Data;
+            rowCount = freshResponse.Data.Count;
+        }
+
+        // Clear flash after 1.5 seconds
+        _flashTimer?.Dispose();
+        _flashTimer = new System.Threading.Timer(ClearFlash, null, 1500, Timeout.Infinite);
+
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void ClearFlash(object? state)
+    {
+        _flashGreenIds.Clear();
+        _flashRedIds.Clear();
+
+        // Swap to pending data if we were showing deleted rows
+        if (_pendingData is not null)
+        {
+            _displayData = _pendingData;
+            rowCount = _pendingData.Count;
+            _pendingData = null;
+        }
+
+        InvokeAsync(StateHasChanged);
+    }
+
+    private static HashSet<ulong> CollectIds(List<Dictionary<string, object?>>? data)
+    {
+        var ids = new HashSet<ulong>();
+        if (data is null) return ids;
+
+        foreach (var row in data)
+        {
+            if (row.TryGetValue("_id", out var idVal) && idVal is ulong id)
+                ids.Add(id);
+        }
+        return ids;
+    }
+
+    private static ulong? GetRowId(Dictionary<string, object?> row)
+    {
+        if (row.TryGetValue("_id", out var idVal) && idVal is ulong id)
+            return id;
+        return null;
+    }
+
+    private string GetRowFlashClass(ulong? rowId)
+    {
+        if (rowId is null) return "";
+        if (_flashGreenIds.Contains(rowId.Value)) return "row-flash-green";
+        if (_flashRedIds.Contains(rowId.Value)) return "row-flash-red";
+        return "";
+    }
+
+    // --- Inline Editing ---
+
+    private void StartEdit(ulong? rowId, string columnName, object? currentValue)
+    {
+        if (rowId is null) return;
+
+        _editingRowId = rowId;
+        _editingColumn = columnName;
+        _editValue = FormatCell(currentValue);
+        _editError = null;
+        _shouldFocusEdit = true;
+    }
+
+    private void CancelEdit()
+    {
+        _editingRowId = null;
+        _editingColumn = null;
+        _editValue = string.Empty;
+        _editError = null;
+    }
+
+    private void OnEditInput(ChangeEventArgs e)
+    {
+        _editValue = e.Value?.ToString() ?? string.Empty;
+    }
+
+    private void HandleEditKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+        {
+            CancelEdit();
+        }
+        else if (e.Key == "Enter")
+        {
+            CommitEdit();
+        }
+    }
+
+    private void CommitEdit()
+    {
+        if (_editingRowId is null || _editingColumn is null || _subscribedTable is null)
+            return;
+
+        var escapedValue = EscapeQueryValue(_editValue);
+        var query = $"upsert {_subscribedTable} {{_id: {_editingRowId.Value}, {_editingColumn}: {escapedValue}}}";
+
+        var response = Engine.Execute(query, selectedDatabase);
+        if (response.Operation == SproutOperation.Error)
+        {
+            _editError = response.Errors?.FirstOrDefault()?.Message ?? "Unknown error";
+            return;
+        }
+
+        CancelEdit();
+
+        // Refresh data
+        var freshResponse = Engine.Execute(queryText.Trim(), selectedDatabase);
+        if (freshResponse.Data is not null)
+        {
+            _displayData = freshResponse.Data;
+            rowCount = freshResponse.Data.Count;
+        }
+    }
+
+    private static string EscapeQueryValue(string input)
+    {
+        if (string.IsNullOrEmpty(input) || input == "null")
+            return "null";
+
+        if (input is "true" or "false")
+            return input;
+
+        // Try parse as number
+        if (long.TryParse(input, out _) || ulong.TryParse(input, out _) || double.TryParse(input, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _))
+            return input;
+
+        // Quote as string, escaping inner quotes
+        var escaped = input.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        return $"\"{escaped}\"";
+    }
+
+    // --- Helpers ---
+
     private static string? ExtractTableName(string query)
     {
-        // Simple extraction: "get <table>", "get from <table>", etc.
         var parts = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         for (int i = 0; i < parts.Length; i++)
         {
             if (parts[i].Equals("from", StringComparison.OrdinalIgnoreCase) && i + 1 < parts.Length)
                 return parts[i + 1];
         }
-        // "get <table>" pattern — second word is table name
         if (parts.Length >= 2 && parts[0].Equals("get", StringComparison.OrdinalIgnoreCase)
             && !parts[1].Equals("from", StringComparison.OrdinalIgnoreCase))
         {
@@ -311,11 +584,17 @@
         {
             foreach (var kvp in row)
             {
-                size += kvp.Key.Length * 2; // key
-                size += kvp.Value?.ToString()?.Length ?? 4; // value
+                size += kvp.Key.Length * 2;
+                size += kvp.Value?.ToString()?.Length ?? 4;
             }
         }
         return size;
+    }
+
+    public void Dispose()
+    {
+        _tableSubscription?.Dispose();
+        _flashTimer?.Dispose();
     }
 
     private sealed class ColumnMeta

@@ -1,4 +1,5 @@
 @inherits LayoutComponentBase
+@implements IDisposable
 
 @{
     var currentPath = NavigationManager.Uri;
@@ -91,19 +92,19 @@
             <div class="panel-section-title">Live Metrics <span class="live-dot"></span></div>
             <div class="metrics-grid">
                 <div class="metric-card">
-                    <div class="metric-value green">—</div>
+                    <div class="metric-value green">@FormatOpsPerSec(_writesPerSec)</div>
                     <div class="metric-label">Writes/s</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-value blue">—</div>
+                    <div class="metric-value blue">@FormatOpsPerSec(_readsPerSec)</div>
                     <div class="metric-label">Reads/s</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-value">—</div>
+                    <div class="metric-value">@FormatSize(_storageSizeBytes)</div>
                     <div class="metric-label">Storage</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-value orange">—</div>
+                    <div class="metric-value orange">@FormatSize(_walSizeBytes)</div>
                     <div class="metric-label">WAL</div>
                 </div>
             </div>
@@ -116,7 +117,21 @@
             <div class="panel-section-title">Activity <span class="live-dot"></span></div>
         </div>
         <div class="activity-feed">
-            <div style="font-size: 11.5px; color: var(--text-3); font-style: italic; padding: 8px 0;">No activity yet</div>
+            @if (_activityItems.Count == 0)
+            {
+                <div style="font-size: 11.5px; color: var(--text-3); font-style: italic; padding: 8px 0;">No activity yet</div>
+            }
+            else
+            {
+                @foreach (var item in _activityItems)
+                {
+                    <div class="activity-item">
+                        <div class="activity-dot @item.DotClass"></div>
+                        <div class="activity-text"><strong>@item.Label</strong> @item.Target</div>
+                        <div class="activity-time">@FormatRelativeTime(item.Timestamp)</div>
+                    </div>
+                }
+            }
         </div>
     </div>
 </div>
@@ -130,6 +145,20 @@
 
     private List<DbNode> databases = new();
     private string filterText = string.Empty;
+
+    // Activity feed
+    private IDisposable? _activitySubscription;
+    private readonly LinkedList<ActivityItem> _activityItems = new();
+    private const int MaxActivityItems = 50;
+
+    // Live metrics state
+    private System.Threading.Timer? _refreshTimer;
+    private long _prevReads;
+    private long _prevWrites;
+    private double _readsPerSec;
+    private double _writesPerSec;
+    private long _storageSizeBytes;
+    private long _walSizeBytes;
 
     private IEnumerable<DbNode> sortedDatabases =>
         databases.OrderByDescending(d => d.Name.StartsWith('_')).ThenBy(d => d.Name);
@@ -147,6 +176,87 @@
             }
             databases.Add(node);
         }
+
+        // Initial metrics snapshot
+        var metrics = Engine.GetMetrics();
+        _prevReads = metrics.TotalReads;
+        _prevWrites = metrics.TotalWrites;
+        _storageSizeBytes = metrics.StorageSizeBytes;
+        _walSizeBytes = metrics.WalSizeBytes;
+
+        _refreshTimer = new System.Threading.Timer(RefreshMetrics, null, 2000, 2000);
+
+        _activitySubscription = Engine.ChangeNotifier.SubscribeAll(OnActivity);
+    }
+
+    private void RefreshMetrics(object? state)
+    {
+        var metrics = Engine.GetMetrics();
+
+        _readsPerSec = (metrics.TotalReads - _prevReads) / 2.0;
+        _writesPerSec = (metrics.TotalWrites - _prevWrites) / 2.0;
+        _prevReads = metrics.TotalReads;
+        _prevWrites = metrics.TotalWrites;
+        _storageSizeBytes = metrics.StorageSizeBytes;
+        _walSizeBytes = metrics.WalSizeBytes;
+
+        InvokeAsync(StateHasChanged);
+    }
+
+    private static string FormatOpsPerSec(double ops)
+    {
+        if (ops < 0.1) return "0";
+        if (ops >= 1000) return $"{ops / 1000:F1}k";
+        return ops >= 10 ? $"{ops:F0}" : $"{ops:F1}";
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        if (bytes < 1024 * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
+        return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
+    }
+
+    private void OnActivity(string database, string table, SproutResponse response)
+    {
+        // Filter out _schema pseudo-table events and errors
+        if (table == "_schema" || response.Operation == SproutOperation.Error)
+            return;
+
+        var item = new ActivityItem
+        {
+            Label = response.Operation.ToString().ToUpperInvariant(),
+            Target = $"{database}.{table}",
+            DotClass = GetActivityDotClass(response.Operation),
+            Timestamp = DateTime.UtcNow,
+        };
+
+        lock (_activityItems)
+        {
+            _activityItems.AddFirst(item);
+            while (_activityItems.Count > MaxActivityItems)
+                _activityItems.RemoveLast();
+        }
+
+        InvokeAsync(StateHasChanged);
+    }
+
+    private static string GetActivityDotClass(SproutOperation op) => op switch
+    {
+        SproutOperation.Upsert => "insert",
+        SproutOperation.Delete or SproutOperation.PurgeTable or SproutOperation.PurgeDatabase or SproutOperation.PurgeColumn => "delete",
+        SproutOperation.CreateTable or SproutOperation.AddColumn or SproutOperation.RenameColumn or SproutOperation.AlterColumn => "update",
+        _ => "query",
+    };
+
+    private static string FormatRelativeTime(DateTime utcTimestamp)
+    {
+        var elapsed = DateTime.UtcNow - utcTimestamp;
+        if (elapsed.TotalSeconds < 60) return $"{Math.Max(1, (int)elapsed.TotalSeconds)}s";
+        if (elapsed.TotalMinutes < 60) return $"{(int)elapsed.TotalMinutes}m";
+        if (elapsed.TotalHours < 24) return $"{(int)elapsed.TotalHours}h";
+        return $"{(int)elapsed.TotalDays}d";
     }
 
     private void ToggleDb(DbNode db)
@@ -159,10 +269,24 @@
         NavigationManager.NavigateTo($"/sproutdb/admin?db={Uri.EscapeDataString(dbName)}&q={Uri.EscapeDataString($"get {table}")}");
     }
 
+    public void Dispose()
+    {
+        _refreshTimer?.Dispose();
+        _activitySubscription?.Dispose();
+    }
+
     private sealed class DbNode
     {
         public string Name { get; set; } = string.Empty;
         public List<string> Tables { get; set; } = new();
         public bool Expanded { get; set; }
+    }
+
+    private sealed class ActivityItem
+    {
+        public string Label { get; set; } = string.Empty;
+        public string Target { get; set; } = string.Empty;
+        public string DotClass { get; set; } = string.Empty;
+        public DateTime Timestamp { get; set; }
     }
 }
