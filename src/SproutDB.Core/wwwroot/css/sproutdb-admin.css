@@ -407,8 +407,8 @@ body {
 .query-editor-wrap {
     position: relative;
     background: var(--bg-2);
-    min-height: 72px;
-    max-height: 300px;
+    min-height: 150px;
+    max-height: 60vh;
     resize: vertical;
     overflow: hidden;
 }
@@ -447,7 +447,7 @@ body {
     padding: 12px 16px;
     resize: none;
     outline: none;
-    min-height: 72px;
+    min-height: 150px;
     display: block;
     position: relative;
     z-index: 1;
@@ -1021,6 +1021,147 @@ body {
     border-radius: 10px;
 }
 
+/* ─── Create Table Input (Sidebar) ─── */
+.create-table-input {
+    flex: 1;
+    background: var(--bg-3);
+    border: 1px solid var(--blue);
+    border-radius: var(--radius-sm);
+    color: var(--text-0);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 3px 8px;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.15);
+}
+
+.create-table-input::placeholder { color: var(--text-3); }
+
+.db-add-table-btn {
+    background: none;
+    border: none;
+    color: var(--text-3);
+    font-size: 13px;
+    line-height: 1;
+    padding: 1px 4px;
+    border-radius: 3px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.1s;
+    flex-shrink: 0;
+}
+
+.tree-item:hover .db-add-table-btn { opacity: 1; }
+
+.db-add-table-btn:hover {
+    color: var(--sprout);
+    background: var(--sprout-bg);
+}
+
+/* ─── Schema Action Button ─── */
+.schema-action-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-3);
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.1s;
+}
+
+.schema-table-header:hover .schema-action-btn,
+.schema-action-btn:focus { opacity: 1; }
+
+.schema-action-btn:hover {
+    color: var(--sprout);
+    background: var(--sprout-bg);
+}
+
+/* ─── Schema Create Panel ─── */
+.schema-create-panel {
+    background: var(--bg-1);
+    border-bottom: 2px solid var(--blue);
+    flex-shrink: 0;
+}
+
+.schema-create-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text-1);
+}
+
+.schema-create-header strong {
+    font-family: var(--font-mono);
+    color: var(--blue);
+}
+
+/* ─── Schema Edit Row ─── */
+.schema-edit-row td {
+    padding: 4px 8px;
+}
+
+.schema-edit-row input[type="text"],
+.schema-edit-row input[type="number"] {
+    width: 100%;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-0);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 4px 8px;
+    outline: none;
+}
+
+.schema-edit-row input[type="text"]:focus,
+.schema-edit-row input[type="number"]:focus {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.15);
+}
+
+.schema-edit-row select {
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-1);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    padding: 4px 8px;
+    outline: none;
+}
+
+.schema-edit-row input[type="checkbox"] {
+    accent-color: var(--sprout);
+}
+
+/* ─── Schema Inline Input ─── */
+.schema-inline-input {
+    background: var(--bg-2);
+    border: 1px solid var(--sprout);
+    border-radius: var(--radius-sm);
+    color: var(--text-0);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 3px 6px;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.15);
+}
+
+/* ─── Schema Edit Error ─── */
+.schema-edit-error {
+    font-size: 10.5px;
+    color: var(--red);
+    padding: 4px 14px;
+    line-height: 1.3;
+}
+
 /* ─── Monitoring ─── */
 .monitoring-cards {
     display: grid;
@@ -1113,6 +1254,53 @@ body {
 
 .activity-item:first-child {
     animation: slide-in 0.2s ease-out;
+}
+
+/* ─── Autocomplete ─── */
+.ac-popup {
+    position: fixed;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    z-index: 10000;
+    max-height: 200px;
+    overflow-y: auto;
+    display: none;
+}
+
+.ac-popup.visible { display: block; }
+
+.ac-item {
+    padding: 4px 10px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.ac-item.active { background: var(--sprout-bg); color: var(--sprout); }
+.ac-item:hover { background: var(--bg-3); }
+.ac-item.active:hover { background: var(--sprout-bg); }
+
+.ac-cat {
+    font-size: 9px;
+    color: var(--text-3);
+    text-transform: uppercase;
+    min-width: 32px;
+}
+
+.ac-mirror {
+    visibility: hidden;
+    position: absolute;
+    top: 0;
+    left: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    pointer-events: none;
+    overflow: hidden;
 }
 
 /* ─── Scrollbar ─── */

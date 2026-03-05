@@ -81,8 +81,9 @@
                         {
                             <span class="tree-badge">@db.Tables.Count</span>
                         }
+                        <button class="db-add-table-btn" @onclick="() => StartCreateTable(db.Name)" @onclick:stopPropagation="true" title="New table">+</button>
                     </div>
-                    @if (db.Expanded && filteredTables.Count > 0)
+                    @if (db.Expanded && (filteredTables.Count > 0 || _createTableForDb == db.Name))
                     {
                         <div class="tree-children">
                             @foreach (var table in filteredTables)
@@ -91,6 +92,24 @@
                                     <span class="tree-icon table">&#9632;</span>
                                     <span>@table</span>
                                 </div>
+                            }
+                            @if (_createTableForDb == db.Name)
+                            {
+                                <div class="tree-item">
+                                    <span class="tree-icon table">&#9632;</span>
+                                    <input @ref="_createTableInputRef"
+                                           class="create-table-input"
+                                           type="text"
+                                           placeholder="table name"
+                                           @bind="_newTableName"
+                                           @bind:event="oninput"
+                                           @onkeyup="HandleCreateTableKey"
+                                           @onblur="CancelCreateTable" />
+                                </div>
+                                @if (_createTableError is not null)
+                                {
+                                    <div class="create-db-error">@_createTableError</div>
+                                }
                             }
                         </div>
                     }
@@ -177,6 +196,13 @@
     private ElementReference _createDbInputRef;
     private bool _shouldFocusCreateDb;
 
+    // Create table
+    private string? _createTableForDb;
+    private string _newTableName = string.Empty;
+    private string? _createTableError;
+    private ElementReference _createTableInputRef;
+    private bool _shouldFocusCreateTable;
+
     // Activity feed
     private IDisposable? _activitySubscription;
     private readonly LinkedList<ActivityItem> _activityItems = new();
@@ -245,6 +271,16 @@
         if (table == "_schema" || response.Operation == SproutOperation.Error)
             return;
 
+        // Refresh sidebar tree on any schema-changing operation
+        if (response.Operation is SproutOperation.CreateTable or SproutOperation.CreateDatabase
+            or SproutOperation.PurgeTable or SproutOperation.PurgeDatabase
+            or SproutOperation.AddColumn or SproutOperation.PurgeColumn
+            or SproutOperation.RenameColumn or SproutOperation.AlterColumn
+            or SproutOperation.CreateIndex or SproutOperation.PurgeIndex)
+        {
+            RefreshDatabases();
+        }
+
         var item = new ActivityItem
         {
             Label = response.Operation.ToString().ToUpperInvariant(),
@@ -292,6 +328,12 @@
         {
             _shouldFocusCreateDb = false;
             try { await _createDbInputRef.FocusAsync(); } catch { }
+        }
+
+        if (_shouldFocusCreateTable)
+        {
+            _shouldFocusCreateTable = false;
+            try { await _createTableInputRef.FocusAsync(); } catch { }
         }
     }
 
@@ -359,6 +401,62 @@
 
         // Navigate to query page with new DB selected so the dropdown refreshes
         NavigationManager.NavigateTo($"/sproutdb/admin?db={Uri.EscapeDataString(name)}", forceLoad: false);
+    }
+
+    // ── Create Table ──
+
+    private void StartCreateTable(string dbName)
+    {
+        _createTableForDb = dbName;
+        _newTableName = string.Empty;
+        _createTableError = null;
+        _shouldFocusCreateTable = true;
+
+        // Expand the DB so the input is visible
+        var db = databases.FirstOrDefault(d => d.Name.Equals(dbName, StringComparison.OrdinalIgnoreCase));
+        if (db is not null)
+            db.Expanded = true;
+    }
+
+    private void CancelCreateTable()
+    {
+        _createTableForDb = null;
+        _newTableName = string.Empty;
+        _createTableError = null;
+    }
+
+    private void HandleCreateTableKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            SubmitCreateTable();
+        }
+        else if (e.Key == "Escape")
+        {
+            CancelCreateTable();
+        }
+    }
+
+    private void SubmitCreateTable()
+    {
+        var name = _newTableName.Trim();
+        if (string.IsNullOrEmpty(name))
+        {
+            _createTableError = "Name cannot be empty";
+            return;
+        }
+
+        var dbName = _createTableForDb;
+        if (dbName is null) return;
+
+        _createTableForDb = null;
+        _newTableName = string.Empty;
+        _createTableError = null;
+
+        // Navigate to Schema page with newTable param — columns are defined there
+        NavigationManager.NavigateTo(
+            $"/sproutdb/admin/schema?db={Uri.EscapeDataString(dbName)}&newTable={Uri.EscapeDataString(name)}",
+            forceLoad: false);
     }
 
     private void RefreshDatabases()

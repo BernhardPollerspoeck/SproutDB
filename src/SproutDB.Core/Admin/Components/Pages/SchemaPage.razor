@@ -16,6 +16,68 @@
     }
 </div>
 
+<!-- Create Table Wizard -->
+@if (_newTableName is not null && !string.IsNullOrEmpty(selectedDatabase))
+{
+    <div class="schema-create-panel">
+        <div class="schema-create-header">
+            <span><span class="tree-icon table" style="margin-right: 6px;">&#9632;</span>Create table: <strong>@_newTableName</strong></span>
+            <div style="display: flex; gap: 6px;">
+                <button class="btn btn-ghost" @onclick="CancelCreateWizard">Cancel</button>
+                <button class="btn btn-primary" @onclick="SubmitCreateTable">Create</button>
+            </div>
+        </div>
+        @if (_createTableError is not null)
+        {
+            <div class="schema-edit-error">@_createTableError</div>
+        }
+        <table class="results-table" style="margin: 0;">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Size</th>
+                    <th>Default</th>
+                    <th>Strict</th>
+                    <th style="width: 40px;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                @for (int i = 0; i < _newTableColumns.Count; i++)
+                {
+                    var idx = i;
+                    var col = _newTableColumns[idx];
+                    <tr class="schema-edit-row">
+                        <td><input type="text" placeholder="column name" @bind="col.Name" @bind:event="oninput" /></td>
+                        <td>
+                            <select @bind="col.Type">
+                                @foreach (var t in ColumnTypes)
+                                {
+                                    <option value="@t">@t</option>
+                                }
+                            </select>
+                        </td>
+                        <td>
+                            @if (col.Type == "string")
+                            {
+                                <input type="number" placeholder="255" @bind="col.Size" @bind:event="oninput" style="width: 70px;" />
+                            }
+                        </td>
+                        <td>@RenderDefaultInput(col)</td>
+                        <td style="text-align: center;"><input type="checkbox" @bind="col.Strict" /></td>
+                        <td style="text-align: center;">
+                            <button class="schema-action-btn" @onclick="() => _newTableColumns.RemoveAt(idx)" title="Remove">&times;</button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <div style="padding: 6px 12px;">
+            <button class="schema-action-btn" style="font-size: 12px; padding: 4px 10px;" @onclick="AddWizardColumn">+ Add Column</button>
+        </div>
+    </div>
+}
+
 <!-- Table List -->
 <div class="schema-table-list">
     @if (string.IsNullOrEmpty(selectedDatabase))
@@ -26,7 +88,7 @@
             <div class="placeholder-subtitle">Choose a database above to browse its schema</div>
         </div>
     }
-    else if (tables is { Count: 0 })
+    else if (tables is { Count: 0 } && _newTableName is null)
     {
         <div class="placeholder-page">
             <div class="placeholder-title" style="font-size: 14px;">No tables</div>
@@ -47,6 +109,7 @@
                 {
                     <span class="tree-badge">@cached.Count col@(cached.Count != 1 ? "s" : "")</span>
                 }
+                <button class="schema-action-btn" @onclick="() => StartAddColumn(table)" @onclick:stopPropagation="true" title="Add column">+</button>
             </div>
 
             @if (isExpanded && columnCache.TryGetValue(table, out var cols))
@@ -66,9 +129,59 @@
                         <tbody>
                             @foreach (var col in cols)
                             {
+                                var isRenamingThis = _renamingTable == table && _renamingColumn == col.Name;
+                                var isAlteringThis = _alteringTable == table && _alteringColumn == col.Name;
+
                                 <tr>
-                                    <td class="cell-id" style="font-weight: 600;">@col.Name</td>
-                                    <td><span class="schema-type-badge @GetTypeBadgeClass(col.Type)">@FormatType(col)</span></td>
+                                    @* ── Name cell (double-click to rename) ── *@
+                                    @if (isRenamingThis)
+                                    {
+                                        <td class="cell-editing">
+                                            <input class="schema-inline-input"
+                                                   type="text"
+                                                   @bind="_renameValue"
+                                                   @bind:event="oninput"
+                                                   @onkeyup="HandleRenameKey"
+                                                   @onblur="CancelRename"
+                                                   @ref="_renameInputRef" />
+                                            @if (_renameError is not null)
+                                            {
+                                                <div class="schema-edit-error">@_renameError</div>
+                                            }
+                                        </td>
+                                    }
+                                    else
+                                    {
+                                        <td class="cell-id" style="font-weight: 600; cursor: default;"
+                                            @ondblclick="() => StartRename(table, col.Name)">@col.Name</td>
+                                    }
+
+                                    @* ── Type+Size cell (double-click size to alter) ── *@
+                                    @if (isAlteringThis)
+                                    {
+                                        <td class="cell-editing" colspan="1">
+                                            <span class="schema-type-badge @GetTypeBadgeClass(col.Type)">@(col.Type)(</span>
+                                            <input class="schema-inline-input" style="width: 60px; display: inline;"
+                                                   type="number"
+                                                   @bind="_alterValue"
+                                                   @bind:event="oninput"
+                                                   @onkeyup="HandleAlterKey"
+                                                   @onblur="CancelAlter"
+                                                   @ref="_alterInputRef" />
+                                            <span>)</span>
+                                            @if (_alterError is not null)
+                                            {
+                                                <div class="schema-edit-error">@_alterError</div>
+                                            }
+                                        </td>
+                                    }
+                                    else
+                                    {
+                                        <td @ondblclick="() => StartAlter(table, col)">
+                                            <span class="schema-type-badge @GetTypeBadgeClass(col.Type)">@FormatType(col)</span>
+                                        </td>
+                                    }
+
                                     <td class="schema-prop @(col.Nullable ? "yes" : "no")">@(col.Nullable ? "\u2713" : "\u2717")</td>
                                     <td class="cell-null">@(col.Default ?? "\u2014")</td>
                                     <td class="schema-prop @(col.Strict ? "yes" : "no")">@(col.Strict ? "\u2713" : "\u2717")</td>
@@ -79,6 +192,38 @@
                                         }
                                     </td>
                                 </tr>
+                            }
+
+                            @* ── Add Column row ── *@
+                            @if (_addColumnForTable == table)
+                            {
+                                <tr class="schema-edit-row">
+                                    <td><input type="text" placeholder="column name" @bind="_newColumn.Name" @bind:event="oninput" @ref="_addColumnInputRef" /></td>
+                                    <td>
+                                        <select @bind="_newColumn.Type">
+                                            @foreach (var t in ColumnTypes)
+                                            {
+                                                <option value="@t">@t</option>
+                                            }
+                                        </select>
+                                    </td>
+                                    <td class="schema-prop" colspan="1">
+                                        @if (_newColumn.Type == "string")
+                                        {
+                                            <input type="number" placeholder="255" @bind="_newColumn.Size" @bind:event="oninput" style="width: 60px;" />
+                                        }
+                                    </td>
+                                    <td>@RenderDefaultInput(_newColumn)</td>
+                                    <td style="text-align: center;"><input type="checkbox" @bind="_newColumn.Strict" /></td>
+                                    <td style="text-align: center;">
+                                        <button class="schema-action-btn" style="color: var(--sprout);" @onclick="SubmitAddColumn" title="Confirm">&#10003;</button>
+                                        <button class="schema-action-btn" @onclick="CancelAddColumn" title="Cancel">&times;</button>
+                                    </td>
+                                </tr>
+                                @if (_addColumnError is not null)
+                                {
+                                    <tr><td colspan="6"><div class="schema-edit-error">@_addColumnError</div></td></tr>
+                                }
                             }
                         </tbody>
                     </table>
@@ -92,11 +237,17 @@
     [Inject]
     private SproutEngine Engine { get; set; } = default!;
 
+    [Inject]
+    private NavigationManager NavigationManager { get; set; } = default!;
+
     [SupplyParameterFromQuery(Name = "db")]
     private string? DbParam { get; set; }
 
     [SupplyParameterFromQuery(Name = "table")]
     private string? TableParam { get; set; }
+
+    [SupplyParameterFromQuery(Name = "newTable")]
+    private string? NewTableParam { get; set; }
 
     private IReadOnlyList<ISproutDatabase> databases = [];
     private string selectedDatabase = string.Empty;
@@ -105,6 +256,37 @@
     private Dictionary<string, List<ColumnInfo>> columnCache = new(StringComparer.OrdinalIgnoreCase);
 
     private bool initialized;
+
+    // ── Create Table Wizard ──
+    private string? _newTableName;
+    private List<NewColumnDef> _newTableColumns = new();
+    private string? _createTableError;
+
+    // ── Add Column ──
+    private string? _addColumnForTable;
+    private NewColumnDef _newColumn = new();
+    private string? _addColumnError;
+    private ElementReference _addColumnInputRef;
+    private bool _shouldFocusAddColumn;
+
+    // ── Rename Column ──
+    private string? _renamingTable;
+    private string? _renamingColumn;
+    private string _renameValue = string.Empty;
+    private string? _renameError;
+    private ElementReference _renameInputRef;
+    private bool _shouldFocusRename;
+
+    // ── Alter Column Size ──
+    private string? _alteringTable;
+    private string? _alteringColumn;
+    private string _alterValue = string.Empty;
+    private string? _alterError;
+    private ElementReference _alterInputRef;
+    private bool _shouldFocusAlter;
+
+    private static readonly string[] ColumnTypes =
+        ["string", "bool", "sbyte", "ubyte", "sshort", "ushort", "sint", "uint", "slong", "ulong", "float", "double", "date", "time", "datetime"];
 
     protected override void OnInitialized()
     {
@@ -132,6 +314,35 @@
             {
                 ExpandTable(TableParam);
             }
+
+            // Open Create Table wizard from sidebar navigation
+            if (!string.IsNullOrEmpty(NewTableParam) && !string.IsNullOrEmpty(selectedDatabase))
+            {
+                _newTableName = NewTableParam;
+                _newTableColumns = [new NewColumnDef()];
+                _createTableError = null;
+            }
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_shouldFocusRename)
+        {
+            _shouldFocusRename = false;
+            try { await _renameInputRef.FocusAsync(); } catch { }
+        }
+
+        if (_shouldFocusAlter)
+        {
+            _shouldFocusAlter = false;
+            try { await _alterInputRef.FocusAsync(); } catch { }
+        }
+
+        if (_shouldFocusAddColumn)
+        {
+            _shouldFocusAddColumn = false;
+            try { await _addColumnInputRef.FocusAsync(); } catch { }
         }
     }
 
@@ -140,6 +351,10 @@
         tables = null;
         expandedTable = null;
         columnCache.Clear();
+        _newTableName = null;
+        _addColumnForTable = null;
+        CancelRename();
+        CancelAlter();
 
         if (!string.IsNullOrEmpty(selectedDatabase))
         {
@@ -168,13 +383,328 @@
     private void ExpandTable(string table)
     {
         expandedTable = table;
-
-        if (!columnCache.ContainsKey(table))
-        {
-            var response = Engine.Execute($"describe {table}", selectedDatabase);
-            columnCache[table] = response.Schema?.Columns ?? [];
-        }
+        // Always refresh columns when expanding
+        var response = Engine.Execute($"describe {table}", selectedDatabase);
+        columnCache[table] = response.Schema?.Columns ?? [];
     }
+
+    // ── A) Create Table Wizard ──
+
+    private void AddWizardColumn()
+    {
+        _newTableColumns.Add(new NewColumnDef());
+    }
+
+    private void CancelCreateWizard()
+    {
+        _newTableName = null;
+        _newTableColumns.Clear();
+        _createTableError = null;
+        // Remove newTable from URL without reload
+        NavigationManager.NavigateTo(
+            $"/sproutdb/admin/schema?db={Uri.EscapeDataString(selectedDatabase)}",
+            forceLoad: false, replace: true);
+    }
+
+    private void SubmitCreateTable()
+    {
+        if (_newTableName is null) return;
+
+        var validColumns = _newTableColumns.Where(c => !string.IsNullOrWhiteSpace(c.Name)).ToList();
+        if (validColumns.Count == 0)
+        {
+            _createTableError = "Add at least one column";
+            return;
+        }
+
+        var colDefs = string.Join(", ", validColumns.Select(FormatColumnDef));
+        var query = $"create table {_newTableName} ({colDefs})";
+
+        var response = Engine.Execute(query, selectedDatabase);
+        if (response.Operation == SproutOperation.Error)
+        {
+            _createTableError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to create table";
+            return;
+        }
+
+        var tableName = _newTableName;
+        _newTableName = null;
+        _newTableColumns.Clear();
+        _createTableError = null;
+
+        LoadTables();
+        ExpandTable(tableName);
+
+        NavigationManager.NavigateTo(
+            $"/sproutdb/admin/schema?db={Uri.EscapeDataString(selectedDatabase)}",
+            forceLoad: false, replace: true);
+    }
+
+    private static string FormatColumnDef(NewColumnDef col)
+    {
+        var parts = new List<string> { col.Name.Trim(), col.Type };
+
+        if (col.Type == "string" && !string.IsNullOrWhiteSpace(col.Size))
+            parts.Add(col.Size.Trim());
+
+        if (col.Strict)
+            parts.Add("strict");
+
+        if (!string.IsNullOrWhiteSpace(col.Default))
+        {
+            var def = col.Default.Trim();
+            // Wrap string defaults in quotes if not already quoted
+            if (col.Type == "string" && !def.StartsWith('\''))
+                def = $"'{def}'";
+            parts.Add($"default {def}");
+        }
+
+        return string.Join(" ", parts);
+    }
+
+    // ── B) Add Column ──
+
+    private void StartAddColumn(string table)
+    {
+        // Expand table if not already
+        if (expandedTable != table)
+            ExpandTable(table);
+
+        _addColumnForTable = table;
+        _newColumn = new NewColumnDef();
+        _addColumnError = null;
+        _shouldFocusAddColumn = true;
+    }
+
+    private void CancelAddColumn()
+    {
+        _addColumnForTable = null;
+        _newColumn = new NewColumnDef();
+        _addColumnError = null;
+    }
+
+    private void SubmitAddColumn()
+    {
+        if (_addColumnForTable is null) return;
+
+        var name = _newColumn.Name.Trim();
+        if (string.IsNullOrEmpty(name))
+        {
+            _addColumnError = "Column name cannot be empty";
+            return;
+        }
+
+        var query = $"add column {_addColumnForTable}.{name} {_newColumn.Type}";
+
+        if (_newColumn.Type == "string" && !string.IsNullOrWhiteSpace(_newColumn.Size))
+            query += $" {_newColumn.Size.Trim()}";
+
+        if (_newColumn.Strict)
+            query += " strict";
+
+        if (!string.IsNullOrWhiteSpace(_newColumn.Default))
+        {
+            var def = _newColumn.Default.Trim();
+            if (_newColumn.Type == "string" && !def.StartsWith('\''))
+                def = $"'{def}'";
+            query += $" default {def}";
+        }
+
+        var response = Engine.Execute(query, selectedDatabase);
+        if (response.Operation == SproutOperation.Error)
+        {
+            _addColumnError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to add column";
+            return;
+        }
+
+        var table = _addColumnForTable;
+        _addColumnForTable = null;
+        _newColumn = new NewColumnDef();
+        _addColumnError = null;
+
+        // Refresh columns
+        columnCache.Remove(table);
+        ExpandTable(table);
+    }
+
+    // ── C) Rename Column ──
+
+    private void StartRename(string table, string column)
+    {
+        if (column == "_id") return; // reserved
+
+        _renamingTable = table;
+        _renamingColumn = column;
+        _renameValue = column;
+        _renameError = null;
+        _shouldFocusRename = true;
+    }
+
+    private void CancelRename()
+    {
+        _renamingTable = null;
+        _renamingColumn = null;
+        _renameValue = string.Empty;
+        _renameError = null;
+    }
+
+    private void HandleRenameKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            SubmitRename();
+        else if (e.Key == "Escape")
+            CancelRename();
+    }
+
+    private void SubmitRename()
+    {
+        if (_renamingTable is null || _renamingColumn is null) return;
+
+        var newName = _renameValue.Trim();
+        if (string.IsNullOrEmpty(newName))
+        {
+            _renameError = "Name cannot be empty";
+            return;
+        }
+
+        if (newName == _renamingColumn)
+        {
+            CancelRename();
+            return;
+        }
+
+        var query = $"rename column {_renamingTable}.{_renamingColumn} to {newName}";
+        var response = Engine.Execute(query, selectedDatabase);
+        if (response.Operation == SproutOperation.Error)
+        {
+            _renameError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to rename column";
+            return;
+        }
+
+        var table = _renamingTable;
+        CancelRename();
+
+        // Refresh columns
+        columnCache.Remove(table);
+        ExpandTable(table);
+    }
+
+    // ── D) Alter Column Size ──
+
+    private void StartAlter(string table, ColumnInfo col)
+    {
+        // Only string columns with a size can be altered
+        if (!col.Type.Equals("string", StringComparison.OrdinalIgnoreCase) || !col.Size.HasValue)
+            return;
+
+        _alteringTable = table;
+        _alteringColumn = col.Name;
+        _alterValue = col.Size.Value.ToString();
+        _alterError = null;
+        _shouldFocusAlter = true;
+    }
+
+    private void CancelAlter()
+    {
+        _alteringTable = null;
+        _alteringColumn = null;
+        _alterValue = string.Empty;
+        _alterError = null;
+    }
+
+    private void HandleAlterKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            SubmitAlter();
+        else if (e.Key == "Escape")
+            CancelAlter();
+    }
+
+    private void SubmitAlter()
+    {
+        if (_alteringTable is null || _alteringColumn is null) return;
+
+        var sizeStr = _alterValue.Trim();
+        if (string.IsNullOrEmpty(sizeStr) || !int.TryParse(sizeStr, out var newSize) || newSize <= 0)
+        {
+            _alterError = "Enter a valid size";
+            return;
+        }
+
+        var query = $"alter column {_alteringTable}.{_alteringColumn} string {newSize}";
+        var response = Engine.Execute(query, selectedDatabase);
+        if (response.Operation == SproutOperation.Error)
+        {
+            _alterError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to alter column";
+            return;
+        }
+
+        var table = _alteringTable;
+        CancelAlter();
+
+        // Refresh columns
+        columnCache.Remove(table);
+        ExpandTable(table);
+    }
+
+    // ── Default Input ──
+
+    private RenderFragment RenderDefaultInput(NewColumnDef col) => builder =>
+    {
+        if (col.Type == "bool")
+        {
+            builder.OpenElement(0, "select");
+            builder.AddAttribute(1, "value", col.Default);
+            builder.AddAttribute(2, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e =>
+                col.Default = e.Value?.ToString() ?? string.Empty));
+
+            builder.OpenElement(3, "option");
+            builder.AddAttribute(4, "value", "");
+            builder.AddContent(5, "(none)");
+            builder.CloseElement();
+
+            builder.OpenElement(6, "option");
+            builder.AddAttribute(7, "value", "true");
+            builder.AddContent(8, "true");
+            builder.CloseElement();
+
+            builder.OpenElement(9, "option");
+            builder.AddAttribute(10, "value", "false");
+            builder.AddContent(11, "false");
+            builder.CloseElement();
+
+            builder.CloseElement();
+        }
+        else if (IsNumericType(col.Type))
+        {
+            builder.OpenElement(0, "input");
+            builder.AddAttribute(1, "type", "number");
+            builder.AddAttribute(2, "placeholder", "none");
+            builder.AddAttribute(3, "value", col.Default);
+            builder.AddAttribute(4, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(this, e =>
+                col.Default = e.Value?.ToString() ?? string.Empty));
+            if (IsFloatingType(col.Type))
+                builder.AddAttribute(5, "step", "any");
+            builder.CloseElement();
+        }
+        else
+        {
+            builder.OpenElement(0, "input");
+            builder.AddAttribute(1, "type", "text");
+            builder.AddAttribute(2, "placeholder", "none");
+            builder.AddAttribute(3, "value", col.Default);
+            builder.AddAttribute(4, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(this, e =>
+                col.Default = e.Value?.ToString() ?? string.Empty));
+            builder.CloseElement();
+        }
+    };
+
+    private static bool IsNumericType(string type) => type is "sbyte" or "ubyte" or "sshort" or "ushort"
+        or "sint" or "uint" or "slong" or "ulong" or "float" or "double";
+
+    private static bool IsFloatingType(string type) => type is "float" or "double";
+
+    // ── Helpers ──
 
     private static string FormatType(ColumnInfo col)
     {
@@ -196,5 +726,14 @@
                 or "short" or "ushort" or "float" or "double" or "decimal" => "type-number",
             _ => "type-default"
         };
+    }
+
+    private sealed class NewColumnDef
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Type { get; set; } = "string";
+        public string Size { get; set; } = string.Empty;
+        public string Default { get; set; } = string.Empty;
+        public bool Strict { get; set; }
     }
 }

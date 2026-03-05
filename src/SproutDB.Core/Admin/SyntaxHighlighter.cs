@@ -26,7 +26,7 @@ internal static class SyntaxHighlighter
     private static readonly HashSet<string> Operators = new(StringComparer.OrdinalIgnoreCase)
     {
         "and", "or", "not", "in", "like", "between",
-        "contains", "startswith", "endswith",
+        "contains", "starts", "ends", "startswith", "endswith", "is",
     };
 
     private static readonly HashSet<string> Aggregates = new(StringComparer.OrdinalIgnoreCase)

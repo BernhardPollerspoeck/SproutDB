@@ -48,6 +48,327 @@
                         pre.scrollTop = ta.scrollTop;
                         pre.scrollLeft = ta.scrollLeft;
                     });
+                },
+
+                // ── Schema store ──
+                _schema: { tables: [], columns: {} },
+                updateSchema: function(schema) {
+                    sproutAdmin._schema = schema || { tables: [], columns: {} };
+                },
+
+                // ── Autocomplete engine ──
+                initAutocomplete: function(wrapEl, dotnetRef) {
+                    if (!wrapEl || wrapEl._acInit) return;
+                    wrapEl._acInit = true;
+
+                    var ta = wrapEl.querySelector('textarea');
+                    if (!ta) return;
+
+                    // Create popup on body so it's not clipped by overflow:hidden
+                    var popup = document.createElement('div');
+                    popup.className = 'ac-popup';
+                    document.body.appendChild(popup);
+
+                    // Create mirror for caret positioning
+                    var mirror = document.createElement('div');
+                    mirror.className = 'ac-mirror';
+                    wrapEl.appendChild(mirror);
+
+                    var sel = 0;
+                    var items = [];
+                    var visible = false;
+
+                    var COMMANDS = ['get','upsert','delete','describe','create','purge','add','alter','rename','backup','restore'];
+                    var CLAUSES = ['where','select','order','limit','page','count','distinct','group','follow','on','as'];
+                    var OPERATORS = ['=','!=','>','>=','<','<=','between','in','is','contains','starts','ends'];
+                    var DIRECTIONS = ['asc','desc'];
+                    var BOOLEANS = ['true','false','null'];
+                    var TYPES = ['string','bool','sbyte','ubyte','sshort','ushort','sint','uint','slong','ulong','float','double','date','time','datetime'];
+                    var CREATE_SUB = ['database','table','index','apikey'];
+                    var PURGE_SUB = ['database','table','column','index','apikey'];
+
+                    function getContext(text, pos) {
+                        // Get current line up to cursor
+                        var before = text.substring(0, pos);
+                        var lineStart = before.lastIndexOf('\n') + 1;
+                        var line = before.substring(lineStart);
+                        var tokens = line.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
+                        var prefix = '';
+
+                        if (tokens.length === 0) return { type: 'command', prefix: '', table: null };
+
+                        // Determine if we're mid-word or starting a new token
+                        var endsWithSpace = line.length > 0 && line[line.length - 1] === ' ';
+                        if (!endsWithSpace && tokens.length > 0) {
+                            prefix = tokens[tokens.length - 1];
+                            tokens = tokens.slice(0, -1);
+                        }
+
+                        var cmd = tokens.length > 0 ? tokens[0].toLowerCase() : prefix.toLowerCase();
+
+                        if (tokens.length === 0) return { type: 'command', prefix: prefix, table: null };
+
+                        // Detect table from tokens
+                        var table = null;
+                        for (var i = 0; i < tokens.length; i++) {
+                            var tl = tokens[i].toLowerCase();
+                            if ((tl === 'get' || tl === 'upsert' || tl === 'delete' || tl === 'from' || tl === 'describe' || tl === 'purge') && i + 1 < tokens.length) {
+                                var next = tokens[i + 1].toLowerCase();
+                                if (next !== 'from' && next !== 'database' && next !== 'table' && next !== 'column' && next !== 'index' && next !== 'apikey') {
+                                    table = tokens[i + 1];
+                                }
+                            }
+                        }
+
+                        // Check for table.col pattern in prefix
+                        if (prefix.indexOf('.') > 0) {
+                            var parts = prefix.split('.');
+                            return { type: 'column', prefix: parts[1] || '', table: parts[0] };
+                        }
+
+                        var lastToken = tokens[tokens.length - 1].toLowerCase();
+
+                        // After create → create-sub
+                        if (cmd === 'create' && tokens.length === 1) return { type: 'create-sub', prefix: prefix, table: null };
+
+                        // After purge → purge-sub
+                        if (cmd === 'purge' && tokens.length === 1) return { type: 'purge-sub', prefix: prefix, table: null };
+
+                        // After command keyword → table
+                        if (tokens.length === 1 && (cmd === 'get' || cmd === 'upsert' || cmd === 'delete' || cmd === 'describe'))
+                            return { type: 'table', prefix: prefix, table: null };
+
+                        // After from/table keyword → table
+                        if (lastToken === 'from' || lastToken === 'table')
+                            return { type: 'table', prefix: prefix, table: null };
+
+                        // After purge subcommand → table
+                        if (cmd === 'purge' && tokens.length === 2)
+                            return { type: 'table', prefix: prefix, table: null };
+
+                        // After 'order by' → column
+                        if (tokens.length >= 2 && tokens[tokens.length - 2].toLowerCase() === 'order' && lastToken === 'by')
+                            return { type: 'column', prefix: prefix, table: table };
+
+                        // After where/select/by → column
+                        if (lastToken === 'where' || lastToken === 'select' || lastToken === 'by')
+                            return { type: 'column', prefix: prefix, table: table };
+
+                        // After 'order by <col>' → direction
+                        if (tokens.length >= 3) {
+                            var ob1 = tokens[tokens.length - 3] ? tokens[tokens.length - 3].toLowerCase() : '';
+                            var ob2 = tokens[tokens.length - 2] ? tokens[tokens.length - 2].toLowerCase() : '';
+                            if (ob1 === 'order' && ob2 === 'by')
+                                return { type: 'direction', prefix: prefix, table: table };
+                        }
+
+                        // After 'where <col>' → operator
+                        if (tokens.length >= 2 && tokens[tokens.length - 2].toLowerCase() === 'where')
+                            return { type: 'operator', prefix: prefix, table: table };
+
+                        // After 'and/or <col>' → operator
+                        if (tokens.length >= 2 && (tokens[tokens.length - 2].toLowerCase() === 'and' || tokens[tokens.length - 2].toLowerCase() === 'or'))
+                            return { type: 'operator', prefix: prefix, table: table };
+
+                        // After operator → boolean
+                        var ops = ['=','!=','>','>=','<','<=','contains','starts','ends','between','in','is'];
+                        if (ops.indexOf(lastToken) >= 0)
+                            return { type: 'boolean', prefix: prefix, table: table };
+
+                        // After 'add column tbl.col' or inside type context
+                        if (cmd === 'add' && tokens.length >= 3)
+                            return { type: 'type', prefix: prefix, table: table };
+
+                        // After table name → clause
+                        if (table) {
+                            // Check if lastToken is the table name or a value/direction — suggest clause
+                            return { type: 'clause', prefix: prefix, table: table };
+                        }
+
+                        return { type: 'command', prefix: prefix, table: null };
+                    }
+
+                    function getSuggestions(ctx) {
+                        var list, cat;
+                        switch (ctx.type) {
+                            case 'command': list = COMMANDS; cat = 'cmd'; break;
+                            case 'table': list = sproutAdmin._schema.tables || []; cat = 'tbl'; break;
+                            case 'column':
+                                var t = ctx.table;
+                                if (t && sproutAdmin._schema.columns) {
+                                    // Case-insensitive lookup
+                                    var cols = null;
+                                    var keys = Object.keys(sproutAdmin._schema.columns);
+                                    for (var k = 0; k < keys.length; k++) {
+                                        if (keys[k].toLowerCase() === t.toLowerCase()) {
+                                            cols = sproutAdmin._schema.columns[keys[k]];
+                                            break;
+                                        }
+                                    }
+                                    list = cols || [];
+                                } else {
+                                    list = [];
+                                }
+                                cat = 'col'; break;
+                            case 'clause': list = CLAUSES; cat = 'kw'; break;
+                            case 'operator': list = OPERATORS; cat = 'op'; break;
+                            case 'direction': list = DIRECTIONS; cat = 'dir'; break;
+                            case 'boolean': list = BOOLEANS; cat = 'val'; break;
+                            case 'type': list = TYPES; cat = 'type'; break;
+                            case 'create-sub': list = CREATE_SUB; cat = 'kw'; break;
+                            case 'purge-sub': list = PURGE_SUB; cat = 'kw'; break;
+                            default: list = []; cat = '';
+                        }
+                        var p = (ctx.prefix || '').toLowerCase();
+                        var filtered = list.filter(function(s) { return s.toLowerCase().indexOf(p) === 0; });
+                        return { items: filtered.slice(0, 12), cat: cat };
+                    }
+
+                    function positionPopup() {
+                        var cs = getComputedStyle(ta);
+                        mirror.style.fontFamily = cs.fontFamily;
+                        mirror.style.fontSize = cs.fontSize;
+                        mirror.style.lineHeight = cs.lineHeight;
+                        mirror.style.padding = cs.padding;
+                        mirror.style.width = cs.width;
+                        mirror.style.letterSpacing = cs.letterSpacing;
+                        mirror.style.wordSpacing = cs.wordSpacing;
+                        mirror.style.tabSize = cs.tabSize;
+
+                        var textBefore = ta.value.substring(0, ta.selectionStart);
+                        mirror.textContent = '';
+                        var span = document.createElement('span');
+                        span.textContent = textBefore;
+                        mirror.appendChild(span);
+                        var caret = document.createElement('span');
+                        caret.textContent = '|';
+                        mirror.appendChild(caret);
+
+                        var caretRect = caret.getBoundingClientRect();
+                        var lineH = parseInt(cs.lineHeight) || 22;
+
+                        popup.style.left = caretRect.left + 'px';
+                        popup.style.top = (caretRect.top + lineH) + 'px';
+                    }
+
+                    function show(sugg, cat) {
+                        items = sugg;
+                        sel = 0;
+                        if (items.length === 0) { hide(); return; }
+                        popup.innerHTML = '';
+                        for (var i = 0; i < items.length; i++) {
+                            var div = document.createElement('div');
+                            div.className = 'ac-item' + (i === 0 ? ' active' : '');
+                            div.innerHTML = '<span class="ac-cat">' + cat + '</span>' + escapeHtml(items[i]);
+                            div.dataset.idx = i;
+                            div.addEventListener('mousedown', function(e) {
+                                e.preventDefault();
+                                accept(parseInt(this.dataset.idx));
+                            });
+                            popup.appendChild(div);
+                        }
+                        positionPopup();
+                        popup.classList.add('visible');
+                        visible = true;
+                    }
+
+                    function hide() {
+                        popup.classList.remove('visible');
+                        visible = false;
+                        items = [];
+                    }
+
+                    function highlight(idx) {
+                        var children = popup.children;
+                        for (var i = 0; i < children.length; i++) {
+                            children[i].classList.toggle('active', i === idx);
+                        }
+                        sel = idx;
+                        // Scroll into view
+                        if (children[idx]) children[idx].scrollIntoView({ block: 'nearest' });
+                    }
+
+                    function accept(idx) {
+                        if (idx < 0 || idx >= items.length) return;
+                        var val = items[idx];
+                        var pos = ta.selectionStart;
+                        var text = ta.value;
+                        var ctx = getContext(text, pos);
+                        var prefixLen = (ctx.prefix || '').length;
+
+                        // Handle table.col prefix pattern
+                        if (ctx.type === 'column' && text.substring(0, pos).lastIndexOf('.') > text.substring(0, pos).lastIndexOf(' ')) {
+                            var dotPos = text.substring(0, pos).lastIndexOf('.');
+                            prefixLen = pos - dotPos - 1;
+                        }
+
+                        var before = text.substring(0, pos - prefixLen);
+                        var after = text.substring(pos);
+                        var newVal = before + val + (after.length === 0 || after[0] !== ' ' ? ' ' : '') + after;
+                        ta.value = newVal;
+                        var newPos = before.length + val.length + 1;
+                        ta.setSelectionRange(newPos, newPos);
+
+                        // Dispatch input event for Blazor binding
+                        ta.dispatchEvent(new Event('input', { bubbles: true }));
+
+                        // Sync to Blazor for highlight update
+                        if (dotnetRef) {
+                            dotnetRef.invokeMethodAsync('OnAutoCompleteInput', ta.value);
+                        }
+
+                        hide();
+                    }
+
+                    function escapeHtml(s) {
+                        var d = document.createElement('span');
+                        d.textContent = s;
+                        return d.innerHTML;
+                    }
+
+                    function trigger() {
+                        var ctx = getContext(ta.value, ta.selectionStart);
+                        var result = getSuggestions(ctx);
+                        if (result.items.length > 0) {
+                            show(result.items, result.cat);
+                        } else {
+                            hide();
+                        }
+                    }
+
+                    ta.addEventListener('input', function() { trigger(); });
+
+                    ta.addEventListener('keydown', function(e) {
+                        // Ctrl+Space force trigger
+                        if (e.ctrlKey && e.key === ' ') {
+                            e.preventDefault();
+                            trigger();
+                            return;
+                        }
+
+                        if (!visible) return;
+
+                        if (e.key === 'ArrowDown') {
+                            e.preventDefault();
+                            highlight((sel + 1) % items.length);
+                        } else if (e.key === 'ArrowUp') {
+                            e.preventDefault();
+                            highlight((sel - 1 + items.length) % items.length);
+                        } else if (e.key === 'Tab' || e.key === 'Enter') {
+                            // Only intercept if popup is visible
+                            e.preventDefault();
+                            e.stopPropagation();
+                            accept(sel);
+                        } else if (e.key === 'Escape') {
+                            e.preventDefault();
+                            hide();
+                        }
+                    });
+
+                    ta.addEventListener('blur', function() {
+                        // Small delay so mousedown on popup items fires first
+                        setTimeout(hide, 150);
+                    });
                 }
             };
         })();

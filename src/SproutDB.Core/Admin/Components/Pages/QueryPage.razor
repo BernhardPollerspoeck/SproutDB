@@ -5,7 +5,7 @@
 <!-- Query Editor -->
 <div class="query-section">
     <div class="query-toolbar">
-        <select class="query-db-select" @bind="selectedDatabase">
+        <select class="query-db-select" @bind="selectedDatabase" @bind:after="OnDatabaseChanged">
             <option value="">(select database)</option>
             @foreach (var db in databases)
             {
@@ -215,6 +215,10 @@
     private ElementReference _editorWrapRef;
     private bool _editorInitialized;
 
+    // Autocomplete
+    private DotNetObjectReference<QueryPage>? _dotnetRef;
+    private string _lastSchemaDb = string.Empty;
+
     // Inline editing state
     private ElementReference _editInputRef;
     private bool _shouldFocusEdit;
@@ -244,6 +248,11 @@
             autoExecuted = true;
             RunQuery();
         }
+
+        if (_editorInitialized && selectedDatabase != _lastSchemaDb)
+        {
+            _ = PushSchemaAsync();
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -252,6 +261,9 @@
         {
             _editorInitialized = true;
             await JS.InvokeVoidAsync("sproutAdmin.initEditor", _editorWrapRef);
+            _dotnetRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("sproutAdmin.initAutocomplete", _editorWrapRef, _dotnetRef);
+            await PushSchemaAsync();
         }
 
         if (_shouldFocusEdit)
@@ -595,6 +607,59 @@
         return $"'{escaped}'";
     }
 
+    private async Task OnDatabaseChanged()
+    {
+        if (_editorInitialized)
+        {
+            await PushSchemaAsync();
+        }
+    }
+
+    // --- Autocomplete ---
+
+    [JSInvokable]
+    public void OnAutoCompleteInput(string value)
+    {
+        _QueryText = value;
+        _highlightedQuery = SyntaxHighlighter.Highlight(value);
+        StateHasChanged();
+    }
+
+    private async Task PushSchemaAsync()
+    {
+        if (string.IsNullOrEmpty(selectedDatabase))
+        {
+            _lastSchemaDb = string.Empty;
+            return;
+        }
+
+        _lastSchemaDb = selectedDatabase;
+        var schema = BuildSchema(selectedDatabase);
+        await JS.InvokeVoidAsync("sproutAdmin.updateSchema", schema);
+    }
+
+    private object BuildSchema(string dbName)
+    {
+        var tables = new List<string>();
+        var columns = new Dictionary<string, List<string>>();
+
+        var describeDb = Engine.Execute("describe", dbName);
+        if (describeDb.Schema?.Tables is { } tableList)
+        {
+            tables.AddRange(tableList);
+            foreach (var table in tableList)
+            {
+                var describeTable = Engine.Execute($"describe {table}", dbName);
+                if (describeTable.Schema?.Columns is { } cols)
+                {
+                    columns[table] = cols.Select(c => c.Name).ToList();
+                }
+            }
+        }
+
+        return new { tables, columns };
+    }
+
     // --- Helpers ---
 
     private static string? ExtractTableName(string query)
@@ -682,6 +747,7 @@
         _tableSubscription?.Dispose();
         _statsFlashTimer?.Dispose();
         _flashTimer?.Dispose();
+        _dotnetRef?.Dispose();
     }
 
     private sealed class ColumnMeta
