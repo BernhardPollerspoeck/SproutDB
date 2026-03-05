@@ -26,7 +26,8 @@
         <button class="btn btn-ghost">Format</button>
         @if (lastResponse is not null)
         {
-            <div class="query-stats">
+            <div class="query-stats @(_statsFlash ? "stats-flash" : "")">
+                <span class="stat-ok">&#10003;</span>
                 <span><span class="stat-value">@FormatElapsed(elapsedMs)</span> <span class="stat-label">time</span></span>
                 <span><span class="stat-value">@rowCount</span> <span class="stat-label">rows</span></span>
                 <span><span class="stat-value">@FormatBytes(payloadBytes)</span> <span class="stat-label">size</span></span>
@@ -89,13 +90,14 @@
                                 row.TryGetValue(col.Name, out var cellValue);
                                 @if (_editingRowId is not null && _editingRowId == rowId && _editingColumn == col.Name)
                                 {
-                                    <td class="@GetCellClass(col, cellValue)">
+                                    <td class="@GetCellClass(col, cellValue) cell-editing">
                                         <input @ref="_editInputRef"
                                                class="cell-edit-input"
                                                type="text"
-                                               value="@_editValue"
-                                               @oninput="OnEditInput"
-                                               @onkeyup="HandleEditKeyUp" />
+                                               @bind="_editValue"
+                                               @bind:event="oninput"
+                                               @onkeyup="HandleEditKeyUp"
+                                               @onblur="CommitEdit" />
                                         @if (_editError is not null)
                                         {
                                             <div class="cell-edit-error">@_editError</div>
@@ -104,13 +106,20 @@
                                 }
                                 else
                                 {
-                                    <td class="@GetCellClass(col, cellValue)">
-                                        @FormatCell(cellValue)
-                                        @if (_canEdit && col.Name != "_id" && _hasIdColumn)
-                                        {
+                                    @if (_canEdit && col.Name != "_id" && _hasIdColumn)
+                                    {
+                                        <td class="@GetCellClass(col, cellValue) cell-editable"
+                                            @ondblclick="() => StartEdit(rowId, col.Name, cellValue)">
+                                            @FormatCell(cellValue)
                                             <span class="cell-edit-icon" @onclick="() => StartEdit(rowId, col.Name, cellValue)" @onclick:stopPropagation="true">&#9998;</span>
-                                        }
-                                    </td>
+                                        </td>
+                                    }
+                                    else
+                                    {
+                                        <td class="@GetCellClass(col, cellValue)">
+                                            @FormatCell(cellValue)
+                                        </td>
+                                    }
                                 }
                             }
                         </tr>
@@ -168,6 +177,8 @@
     private List<ColumnMeta> columns = new();
 
     private bool autoExecuted;
+    private bool _statsFlash;
+    private System.Threading.Timer? _statsFlashTimer;
 
     // Live-update state
     private IDisposable? _tableSubscription;
@@ -248,6 +259,15 @@
 
         RebuildColumns(lastResponse, queryText);
         _displayData = lastResponse.Data;
+
+        // Flash the stats bar to signal execution
+        _statsFlash = true;
+        _statsFlashTimer?.Dispose();
+        _statsFlashTimer = new System.Threading.Timer(_ =>
+        {
+            _statsFlash = false;
+            InvokeAsync(StateHasChanged);
+        }, null, 1200, Timeout.Infinite);
 
         // Set up live subscription for Get queries
         SetupLiveSubscription();
@@ -449,11 +469,6 @@
         _editError = null;
     }
 
-    private void OnEditInput(ChangeEventArgs e)
-    {
-        _editValue = e.Value?.ToString() ?? string.Empty;
-    }
-
     private void HandleEditKeyUp(KeyboardEventArgs e)
     {
         if (e.Key == "Escape")
@@ -504,9 +519,9 @@
         if (long.TryParse(input, out _) || ulong.TryParse(input, out _) || double.TryParse(input, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _))
             return input;
 
-        // Quote as string, escaping inner quotes
-        var escaped = input.Replace("\\", "\\\\").Replace("\"", "\\\"");
-        return $"\"{escaped}\"";
+        // Quote as string, escaping inner single quotes
+        var escaped = input.Replace("'", "\\'");
+        return $"'{escaped}'";
     }
 
     // --- Helpers ---
@@ -594,6 +609,7 @@
     public void Dispose()
     {
         _tableSubscription?.Dispose();
+        _statsFlashTimer?.Dispose();
         _flashTimer?.Dispose();
     }
 

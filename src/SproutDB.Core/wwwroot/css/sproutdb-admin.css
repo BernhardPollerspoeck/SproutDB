@@ -68,14 +68,15 @@ body {
 }
 
 .logo-icon {
-    width: 22px;
-    height: 22px;
-    background: var(--sprout);
+    width: 24px;
+    height: 24px;
+    background: rgba(74, 222, 128, 0.15);
+    border: 1px solid rgba(74, 222, 128, 0.3);
     border-radius: 6px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 13px;
+    font-size: 15px;
 }
 
 .logo span { color: var(--sprout); }
@@ -372,10 +373,34 @@ body {
 .query-stats {
     margin-left: auto;
     display: flex;
+    align-items: center;
     gap: 16px;
     font-size: 11.5px;
     font-family: var(--font-mono);
     color: var(--text-2);
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+}
+
+.stat-ok {
+    color: var(--sprout);
+    font-size: 13px;
+    font-weight: 700;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.stats-flash {
+    animation: stats-pop 1.2s ease-out;
+}
+
+.stats-flash .stat-ok {
+    opacity: 1;
+}
+
+@keyframes stats-pop {
+    0%   { background: rgba(74, 222, 128, 0.2); }
+    100% { background: transparent; }
 }
 
 .stat-value {
@@ -894,6 +919,14 @@ body {
 }
 
 /* ─── Inline Editing ─── */
+.cell-editable {
+    cursor: pointer;
+}
+
+.cell-editable:hover {
+    background: var(--bg-3);
+}
+
 .cell-edit-icon {
     display: none;
     position: absolute;
@@ -915,6 +948,10 @@ body {
 
 .results-table td:hover .cell-edit-icon {
     display: inline-block;
+}
+
+.cell-editing {
+    padding: 2px 4px;
 }
 
 .cell-edit-input {
@@ -951,3 +988,179 @@ body {
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--bg-4); border-radius: 3px; }
+
+/* ─── Blazor Reconnect Modal ─── */
+#components-reconnect-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(10, 14, 20, 0.85);
+    backdrop-filter: blur(6px);
+    align-items: center;
+    justify-content: center;
+}
+
+#components-reconnect-modal.components-reconnect-show,
+#components-reconnect-modal.components-reconnect-failed,
+#components-reconnect-modal.components-reconnect-rejected {
+    display: flex;
+}
+
+.sprout-reconnect-card {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px 48px;
+    text-align: center;
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+}
+
+/* ─ Growing plant scene ─ */
+.sprout-reconnect-scene {
+    width: 80px;
+    height: 100px;
+    margin: 0 auto 20px;
+    position: relative;
+}
+
+.sprout-reconnect-soil {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 48px;
+    height: 8px;
+    background: #6b4c30;
+    border-radius: 4px;
+}
+
+.sprout-reconnect-plant {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    animation: sprout-grow 2.5s ease-out infinite;
+}
+
+.sprout-reconnect-crown {
+    width: 36px;
+    height: 30px;
+    background: radial-gradient(ellipse at center, var(--sprout) 0%, #22c55e 100%);
+    border-radius: 50% 50% 40% 40%;
+    margin: 0 auto -4px;
+    position: relative;
+    animation: crown-appear 2.5s ease-out infinite;
+}
+
+.sprout-reconnect-crown::before,
+.sprout-reconnect-crown::after {
+    content: '';
+    position: absolute;
+    background: var(--sprout);
+    border-radius: 50%;
+}
+
+.sprout-reconnect-crown::before {
+    width: 22px;
+    height: 20px;
+    top: -8px;
+    left: -4px;
+    background: #34d399;
+}
+
+.sprout-reconnect-crown::after {
+    width: 22px;
+    height: 20px;
+    top: -8px;
+    right: -4px;
+    background: #22c55e;
+}
+
+.sprout-reconnect-stem {
+    width: 4px;
+    height: 32px;
+    background: #6b4c30;
+    border-radius: 2px;
+    margin: 0 auto;
+}
+
+.sprout-reconnect-leaf {
+    position: absolute;
+    width: 14px;
+    height: 10px;
+    background: var(--sprout);
+    border-radius: 50% 50% 50% 0;
+    top: 38px;
+}
+
+.sprout-reconnect-leaf-l {
+    right: 50%;
+    transform: rotate(-35deg);
+    transform-origin: bottom right;
+    animation: leaf-sway-l 2.5s ease-in-out infinite;
+}
+
+.sprout-reconnect-leaf-r {
+    left: 50%;
+    border-radius: 50% 50% 0 50%;
+    transform: rotate(35deg);
+    transform-origin: bottom left;
+    animation: leaf-sway-r 2.5s ease-in-out infinite;
+}
+
+@keyframes sprout-grow {
+    0%   { transform: translateX(-50%) scaleY(0); opacity: 0; }
+    25%  { transform: translateX(-50%) scaleY(1); opacity: 1; }
+    85%  { transform: translateX(-50%) scaleY(1); opacity: 1; }
+    100% { transform: translateX(-50%) scaleY(1); opacity: 0.2; }
+}
+
+@keyframes crown-appear {
+    0%, 20% { transform: scale(0); opacity: 0; }
+    40%     { transform: scale(1.1); opacity: 1; }
+    50%     { transform: scale(1); }
+    85%     { transform: scale(1); opacity: 1; }
+    100%    { transform: scale(1); opacity: 0.2; }
+}
+
+@keyframes leaf-sway-l {
+    0%, 20%  { transform: rotate(-35deg) scale(0); }
+    35%  { transform: rotate(-45deg) scale(1); }
+    55%  { transform: rotate(-30deg) scale(1); }
+    70%  { transform: rotate(-42deg) scale(1); }
+    85%  { transform: rotate(-35deg) scale(1); }
+    100% { transform: rotate(-35deg) scale(1); }
+}
+
+@keyframes leaf-sway-r {
+    0%, 20%  { transform: rotate(35deg) scale(0); }
+    35%  { transform: rotate(45deg) scale(1); }
+    55%  { transform: rotate(30deg) scale(1); }
+    70%  { transform: rotate(42deg) scale(1); }
+    85%  { transform: rotate(35deg) scale(1); }
+    100% { transform: rotate(35deg) scale(1); }
+}
+
+.sprout-reconnect-text {
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-1);
+    margin-bottom: 4px;
+}
+
+.sprout-reconnect-dots span {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--sprout);
+    animation: dot-bounce 1.4s ease-in-out infinite;
+}
+
+.sprout-reconnect-dots span:nth-child(2) { animation-delay: 0.2s; }
+.sprout-reconnect-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes dot-bounce {
+    0%, 80%, 100% { opacity: 0.2; transform: translateY(0); }
+    40% { opacity: 1; transform: translateY(-4px); }
+}
