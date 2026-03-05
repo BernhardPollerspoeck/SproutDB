@@ -19,22 +19,27 @@
                 <div class="metric-card">
                     <div class="metric-value blue">@_metrics.TotalReads.ToString("N0")</div>
                     <div class="metric-label">Total Reads</div>
+                    @RenderSparkline(_readsHistory, _mHistoryCount, "var(--blue)")
                 </div>
                 <div class="metric-card">
                     <div class="metric-value green">@_metrics.TotalWrites.ToString("N0")</div>
                     <div class="metric-label">Total Writes</div>
+                    @RenderSparkline(_writesHistory, _mHistoryCount, "var(--sprout)")
                 </div>
                 <div class="metric-card">
                     <div class="metric-value">@_metrics.TotalRows.ToString("N0")</div>
                     <div class="metric-label">Rows</div>
+                    @RenderSparkline(_rowsHistory, _mHistoryCount, "var(--text-1)")
                 </div>
                 <div class="metric-card">
                     <div class="metric-value">@FormatSize(_metrics.StorageSizeBytes)</div>
                     <div class="metric-label">Storage</div>
+                    @RenderSparkline(_storageHistory, _mHistoryCount, "var(--text-1)")
                 </div>
                 <div class="metric-card">
                     <div class="metric-value orange">@FormatSize(_metrics.WalSizeBytes)</div>
                     <div class="metric-label">WAL</div>
+                    @RenderSparkline(_walHistory, _mHistoryCount, "var(--orange)")
                 </div>
             </div>
         </div>
@@ -95,16 +100,74 @@
     private string? _expandedDb;
     private System.Threading.Timer? _refreshTimer;
 
+    // Sparkline ring buffers
+    private const int SparklineSize = 60;
+    private readonly double[] _readsHistory = new double[SparklineSize];
+    private readonly double[] _writesHistory = new double[SparklineSize];
+    private readonly double[] _rowsHistory = new double[SparklineSize];
+    private readonly double[] _storageHistory = new double[SparklineSize];
+    private readonly double[] _walHistory = new double[SparklineSize];
+    private int _mHistoryIndex;
+    private int _mHistoryCount;
+
     protected override void OnInitialized()
     {
         _metrics = Engine.GetMetrics();
+        PushSparklineData();
         _refreshTimer = new System.Threading.Timer(Refresh, null, 2000, 2000);
     }
 
     private void Refresh(object? state)
     {
         _metrics = Engine.GetMetrics();
+        PushSparklineData();
         InvokeAsync(StateHasChanged);
+    }
+
+    private void PushSparklineData()
+    {
+        if (_metrics is null) return;
+        _readsHistory[_mHistoryIndex] = _metrics.TotalReads;
+        _writesHistory[_mHistoryIndex] = _metrics.TotalWrites;
+        _rowsHistory[_mHistoryIndex] = _metrics.TotalRows;
+        _storageHistory[_mHistoryIndex] = _metrics.StorageSizeBytes;
+        _walHistory[_mHistoryIndex] = _metrics.WalSizeBytes;
+        _mHistoryIndex = (_mHistoryIndex + 1) % SparklineSize;
+        if (_mHistoryCount < SparklineSize) _mHistoryCount++;
+    }
+
+    private MarkupString RenderSparkline(double[] buf, int count, string color)
+    {
+        if (count < 2)
+            return new MarkupString("");
+
+        var points = new List<string>(count);
+        double max = 0;
+        for (int i = 0; i < count; i++)
+        {
+            var idx = ((_mHistoryIndex - count + i) % SparklineSize + SparklineSize) % SparklineSize;
+            if (buf[idx] > max) max = buf[idx];
+        }
+        if (max < 1) max = 1;
+
+        for (int i = 0; i < count; i++)
+        {
+            var idx = ((_mHistoryIndex - count + i) % SparklineSize + SparklineSize) % SparklineSize;
+            var x = (120.0 * i / (count - 1)).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+            var y = (30.0 - 28.0 * buf[idx] / max).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+            points.Add($"{x},{y}");
+        }
+
+        var linePoints = string.Join(" ", points);
+        var firstX = (0.0).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+        var lastX = (120.0).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+        var fillPoints = $"{firstX},30 {linePoints} {lastX},30";
+
+        return new MarkupString(
+            $"<svg class=\"sparkline\" viewBox=\"0 0 120 32\" preserveAspectRatio=\"none\">" +
+            $"<polyline class=\"spark-fill\" points=\"{fillPoints}\" style=\"fill:{color};opacity:0.15;stroke:none;\" />" +
+            $"<polyline class=\"spark-line\" points=\"{linePoints}\" style=\"fill:none;stroke:{color};stroke-width:1.5;\" />" +
+            $"</svg>");
     }
 
     private void ToggleDb(string dbName)

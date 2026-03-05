@@ -12,4 +12,5 @@ public sealed class ColumnInfo
     public string? Default { get; init; }
     public required bool Strict { get; init; }
     public bool Auto { get; init; }
+    public bool Indexed { get; init; }
 }

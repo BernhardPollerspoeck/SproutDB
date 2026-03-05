@@ -131,10 +131,12 @@
                 <div class="metric-card">
                     <div class="metric-value green">@FormatOpsPerSec(_writesPerSec)</div>
                     <div class="metric-label">Writes/s</div>
+                    @RenderSparkline(_writesHistory, _historyCount, "var(--sprout)")
                 </div>
                 <div class="metric-card">
                     <div class="metric-value blue">@FormatOpsPerSec(_readsPerSec)</div>
                     <div class="metric-label">Reads/s</div>
+                    @RenderSparkline(_readsHistory, _historyCount, "var(--blue)")
                 </div>
                 <div class="metric-card">
                     <div class="metric-value">@FormatSize(_storageSizeBytes)</div>
@@ -147,8 +149,23 @@
             </div>
         </div>
         <div class="panel-section">
-            <div class="panel-section-title">Auto-Index</div>
-            <div style="font-size: 11.5px; color: var(--text-3); font-style: italic;">No indexes</div>
+            <div class="panel-section-title">Indexes <span class="live-dot"></span></div>
+            @if (_indexItems.Count == 0)
+            {
+                <div style="font-size: 11.5px; color: var(--text-3); font-style: italic;">No indexes</div>
+            }
+            else
+            {
+                @foreach (var idx in _indexItems)
+                {
+                    <div class="index-list-item">
+                        <span class="index-icon">&#9671;</span>
+                        <span class="index-name">@idx.TableName.@idx.ColumnName</span>
+                        <span class="index-badge @(idx.IsManual ? "manual" : "auto")">@(idx.IsManual ? "MAN" : "AUTO")</span>
+                        <span class="index-queries">@idx.QueryCount</span>
+                    </div>
+                }
+            }
         </div>
         <div class="panel-section" style="border-bottom: none; padding-bottom: 6px;">
             <div class="panel-section-title">Activity <span class="live-dot"></span></div>
@@ -217,6 +234,17 @@
     private long _storageSizeBytes;
     private long _walSizeBytes;
 
+    // Sparkline ring buffers (60 samples = ~2 min at 2s interval)
+    private const int SparklineSize = 60;
+    private readonly double[] _readsHistory = new double[SparklineSize];
+    private readonly double[] _writesHistory = new double[SparklineSize];
+    private int _historyIndex;
+    private int _historyCount;
+
+    // Index list state
+    private System.Threading.Timer? _indexRefreshTimer;
+    private List<IndexListItem> _indexItems = new();
+
     private IEnumerable<DbNode> sortedDatabases =>
         databases.OrderByDescending(d => d.Name.StartsWith('_')).ThenBy(d => d.Name);
 
@@ -232,6 +260,7 @@
         _walSizeBytes = metrics.WalSizeBytes;
 
         _refreshTimer = new System.Threading.Timer(RefreshMetrics, null, 2000, 2000);
+        _indexRefreshTimer = new System.Threading.Timer(RefreshIndexList, null, 0, 5000);
 
         _activitySubscription = Engine.ChangeNotifier.SubscribeAll(OnActivity);
     }
@@ -246,6 +275,12 @@
         _prevWrites = metrics.TotalWrites;
         _storageSizeBytes = metrics.StorageSizeBytes;
         _walSizeBytes = metrics.WalSizeBytes;
+
+        // Push into sparkline ring buffers
+        _readsHistory[_historyIndex] = _readsPerSec;
+        _writesHistory[_historyIndex] = _writesPerSec;
+        _historyIndex = (_historyIndex + 1) % SparklineSize;
+        if (_historyCount < SparklineSize) _historyCount++;
 
         InvokeAsync(StateHasChanged);
     }
@@ -485,9 +520,74 @@
         NavigationManager.NavigateTo($"/sproutdb/admin?db={Uri.EscapeDataString(dbName)}&q={Uri.EscapeDataString($"get {table}")}");
     }
 
+    // --- Sparkline Rendering ---
+
+    private MarkupString RenderSparkline(double[] buf, int count, string color)
+    {
+        if (count < 2)
+            return new MarkupString("");
+
+        var points = new List<string>(count);
+        double max = 0;
+        for (int i = 0; i < count; i++)
+        {
+            var idx = ((_historyIndex - count + i) % SparklineSize + SparklineSize) % SparklineSize;
+            if (buf[idx] > max) max = buf[idx];
+        }
+        if (max < 1) max = 1;
+
+        for (int i = 0; i < count; i++)
+        {
+            var idx = ((_historyIndex - count + i) % SparklineSize + SparklineSize) % SparklineSize;
+            var x = (120.0 * i / (count - 1)).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+            var y = (30.0 - 28.0 * buf[idx] / max).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+            points.Add($"{x},{y}");
+        }
+
+        var linePoints = string.Join(" ", points);
+        // Fill polygon: start from bottom-left, trace the line, end at bottom-right
+        var firstX = (0.0).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+        var lastX = (120.0).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+        var fillPoints = $"{firstX},30 {linePoints} {lastX},30";
+
+        return new MarkupString(
+            $"<svg class=\"sparkline\" viewBox=\"0 0 120 32\" preserveAspectRatio=\"none\">" +
+            $"<polyline class=\"spark-fill\" points=\"{fillPoints}\" style=\"fill:{color};opacity:0.15;stroke:none;\" />" +
+            $"<polyline class=\"spark-line\" points=\"{linePoints}\" style=\"fill:none;stroke:{color};stroke-width:1.5;\" />" +
+            $"</svg>");
+    }
+
+    // --- Index List ---
+
+    private void RefreshIndexList(object? state)
+    {
+        _indexItems.Clear();
+        var response = Engine.Execute("get index_metrics", "_system");
+        if (response.Data is { Count: > 0 } data)
+        {
+            foreach (var row in data)
+            {
+                row.TryGetValue("table_name", out var tableVal);
+                row.TryGetValue("column_name", out var colVal);
+                row.TryGetValue("query_count", out var qcVal);
+                row.TryGetValue("is_manual", out var manualVal);
+
+                _indexItems.Add(new IndexListItem
+                {
+                    TableName = tableVal?.ToString() ?? "",
+                    ColumnName = colVal?.ToString() ?? "",
+                    QueryCount = qcVal is long qc ? qc : 0,
+                    IsManual = manualVal is bool m && m,
+                });
+            }
+        }
+        InvokeAsync(StateHasChanged);
+    }
+
     public void Dispose()
     {
         _refreshTimer?.Dispose();
+        _indexRefreshTimer?.Dispose();
         _activitySubscription?.Dispose();
     }
 
@@ -504,5 +604,13 @@
         public string Target { get; set; } = string.Empty;
         public string DotClass { get; set; } = string.Empty;
         public DateTime Timestamp { get; set; }
+    }
+
+    private sealed class IndexListItem
+    {
+        public string TableName { get; set; } = string.Empty;
+        public string ColumnName { get; set; } = string.Empty;
+        public long QueryCount { get; set; }
+        public bool IsManual { get; set; }
     }
 }

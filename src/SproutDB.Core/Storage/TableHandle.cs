@@ -54,6 +54,8 @@ internal sealed class TableHandle : IDisposable
 
     public int IndexCount => _btrees.Count;
 
+    public IReadOnlyCollection<string> IndexedColumns => _btrees.Keys;
+
     public bool HasBTree(string colName) => _btrees.ContainsKey(colName);
 
     public BTreeHandle GetBTree(string colName) => _btrees[colName];

@@ -111,7 +111,7 @@ internal static class ResponseHelper
         return result;
     }
 
-    public static List<ColumnInfo> BuildColumnInfoList(TableSchema schema)
+    public static List<ColumnInfo> BuildColumnInfoList(TableSchema schema, Func<string, bool>? isIndexed = null)
     {
         var result = new List<ColumnInfo>(schema.Columns.Count + 1) { IdColumnInfo() };
 
@@ -126,6 +126,7 @@ internal static class ResponseHelper
                 Nullable = col.Nullable,
                 Default = col.Default,
                 Strict = col.Strict,
+                Indexed = isIndexed?.Invoke(col.Name) ?? false,
             });
         }
 

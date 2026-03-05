@@ -13,10 +13,34 @@
             }
         </select>
         <div class="query-toolbar-sep"></div>
-        <button class="btn btn-ghost" style="font-size: 11px; padding: 3px 8px;">History</button>
+        <button class="btn btn-ghost @(_showHistory ? "btn-ghost-active" : "")" style="font-size: 11px; padding: 3px 8px;" @onclick="ToggleHistory">History</button>
         <span class="auto-paged-badge">&#9889; auto-paged</span>
         <span class="query-hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span>
     </div>
+    @if (_showHistory)
+    {
+        <div class="query-history-panel">
+            <div class="history-filter-row">
+                <input type="text" class="history-filter-input" placeholder="Filter history..." @bind="_historyFilter" @bind:event="oninput" />
+            </div>
+            @if (_filteredHistory is { Count: > 0 })
+            {
+                @foreach (var item in _filteredHistory)
+                {
+                    <div class="history-item" @onclick="() => ApplyHistoryItem(item)">
+                        <span class="history-op @GetHistoryOpClass(item.Operation)">@item.Operation</span>
+                        <span class="history-query">@item.Query</span>
+                        <span class="history-db">@item.Database</span>
+                        <span class="history-time">@FormatRelativeTime(item.Timestamp)</span>
+                    </div>
+                }
+            }
+            else
+            {
+                <div style="padding: 12px; font-size: 11.5px; color: var(--text-3); font-style: italic;">No history</div>
+            }
+        </div>
+    }
     <div class="query-editor-wrap" @ref="_editorWrapRef">
         <pre class="query-editor-highlight" aria-hidden="true">@_highlightedQuery </pre>
         <textarea class="query-editor"
@@ -219,6 +243,20 @@
     private DotNetObjectReference<QueryPage>? _dotnetRef;
     private string _lastSchemaDb = string.Empty;
 
+    // History panel
+    private bool _showHistory;
+    private List<HistoryItem> _historyItems = new();
+    private string _historyFilter = string.Empty;
+
+    private List<HistoryItem> _filteredHistory =>
+        string.IsNullOrEmpty(_historyFilter)
+            ? _historyItems
+            : _historyItems.Where(h =>
+                h.Query.Contains(_historyFilter, StringComparison.OrdinalIgnoreCase) ||
+                h.Operation.Contains(_historyFilter, StringComparison.OrdinalIgnoreCase) ||
+                h.Database.Contains(_historyFilter, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
     // Inline editing state
     private ElementReference _editInputRef;
     private bool _shouldFocusEdit;
@@ -351,6 +389,10 @@
             _statsFlash = false;
             InvokeAsync(StateHasChanged);
         }, null, 1200, Timeout.Infinite);
+
+        // Refresh history if panel is open
+        if (_showHistory)
+            LoadHistory();
 
         // Set up live subscription for Get queries
         SetupLiveSubscription();
@@ -660,6 +702,76 @@
         return new { tables, columns };
     }
 
+    // --- History ---
+
+    private void ToggleHistory()
+    {
+        _showHistory = !_showHistory;
+        if (_showHistory)
+            LoadHistory();
+    }
+
+    private void LoadHistory()
+    {
+        _historyItems.Clear();
+        _historyFilter = string.Empty;
+
+        var response = Engine.Execute("get audit_log order by timestamp desc limit 50", "_system");
+        if (response.Data is not { Count: > 0 } data)
+            return;
+
+        foreach (var row in data)
+        {
+            row.TryGetValue("query", out var queryVal);
+            row.TryGetValue("database", out var dbVal);
+            row.TryGetValue("operation", out var opVal);
+            row.TryGetValue("timestamp", out var tsVal);
+
+            var query = queryVal?.ToString() ?? "";
+            // Skip audit_log queries themselves
+            if (query.Contains("audit_log", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            _historyItems.Add(new HistoryItem
+            {
+                Query = query,
+                Database = dbVal?.ToString() ?? "",
+                Operation = opVal?.ToString() ?? "",
+                Timestamp = tsVal is DateTime dt ? dt : DateTime.MinValue,
+            });
+        }
+    }
+
+    private void ApplyHistoryItem(HistoryItem item)
+    {
+        QueryText = item.Query;
+        if (!string.IsNullOrEmpty(item.Database))
+            selectedDatabase = item.Database;
+        _showHistory = false;
+    }
+
+    private static string GetHistoryOpClass(string op)
+    {
+        return op.ToUpperInvariant() switch
+        {
+            "GET" => "op-get",
+            "UPSERT" => "op-upsert",
+            "DELETE" => "op-delete",
+            "CREATE" or "CREATETABLE" or "CREATEDATABASE" => "op-create",
+            _ => "op-other"
+        };
+    }
+
+    private static string FormatRelativeTime(DateTime timestamp)
+    {
+        if (timestamp == DateTime.MinValue) return "";
+        var elapsed = DateTime.Now - timestamp;
+        if (elapsed.TotalSeconds < 60) return $"{Math.Max(1, (int)elapsed.TotalSeconds)}s";
+        if (elapsed.TotalMinutes < 60) return $"{(int)elapsed.TotalMinutes}m";
+        if (elapsed.TotalHours < 24) return $"{(int)elapsed.TotalHours}h";
+        return $"{(int)elapsed.TotalDays}d";
+    }
+
     // --- Helpers ---
 
     private static string? ExtractTableName(string query)
@@ -754,5 +866,13 @@
     {
         public string Name { get; set; } = string.Empty;
         public string Type { get; set; } = string.Empty;
+    }
+
+    private sealed class HistoryItem
+    {
+        public string Query { get; set; } = string.Empty;
+        public string Database { get; set; } = string.Empty;
+        public string Operation { get; set; } = string.Empty;
+        public DateTime Timestamp { get; set; }
     }
 }

@@ -124,6 +124,7 @@
                                 <th>Default</th>
                                 <th>Strict</th>
                                 <th>Auto</th>
+                                <th style="width: 40px;"></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -190,6 +191,23 @@
                                         {
                                             <span class="schema-auto-badge">AUTO</span>
                                         }
+                                        @if (col.Indexed)
+                                        {
+                                            <span class="schema-idx-badge">IDX</span>
+                                        }
+                                    </td>
+                                    <td class="idx-toggle-cell">
+                                        @if (col.Name != "_id")
+                                        {
+                                            @if (col.Indexed)
+                                            {
+                                                <button class="idx-toggle-btn idx-active" title="Purge index" @onclick="() => PurgeIndex(table, col.Name)" @onclick:stopPropagation="true">&#9866;</button>
+                                            }
+                                            else
+                                            {
+                                                <button class="idx-toggle-btn" title="Create index" @onclick="() => CreateIndex(table, col.Name)" @onclick:stopPropagation="true">&#9868;</button>
+                                            }
+                                        }
                                     </td>
                                 </tr>
                             }
@@ -227,6 +245,10 @@
                             }
                         </tbody>
                     </table>
+                    @if (_indexError is not null)
+                    {
+                        <div class="schema-edit-error">@_indexError</div>
+                    }
                 </div>
             }
         }
@@ -703,6 +725,37 @@
         or "sint" or "uint" or "slong" or "ulong" or "float" or "double";
 
     private static bool IsFloatingType(string type) => type is "float" or "double";
+
+    // ── Index Management ──
+    private string? _indexError;
+
+    private void CreateIndex(string table, string colName)
+    {
+        _indexError = null;
+        var response = Engine.Execute($"create index {table}.{colName}", selectedDatabase);
+        if (response.Operation == SproutOperation.Error)
+        {
+            _indexError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to create index";
+            return;
+        }
+        // Refresh columns
+        columnCache.Remove(table);
+        ExpandTable(table);
+    }
+
+    private void PurgeIndex(string table, string colName)
+    {
+        _indexError = null;
+        var response = Engine.Execute($"purge index {table}.{colName}", selectedDatabase);
+        if (response.Operation == SproutOperation.Error)
+        {
+            _indexError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to purge index";
+            return;
+        }
+        // Refresh columns
+        columnCache.Remove(table);
+        ExpandTable(table);
+    }
 
     // ── Helpers ──
 

@@ -9,7 +9,7 @@ internal static class DescribeExecutor
     /// </summary>
     public static SproutResponse ExecuteTable(string query, TableHandle table, string tableName)
     {
-        var columns = ResponseHelper.BuildColumnInfoList(table.Schema);
+        var columns = ResponseHelper.BuildColumnInfoList(table.Schema, table.HasBTree);
 
         return new SproutResponse
         {
