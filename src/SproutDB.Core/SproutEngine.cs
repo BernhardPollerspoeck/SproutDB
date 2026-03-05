@@ -883,16 +883,37 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         var result = ExecuteWithTable(query, dbPath, q.Table,
             table => GetExecutor.Execute(query, table, q, _settings.DefaultPageSize, tableResolver));
 
-        // Track index metrics for WHERE columns
+        // Track index metrics for WHERE, ORDER BY, and FOLLOW columns
         if (result.Errors is null)
         {
             Interlocked.Increment(ref _totalReads);
             _indexMetrics.RecordQuery(tablePath);
-            var whereColumns = WhereEngine.ExtractWhereColumns(q.Where);
-            foreach (var col in whereColumns)
+
+            // Collect all index-relevant columns
+            var indexColumns = WhereEngine.ExtractWhereColumns(q.Where);
+
+            if (q.OrderBy is { Count: > 0 } orderCols)
+            {
+                foreach (var ob in orderCols)
+                    indexColumns.Add(ob.Name);
+            }
+
+            foreach (var col in indexColumns)
             {
                 _indexMetrics.RecordWhereUsage(tablePath, col);
                 _indexMetrics.RecordRead(tablePath, col);
+            }
+
+            // Track FOLLOW target columns (FK join targets benefit hugely from indexes)
+            if (q.Follow is { Count: > 0 } followClauses)
+            {
+                foreach (var fc in followClauses)
+                {
+                    var targetTablePath = Path.Combine(dbPath, fc.TargetTable);
+                    _indexMetrics.RecordQuery(targetTablePath);
+                    _indexMetrics.RecordWhereUsage(targetTablePath, fc.TargetColumn);
+                    _indexMetrics.RecordRead(targetTablePath, fc.TargetColumn);
+                }
             }
 
             // Record scan statistics for selectivity analysis
@@ -900,7 +921,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             {
                 var scannedCount = (long)tableForStats.Index.ReadNextId();
                 var resultCount = result.Data.Count;
-                foreach (var col in whereColumns)
+                foreach (var col in indexColumns)
                 {
                     _indexMetrics.RecordScanStats(tablePath, col, scannedCount, resultCount);
                 }
@@ -925,8 +946,14 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
         // describe <table> → show columns
         Interlocked.Increment(ref _totalReads);
+        var describeTablePath = Path.Combine(dbPath, q.Table);
+        Func<string, bool> isAutoIndex = col =>
+        {
+            var m = _indexMetrics.TryGet(describeTablePath, col);
+            return m is not null && !m.IsManual;
+        };
         return ExecuteWithTable(query, dbPath, q.Table,
-            table => DescribeExecutor.ExecuteTable(query, table, q.Table));
+            table => DescribeExecutor.ExecuteTable(query, table, q.Table, isAutoIndex));
     }
 
     private SproutResponse Dispatch(string query, string dbName, string dbPath, IQuery parsedQuery)

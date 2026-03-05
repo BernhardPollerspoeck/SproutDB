@@ -7,9 +7,9 @@ internal static class DescribeExecutor
     /// <summary>
     /// DESCRIBE TABLE — returns all columns with type info.
     /// </summary>
-    public static SproutResponse ExecuteTable(string query, TableHandle table, string tableName)
+    public static SproutResponse ExecuteTable(string query, TableHandle table, string tableName, Func<string, bool>? isAutoIndex = null)
     {
-        var columns = ResponseHelper.BuildColumnInfoList(table.Schema, table.HasBTree);
+        var columns = ResponseHelper.BuildColumnInfoList(table.Schema, table.HasBTree, isAutoIndex);
 
         return new SproutResponse
         {

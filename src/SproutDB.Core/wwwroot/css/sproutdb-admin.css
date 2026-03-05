@@ -1277,6 +1277,12 @@ body {
     margin-left: 4px;
 }
 
+.schema-idx-badge.auto {
+    color: var(--orange);
+    background: var(--orange-bg);
+    border-color: rgba(251, 146, 60, 0.2);
+}
+
 .schema-index-cell {
     white-space: nowrap;
     text-align: center;

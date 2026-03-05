@@ -6,23 +6,23 @@ namespace SproutDB.Core.AutoIndex;
 public sealed class AutoIndexSettings
 {
     /// <summary>
-    /// Minimum fraction of queries that use a column in WHERE to consider indexing.
-    /// Default: 30%.
+    /// Minimum fraction of queries that use a column in WHERE/ORDER BY/FOLLOW to consider indexing.
+    /// Default: 10%.
     /// </summary>
-    public double UsageThreshold { get; init; } = 0.30;
+    public double UsageThreshold { get; init; } = 0.10;
 
     /// <summary>
-    /// Minimum selectivity (ratio of distinct values to total rows) required.
-    /// Columns with very low selectivity (e.g. booleans) don't benefit from indexing.
-    /// Default: 95%.
+    /// Minimum fraction of rows that must be filtered out for an index to be beneficial.
+    /// With MMF storage, break-even is around 15-20%.
+    /// Default: 25%.
     /// </summary>
-    public double SelectivityThreshold { get; init; } = 0.95;
+    public double SelectivityThreshold { get; init; } = 0.25;
 
     /// <summary>
     /// Minimum ratio of reads to writes to justify index maintenance cost.
-    /// Default: 3.0 (3 reads per write).
+    /// Default: 2.5 (2.5 reads per write).
     /// </summary>
-    public double ReadWriteRatio { get; init; } = 3.0;
+    public double ReadWriteRatio { get; init; } = 2.5;
 
     /// <summary>
     /// Days after which an unused auto-index is removed.

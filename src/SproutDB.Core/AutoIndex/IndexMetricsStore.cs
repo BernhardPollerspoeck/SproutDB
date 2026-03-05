@@ -57,6 +57,11 @@ internal sealed class IndexMetricsStore
         m.IndexCreatedAt = DateTime.UtcNow;
     }
 
+    public IndexMetrics? TryGet(string tablePath, string column)
+    {
+        return _metrics.TryGetValue((tablePath, column), out var m) ? m : null;
+    }
+
     public IEnumerable<((string TablePath, string Column) Key, IndexMetrics Metrics)> GetAll()
     {
         foreach (var kvp in _metrics)

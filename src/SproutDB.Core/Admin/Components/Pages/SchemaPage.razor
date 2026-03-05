@@ -192,7 +192,7 @@
                                         }
                                         else if (col.Indexed)
                                         {
-                                            <span class="schema-idx-badge">IDX</span>
+                                            <span class="schema-idx-badge @(col.IsAutoIndex ? "auto" : "")">@(col.IsAutoIndex ? "AUTO" : "IDX")</span>
                                             <button class="idx-btn idx-remove" title="Purge index" @onclick="() => PurgeIndex(table, col.Name)" @onclick:stopPropagation="true">&#10005;</button>
                                         }
                                         else

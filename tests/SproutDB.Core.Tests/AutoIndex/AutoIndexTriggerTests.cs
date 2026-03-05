@@ -321,6 +321,79 @@ public class AutoIndexTriggerTests : IDisposable
         }
     }
 
+    [Fact]
+    public void AutoIndex_Created_ForOrderByColumn()
+    {
+        using var engine = new SproutEngine(new SproutEngineSettings
+        {
+            DataDirectory = _tempDir,
+            FlushInterval = Timeout.InfiniteTimeSpan,
+            AutoIndex = new AutoIndexSettings
+            {
+                Enabled = true,
+                MinimumQueryCount = 5,
+                UsageThreshold = 0.1,
+                SelectivityThreshold = 0.0,
+                ReadWriteRatio = 0.0,
+            },
+        });
+
+        engine.Execute("create database", "shop");
+        engine.Execute("create table products (name string 100, price float)", "shop");
+
+        for (int i = 0; i < 10; i++)
+            engine.Execute($"upsert products {{name: 'Product{i}', price: {i * 9.99}}}", "shop");
+
+        // ORDER BY queries on 'price' — should trigger auto-index
+        for (int i = 0; i < 20; i++)
+            engine.Execute("get products order by price", "shop");
+
+        engine.Dispose();
+
+        var btreePath = Path.Combine(_tempDir, "shop", "products", "price.btree");
+        Assert.True(File.Exists(btreePath), "ORDER BY column should be auto-indexed");
+
+        // name should NOT be auto-indexed (never in WHERE or ORDER BY)
+        var nameBtree = Path.Combine(_tempDir, "shop", "products", "name.btree");
+        Assert.False(File.Exists(nameBtree), "name should NOT be auto-indexed");
+    }
+
+    [Fact]
+    public void AutoIndex_Created_ForFollowTargetColumn()
+    {
+        using var engine = new SproutEngine(new SproutEngineSettings
+        {
+            DataDirectory = _tempDir,
+            FlushInterval = Timeout.InfiniteTimeSpan,
+            AutoIndex = new AutoIndexSettings
+            {
+                Enabled = true,
+                MinimumQueryCount = 5,
+                UsageThreshold = 0.1,
+                SelectivityThreshold = 0.0,
+                ReadWriteRatio = 0.0,
+            },
+        });
+
+        engine.Execute("create database", "shop");
+        engine.Execute("create table users (name string 100)", "shop");
+        engine.Execute("create table orders (user_id ulong, total float)", "shop");
+
+        for (int i = 1; i <= 5; i++)
+            engine.Execute($"upsert users {{name: 'User{i}'}}", "shop");
+        for (int i = 1; i <= 10; i++)
+            engine.Execute($"upsert orders {{user_id: {(i % 5) + 1}, total: {i * 10.0}}}", "shop");
+
+        // FOLLOW queries — target column orders.user_id should be tracked
+        for (int i = 0; i < 20; i++)
+            engine.Execute("get users follow users._id -> orders.user_id as orders", "shop");
+
+        engine.Dispose();
+
+        var btreePath = Path.Combine(_tempDir, "shop", "orders", "user_id.btree");
+        Assert.True(File.Exists(btreePath), "FOLLOW target column should be auto-indexed");
+    }
+
     // ── AutoIndexEvaluator unit tests ────────────────────────
 
     [Fact]

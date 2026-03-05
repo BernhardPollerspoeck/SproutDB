@@ -111,13 +111,17 @@ internal static class ResponseHelper
         return result;
     }
 
-    public static List<ColumnInfo> BuildColumnInfoList(TableSchema schema, Func<string, bool>? isIndexed = null)
+    public static List<ColumnInfo> BuildColumnInfoList(
+        TableSchema schema,
+        Func<string, bool>? isIndexed = null,
+        Func<string, bool>? isAutoIndex = null)
     {
         var result = new List<ColumnInfo>(schema.Columns.Count + 1) { IdColumnInfo() };
 
         foreach (var col in schema.Columns)
         {
             ColumnTypes.TryParse(col.Type, out var colType);
+            var indexed = isIndexed?.Invoke(col.Name) ?? false;
             result.Add(new ColumnInfo
             {
                 Name = col.Name,
@@ -126,7 +130,8 @@ internal static class ResponseHelper
                 Nullable = col.Nullable,
                 Default = col.Default,
                 Strict = col.Strict,
-                Indexed = isIndexed?.Invoke(col.Name) ?? false,
+                Indexed = indexed,
+                IsAutoIndex = indexed && (isAutoIndex?.Invoke(col.Name) ?? false),
             });
         }
 
