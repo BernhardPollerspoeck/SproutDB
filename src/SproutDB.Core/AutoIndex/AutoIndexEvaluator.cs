@@ -17,6 +17,9 @@ internal static class AutoIndexEvaluator
         if (metrics.QueryCount == 0)
             return false;
 
+        if (metrics.WhereHitCount < settings.MinimumQueryCount)
+            return false;
+
         // Usage threshold: fraction of queries that hit this column in WHERE
         var usageRatio = (double)metrics.WhereHitCount / metrics.QueryCount;
         if (usageRatio < settings.UsageThreshold)

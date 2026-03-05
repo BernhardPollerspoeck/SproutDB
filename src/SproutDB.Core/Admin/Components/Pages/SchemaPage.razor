@@ -123,8 +123,7 @@
                                 <th>Nullable</th>
                                 <th>Default</th>
                                 <th>Strict</th>
-                                <th>Auto</th>
-                                <th style="width: 40px;"></th>
+                                <th>Index</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -186,27 +185,19 @@
                                     <td class="schema-prop @(col.Nullable ? "yes" : "no")">@(col.Nullable ? "\u2713" : "\u2717")</td>
                                     <td class="cell-null">@(col.Default ?? "\u2014")</td>
                                     <td class="schema-prop @(col.Strict ? "yes" : "no")">@(col.Strict ? "\u2713" : "\u2717")</td>
-                                    <td>
-                                        @if (col.Auto)
+                                    <td class="schema-index-cell">
+                                        @if (col.Name == "_id")
                                         {
-                                            <span class="schema-auto-badge">AUTO</span>
+                                            <span class="schema-auto-badge">auto</span>
                                         }
-                                        @if (col.Indexed)
+                                        else if (col.Indexed)
                                         {
                                             <span class="schema-idx-badge">IDX</span>
+                                            <button class="idx-btn idx-remove" title="Purge index" @onclick="() => PurgeIndex(table, col.Name)" @onclick:stopPropagation="true">&#10005;</button>
                                         }
-                                    </td>
-                                    <td class="idx-toggle-cell">
-                                        @if (col.Name != "_id")
+                                        else
                                         {
-                                            @if (col.Indexed)
-                                            {
-                                                <button class="idx-toggle-btn idx-active" title="Purge index" @onclick="() => PurgeIndex(table, col.Name)" @onclick:stopPropagation="true">&#9866;</button>
-                                            }
-                                            else
-                                            {
-                                                <button class="idx-toggle-btn" title="Create index" @onclick="() => CreateIndex(table, col.Name)" @onclick:stopPropagation="true">&#9868;</button>
-                                            }
+                                            <button class="idx-btn idx-create" title="Create index" @onclick="() => CreateIndex(table, col.Name)" @onclick:stopPropagation="true">+ IDX</button>
                                         }
                                     </td>
                                 </tr>

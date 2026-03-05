@@ -245,7 +245,8 @@
 
     // History panel
     private bool _showHistory;
-    private List<HistoryItem> _historyItems = new();
+    private static readonly List<HistoryItem> _historyItems = new();
+    private const int MaxHistoryItems = 50;
     private string _historyFilter = string.Empty;
 
     private List<HistoryItem> _filteredHistory =>
@@ -349,6 +350,11 @@
             var response = Engine.Execute(line, selectedDatabase);
             lastResponse = response;
 
+            if (response.Operation != SproutOperation.Error)
+            {
+                RecordHistory(line, selectedDatabase, response.Operation.ToString().ToUpperInvariant());
+            }
+
             if (response.Operation == SproutOperation.Error)
                 break;
 
@@ -389,10 +395,6 @@
             _statsFlash = false;
             InvokeAsync(StateHasChanged);
         }, null, 1200, Timeout.Infinite);
-
-        // Refresh history if panel is open
-        if (_showHistory)
-            LoadHistory();
 
         // Set up live subscription for Get queries
         SetupLiveSubscription();
@@ -713,33 +715,20 @@
 
     private void LoadHistory()
     {
-        _historyItems.Clear();
         _historyFilter = string.Empty;
+    }
 
-        var response = Engine.Execute("get audit_log order by timestamp desc limit 50", "_system");
-        if (response.Data is not { Count: > 0 } data)
-            return;
-
-        foreach (var row in data)
+    private static void RecordHistory(string query, string database, string operation)
+    {
+        _historyItems.Insert(0, new HistoryItem
         {
-            row.TryGetValue("query", out var queryVal);
-            row.TryGetValue("database", out var dbVal);
-            row.TryGetValue("operation", out var opVal);
-            row.TryGetValue("timestamp", out var tsVal);
-
-            var query = queryVal?.ToString() ?? "";
-            // Skip audit_log queries themselves
-            if (query.Contains("audit_log", StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            _historyItems.Add(new HistoryItem
-            {
-                Query = query,
-                Database = dbVal?.ToString() ?? "",
-                Operation = opVal?.ToString() ?? "",
-                Timestamp = tsVal is DateTime dt ? dt : DateTime.MinValue,
-            });
-        }
+            Query = query,
+            Database = database,
+            Operation = operation,
+            Timestamp = DateTime.Now,
+        });
+        if (_historyItems.Count > MaxHistoryItems)
+            _historyItems.RemoveAt(_historyItems.Count - 1);
     }
 
     private void ApplyHistoryItem(HistoryItem item)

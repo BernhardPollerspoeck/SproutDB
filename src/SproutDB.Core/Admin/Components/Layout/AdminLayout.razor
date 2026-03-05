@@ -571,13 +571,19 @@
                 row.TryGetValue("column_name", out var colVal);
                 row.TryGetValue("query_count", out var qcVal);
                 row.TryGetValue("is_manual", out var manualVal);
+                row.TryGetValue("index_created_at", out var createdVal);
+
+                // Only show entries that actually have an index
+                var isManual = manualVal is bool m && m;
+                if (!isManual && createdVal is null)
+                    continue;
 
                 _indexItems.Add(new IndexListItem
                 {
                     TableName = tableVal?.ToString() ?? "",
                     ColumnName = colVal?.ToString() ?? "",
                     QueryCount = qcVal is long qc ? qc : 0,
-                    IsManual = manualVal is bool m && m,
+                    IsManual = isManual,
                 });
             }
         }

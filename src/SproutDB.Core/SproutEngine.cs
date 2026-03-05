@@ -299,6 +299,8 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             {
                 var tablePath = Path.Combine(dbPath, ciq.Table);
                 _indexMetrics.MarkManual(tablePath, ciq.Column);
+                var manualMetrics = _indexMetrics.GetOrCreate(tablePath, ciq.Column);
+                manualMetrics.IndexCreatedAt ??= DateTime.UtcNow;
             }
 
             // Audit log for schema changes
@@ -576,7 +578,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
         foreach (var (key, m) in _indexMetrics.GetAll())
         {
-            var tableName = Path.GetFileName(Path.GetDirectoryName(key.TablePath) ?? key.TablePath);
+            var tableName = Path.GetFileName(key.TablePath);
             var compositeKey = $"{key.TablePath}|{key.Column}";
             var lastUsed = m.LastUsedAt is not null
                 ? $", last_used_at: '{m.LastUsedAt.Value:yyyy-MM-dd HH:mm:ss}'"
@@ -739,8 +741,8 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
     private void FlushAll()
     {
-        PersistIndexMetrics();
         EvaluateAutoIndexes();
+        PersistIndexMetrics();
         _tableCache.FlushAll();
         _walManager.TruncateAll();
     }
@@ -776,6 +778,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
                 {
                     Dispatch(createQuery, dbName, dbPath, parseResult.Query);
                     metrics.IndexCreatedAt = now;
+                    metrics.IsManual = false; // Dispatch calls MarkManual — override back to auto
 
                     var reason = $"auto-index created: where_hits={metrics.WhereHitCount}, queries={metrics.QueryCount}, reads={metrics.ReadCount}, writes={metrics.WriteCount}";
                     LogAudit(dbName, $"{createQuery} -- {reason}", "auto_create_index");
@@ -890,6 +893,17 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             {
                 _indexMetrics.RecordWhereUsage(tablePath, col);
                 _indexMetrics.RecordRead(tablePath, col);
+            }
+
+            // Record scan statistics for selectivity analysis
+            if (result.Data is not null && _tableCache.TryGetTable(tablePath, out var tableForStats) && tableForStats is not null)
+            {
+                var scannedCount = (long)tableForStats.Index.ReadNextId();
+                var resultCount = result.Data.Count;
+                foreach (var col in whereColumns)
+                {
+                    _indexMetrics.RecordScanStats(tablePath, col, scannedCount, resultCount);
+                }
             }
         }
 

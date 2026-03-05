@@ -193,6 +193,134 @@ public class AutoIndexTriggerTests : IDisposable
         }
     }
 
+    [Fact]
+    public void AutoIndex_NotCreated_OnColumnsNeverInWhere()
+    {
+        // Reproduces the sandbox scenario: create table, upsert data, get without WHERE
+        // No auto-index should be created on ANY column
+        using var engine = new SproutEngine(new SproutEngineSettings
+        {
+            DataDirectory = _tempDir,
+            FlushInterval = Timeout.InfiniteTimeSpan,
+            AutoIndex = new AutoIndexSettings
+            {
+                Enabled = true,
+                MinimumQueryCount = 5,
+                UsageThreshold = 0.3,
+                SelectivityThreshold = 0.0,
+                ReadWriteRatio = 0.0,
+            },
+        });
+
+        engine.Execute("create database", "testdb");
+        engine.Execute("create table users (name string 100, email string 320 strict, age ubyte, active bool default true, score sint)", "testdb");
+
+        // Upserts create metrics entries for all columns via RecordWrite
+        for (int i = 0; i < 10; i++)
+            engine.Execute($"upsert users {{name: 'User{i}', email: 'user{i}@test.com', age: {20 + i}, score: {i * 10}}}", "testdb");
+
+        // GETs without WHERE — should NOT trigger auto-indexing
+        for (int i = 0; i < 20; i++)
+            engine.Execute("get users", "testdb");
+
+        // Flush triggers EvaluateAutoIndexes
+        engine.Dispose();
+
+        // No B-Tree should exist for any column
+        var usersDir = Path.Combine(_tempDir, "testdb", "users");
+        var btreeFiles = Directory.Exists(usersDir)
+            ? Directory.GetFiles(usersDir, "*.btree")
+            : [];
+        Assert.Empty(btreeFiles);
+    }
+
+    [Fact]
+    public void AutoIndex_OnlyCreated_ForWhereColumn_NotOthers()
+    {
+        using var engine = new SproutEngine(new SproutEngineSettings
+        {
+            DataDirectory = _tempDir,
+            FlushInterval = Timeout.InfiniteTimeSpan,
+            AutoIndex = new AutoIndexSettings
+            {
+                Enabled = true,
+                MinimumQueryCount = 5,
+                UsageThreshold = 0.3,
+                SelectivityThreshold = 0.0,
+                ReadWriteRatio = 0.0,
+            },
+        });
+
+        engine.Execute("create database", "testdb");
+        engine.Execute("create table users (name string 100, email string 320, age ubyte, score sint)", "testdb");
+
+        for (int i = 0; i < 10; i++)
+            engine.Execute($"upsert users {{name: 'User{i}', email: 'u{i}@test.com', age: {20 + i}, score: {i * 10}}}", "testdb");
+
+        // Only query WHERE on 'name' — other columns should NOT be auto-indexed
+        for (int i = 0; i < 20; i++)
+            engine.Execute("get users where name = 'User0'", "testdb");
+
+        engine.Dispose();
+
+        var usersDir = Path.Combine(_tempDir, "testdb", "users");
+        Assert.True(File.Exists(Path.Combine(usersDir, "name.btree")), "name should be auto-indexed");
+        Assert.False(File.Exists(Path.Combine(usersDir, "email.btree")), "email should NOT be auto-indexed");
+        Assert.False(File.Exists(Path.Combine(usersDir, "age.btree")), "age should NOT be auto-indexed");
+        Assert.False(File.Exists(Path.Combine(usersDir, "score.btree")), "score should NOT be auto-indexed");
+    }
+
+    [Fact]
+    public void AutoIndex_IsNotMarkedAsManual()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"sproutdb-autoindex-manual-{Guid.NewGuid()}");
+        try
+        {
+            using (var engine = new SproutEngine(new SproutEngineSettings
+            {
+                DataDirectory = dir,
+                FlushInterval = Timeout.InfiniteTimeSpan,
+                AutoIndex = new AutoIndexSettings
+                {
+                    Enabled = true,
+                    MinimumQueryCount = 5,
+                    UsageThreshold = 0.3,
+                    SelectivityThreshold = 0.0,
+                    ReadWriteRatio = 0.0,
+                },
+            }))
+            {
+                engine.Execute("create database", "shop");
+                engine.Execute("create table users (name string 100)", "shop");
+
+                for (int i = 0; i < 10; i++)
+                    engine.Execute($"upsert users {{name: 'User{i}'}}", "shop");
+                for (int i = 0; i < 20; i++)
+                    engine.Execute("get users where name = 'User0'", "shop");
+            }
+
+            // Re-open and check index_metrics
+            using var engine2 = new SproutEngine(dir);
+            var r = engine2.Execute("get index_metrics", "_system");
+
+            Assert.NotNull(r.Data);
+            var nameEntry = r.Data.FirstOrDefault(row =>
+                row.TryGetValue("column_name", out var col) && col?.ToString() == "name"
+                && row.TryGetValue("table_name", out var tbl) && tbl?.ToString() == "users");
+
+            Assert.NotNull(nameEntry);
+            nameEntry.TryGetValue("is_manual", out var isManual);
+            Assert.False(isManual is true, "Auto-created index should NOT be marked as manual");
+            nameEntry.TryGetValue("index_created_at", out var createdAt);
+            Assert.NotNull(createdAt);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, true);
+        }
+    }
+
     // ── AutoIndexEvaluator unit tests ────────────────────────
 
     [Fact]
@@ -207,6 +335,7 @@ public class AutoIndexTriggerTests : IDisposable
         var settings = new AutoIndexSettings
         {
             Enabled = true,
+            MinimumQueryCount = 10,
             UsageThreshold = 0.3,
             SelectivityThreshold = 0.5,
             ReadWriteRatio = 3.0,
