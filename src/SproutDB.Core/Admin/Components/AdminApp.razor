@@ -28,6 +28,30 @@
         </div>
     </div>
 
+    <script>
+        (function() {
+            var t = localStorage.getItem('sproutdb-theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', t);
+            window.sproutAdmin = {
+                getTheme: function() { return document.documentElement.getAttribute('data-theme') || 'dark'; },
+                setTheme: function(theme) {
+                    document.documentElement.setAttribute('data-theme', theme);
+                    localStorage.setItem('sproutdb-theme', theme);
+                },
+                initEditor: function(wrapEl) {
+                    if (!wrapEl || wrapEl._editorInit) return;
+                    wrapEl._editorInit = true;
+                    var ta = wrapEl.querySelector('textarea');
+                    var pre = wrapEl.querySelector('pre');
+                    if (!ta || !pre) return;
+                    ta.addEventListener('scroll', function() {
+                        pre.scrollTop = ta.scrollTop;
+                        pre.scrollLeft = ta.scrollLeft;
+                    });
+                }
+            };
+        })();
+    </script>
     <script src="/_framework/blazor.web.js"></script>
 </body>
 </html>

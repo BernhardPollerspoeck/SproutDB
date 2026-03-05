@@ -23,7 +23,7 @@
     <div class="topbar-right">
         <div class="status-dot"></div>
         <span class="topbar-info">@databases.Count db · @totalTables tables</span>
-        <button class="theme-toggle">&#9728;</button>
+        <button class="theme-toggle" @onclick="ToggleTheme">@(_theme == "dark" ? "\u2600" : "\u263e")</button>
     </div>
 </div>
 
@@ -32,14 +32,32 @@
     <div class="sidebar">
         <div class="sidebar-header">
             <span class="sidebar-title">Databases</span>
-            <button class="sidebar-action">+</button>
+            <button class="sidebar-action" @onclick="StartCreateDb">+</button>
         </div>
         <div class="sidebar-search">
             <span class="sidebar-search-icon">&#8981;</span>
             <input type="text" placeholder="Filter tables..." @bind="filterText" @bind:event="oninput" />
         </div>
         <div class="sidebar-tree">
-            @if (databases.Count == 0)
+            @if (_showCreateDb)
+            {
+                <div class="tree-item">
+                    <span class="tree-icon db">&#9670;</span>
+                    <input @ref="_createDbInputRef"
+                           class="create-db-input"
+                           type="text"
+                           placeholder="database name"
+                           @bind="_newDbName"
+                           @bind:event="oninput"
+                           @onkeyup="HandleCreateDbKey"
+                           @onblur="CancelCreateDb" />
+                </div>
+                @if (_createDbError is not null)
+                {
+                    <div class="create-db-error">@_createDbError</div>
+                }
+            }
+            @if (databases.Count == 0 && !_showCreateDb)
             {
                 <div class="tree-item">
                     <span class="tree-chevron">&#9654;</span>
@@ -143,8 +161,21 @@
     [Inject]
     private SproutEngine Engine { get; set; } = default!;
 
+    [Inject]
+    private IJSRuntime JS { get; set; } = default!;
+
     private List<DbNode> databases = new();
     private string filterText = string.Empty;
+
+    // Theme toggle
+    private string _theme = "dark";
+
+    // Create database
+    private bool _showCreateDb;
+    private string _newDbName = string.Empty;
+    private string? _createDbError;
+    private ElementReference _createDbInputRef;
+    private bool _shouldFocusCreateDb;
 
     // Activity feed
     private IDisposable? _activitySubscription;
@@ -165,17 +196,7 @@
 
     protected override void OnInitialized()
     {
-        var dbs = Engine.GetDatabases();
-        foreach (var db in dbs)
-        {
-            var node = new DbNode { Name = db.Name, Expanded = true };
-            var describeResponse = Engine.Execute("describe", db.Name);
-            if (describeResponse.Schema?.Tables is { } tables)
-            {
-                node.Tables = tables;
-            }
-            databases.Add(node);
-        }
+        RefreshDatabases();
 
         // Initial metrics snapshot
         var metrics = Engine.GetMetrics();
@@ -257,6 +278,103 @@
         if (elapsed.TotalMinutes < 60) return $"{(int)elapsed.TotalMinutes}m";
         if (elapsed.TotalHours < 24) return $"{(int)elapsed.TotalHours}h";
         return $"{(int)elapsed.TotalDays}d";
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _theme = await JS.InvokeAsync<string>("sproutAdmin.getTheme");
+            StateHasChanged();
+        }
+
+        if (_shouldFocusCreateDb)
+        {
+            _shouldFocusCreateDb = false;
+            try { await _createDbInputRef.FocusAsync(); } catch { }
+        }
+    }
+
+    private async Task ToggleTheme()
+    {
+        _theme = _theme == "dark" ? "light" : "dark";
+        await JS.InvokeVoidAsync("sproutAdmin.setTheme", _theme);
+    }
+
+    // ── Create Database ──
+
+    private void StartCreateDb()
+    {
+        _showCreateDb = true;
+        _newDbName = string.Empty;
+        _createDbError = null;
+        _shouldFocusCreateDb = true;
+    }
+
+    private void CancelCreateDb()
+    {
+        _showCreateDb = false;
+        _newDbName = string.Empty;
+        _createDbError = null;
+    }
+
+    private void HandleCreateDbKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            SubmitCreateDb();
+        }
+        else if (e.Key == "Escape")
+        {
+            CancelCreateDb();
+        }
+    }
+
+    private void SubmitCreateDb()
+    {
+        var name = _newDbName.Trim();
+        if (string.IsNullOrEmpty(name))
+        {
+            _createDbError = "Name cannot be empty";
+            return;
+        }
+
+        var response = Engine.Execute("create database", name);
+        if (response.Operation == SproutOperation.Error)
+        {
+            _createDbError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to create database";
+            return;
+        }
+
+        _showCreateDb = false;
+        _newDbName = string.Empty;
+        _createDbError = null;
+
+        RefreshDatabases();
+
+        // Auto-expand the new database
+        var newDb = databases.FirstOrDefault(d => d.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (newDb is not null)
+            newDb.Expanded = true;
+
+        // Navigate to query page with new DB selected so the dropdown refreshes
+        NavigationManager.NavigateTo($"/sproutdb/admin?db={Uri.EscapeDataString(name)}", forceLoad: false);
+    }
+
+    private void RefreshDatabases()
+    {
+        databases.Clear();
+        var dbs = Engine.GetDatabases();
+        foreach (var db in dbs)
+        {
+            var node = new DbNode { Name = db.Name, Expanded = true };
+            var describeResponse = Engine.Execute("describe", db.Name);
+            if (describeResponse.Schema?.Tables is { } tables)
+            {
+                node.Tables = tables;
+            }
+            databases.Add(node);
+        }
     }
 
     private void ToggleDb(DbNode db)

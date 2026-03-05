@@ -1,4 +1,5 @@
 @page "/sproutdb/admin"
+@using SproutDB.Core.Admin
 @implements IDisposable
 
 <!-- Query Editor -->
@@ -16,11 +17,15 @@
         <span class="auto-paged-badge">&#9889; auto-paged</span>
         <span class="query-hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span>
     </div>
-    <textarea class="query-editor"
-              spellcheck="false"
-              placeholder="Enter SproutDB query..."
-              @bind="queryText"
-              @onkeydown="HandleKeyDown"></textarea>
+    <div class="query-editor-wrap" @ref="_editorWrapRef">
+        <pre class="query-editor-highlight" aria-hidden="true">@_highlightedQuery </pre>
+        <textarea class="query-editor"
+                  spellcheck="false"
+                  placeholder="Enter SproutDB query..."
+                  @bind="QueryText"
+                  @bind:event="oninput"
+                  @onkeydown="HandleKeyDown"></textarea>
+    </div>
     <div class="query-actions">
         <button class="btn btn-primary" @onclick="RunQuery">&#9654; Run</button>
         <button class="btn btn-ghost">Format</button>
@@ -160,15 +165,29 @@
     [Inject]
     private SproutEngine Engine { get; set; } = default!;
 
+    [Inject]
+    private IJSRuntime JS { get; set; } = default!;
+
     [SupplyParameterFromQuery(Name = "db")]
     private string? DbParam { get; set; }
 
     [SupplyParameterFromQuery(Name = "q")]
     private string? QParam { get; set; }
 
-    private IReadOnlyList<ISproutDatabase> databases = [];
+    private IReadOnlyList<ISproutDatabase> databases => Engine.GetDatabases();
     private string selectedDatabase = string.Empty;
-    private string queryText = string.Empty;
+    private string _QueryText = string.Empty;
+    private MarkupString _highlightedQuery;
+
+    private string QueryText
+    {
+        get => _QueryText;
+        set
+        {
+            _QueryText = value;
+            _highlightedQuery = SyntaxHighlighter.Highlight(value);
+        }
+    }
 
     private SproutResponse? lastResponse;
     private double elapsedMs;
@@ -192,6 +211,10 @@
     private bool _canEdit;
     private bool _hasIdColumn;
 
+    // Editor overlay
+    private ElementReference _editorWrapRef;
+    private bool _editorInitialized;
+
     // Inline editing state
     private ElementReference _editInputRef;
     private bool _shouldFocusEdit;
@@ -202,7 +225,6 @@
 
     protected override void OnInitialized()
     {
-        databases = Engine.GetDatabases();
         if (databases.Count == 1)
         {
             selectedDatabase = databases[0].Name;
@@ -218,7 +240,7 @@
 
         if (!string.IsNullOrEmpty(QParam) && !autoExecuted)
         {
-            queryText = QParam;
+            QueryText = QParam;
             autoExecuted = true;
             RunQuery();
         }
@@ -226,6 +248,12 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (!_editorInitialized)
+        {
+            _editorInitialized = true;
+            await JS.InvokeVoidAsync("sproutAdmin.initEditor", _editorWrapRef);
+        }
+
         if (_shouldFocusEdit)
         {
             _shouldFocusEdit = false;
@@ -243,22 +271,65 @@
 
     private void RunQuery()
     {
-        if (string.IsNullOrWhiteSpace(selectedDatabase) || string.IsNullOrWhiteSpace(queryText))
+        if (string.IsNullOrWhiteSpace(selectedDatabase) || string.IsNullOrWhiteSpace(QueryText))
             return;
 
         // Clear editing state
         CancelEdit();
 
+        // Split into individual queries (one per line, skip empty/comment-only lines)
+        var lines = QueryText.Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0 && !l.StartsWith("##"))
+            .ToList();
+
+        if (lines.Count == 0)
+            return;
+
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        lastResponse = Engine.Execute(queryText.Trim(), selectedDatabase);
+
+        SproutResponse? lastDataResponse = null;
+        string? lastDataQuery = null;
+        lastResponse = null;
+        int totalRows = 0;
+        int totalPayload = 0;
+
+        foreach (var line in lines)
+        {
+            var response = Engine.Execute(line, selectedDatabase);
+            lastResponse = response;
+
+            if (response.Operation == SproutOperation.Error)
+                break;
+
+            totalRows += response.Data?.Count ?? response.Affected;
+            totalPayload += EstimatePayload(response);
+
+            if (response.Data is { Count: > 0 })
+            {
+                lastDataResponse = response;
+                lastDataQuery = line;
+            }
+        }
+
         sw.Stop();
 
-        elapsedMs = sw.Elapsed.TotalMilliseconds;
-        rowCount = lastResponse.Data?.Count ?? lastResponse.Affected;
-        payloadBytes = EstimatePayload(lastResponse);
+        // Show the last data-returning result, or the very last result
+        if (lastDataResponse is not null)
+        {
+            lastResponse = lastDataResponse;
+            RebuildColumns(lastDataResponse, lastDataQuery ?? lines[^1]);
+            _displayData = lastDataResponse.Data;
+        }
+        else if (lastResponse is not null)
+        {
+            RebuildColumns(lastResponse, lines[^1]);
+            _displayData = lastResponse.Data;
+        }
 
-        RebuildColumns(lastResponse, queryText);
-        _displayData = lastResponse.Data;
+        elapsedMs = sw.Elapsed.TotalMilliseconds;
+        rowCount = totalRows;
+        payloadBytes = totalPayload;
 
         // Flash the stats bar to signal execution
         _statsFlash = true;
@@ -339,7 +410,7 @@
         if (lastResponse?.Operation != SproutOperation.Get || lastResponse.Data is not { Count: > 0 })
             return;
 
-        var tableName = ExtractTableName(queryText);
+        var tableName = ExtractTableName(QueryText);
         if (tableName is null)
             return;
 
@@ -360,7 +431,7 @@
             return;
 
         // Re-run the query to get fresh data
-        var freshResponse = Engine.Execute(queryText.Trim(), _subscribedDb);
+        var freshResponse = Engine.Execute(QueryText.Trim(), _subscribedDb);
         if (freshResponse.Operation == SproutOperation.Error || freshResponse.Data is null)
             return;
 
@@ -499,7 +570,7 @@
         CancelEdit();
 
         // Refresh data
-        var freshResponse = Engine.Execute(queryText.Trim(), selectedDatabase);
+        var freshResponse = Engine.Execute(QueryText.Trim(), selectedDatabase);
         if (freshResponse.Data is not null)
         {
             _displayData = freshResponse.Data;
