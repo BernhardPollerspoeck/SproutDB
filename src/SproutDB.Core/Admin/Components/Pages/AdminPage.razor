@@ -1,7 +1,903 @@
 @page "/sproutdb/admin/settings"
+@implements IDisposable
 
-<div class="placeholder-page">
-    <div class="placeholder-icon">&#9881;</div>
-    <div class="placeholder-title">Admin</div>
-    <div class="placeholder-subtitle">Coming soon — export, import, settings, and more</div>
+<div style="flex: 1; overflow: auto; padding: 24px; background: var(--bg-0);">
+    <div class="admin-header">Administration</div>
+
+    <!-- Card Grid -->
+    <div class="admin-card-grid">
+        @foreach (var card in _cards)
+        {
+            <div class="admin-card @(_activeAction == card.Action ? "active" : "")"
+                 @onclick="() => ToggleAction(card.Action)">
+                <div class="admin-card-icon">@card.Icon</div>
+                <div class="admin-card-title">@card.Title</div>
+                <div class="admin-card-desc">@card.Description</div>
+            </div>
+        }
+    </div>
+
+    <!-- Action Panel -->
+    @if (_activeAction != AdminAction.None)
+    {
+        <div class="admin-panel">
+            <div class="admin-panel-header">
+                <span>@_cards.First(c => c.Action == _activeAction).Title</span>
+                <button @onclick="() => _activeAction = AdminAction.None">&times;</button>
+            </div>
+
+            @switch (_activeAction)
+            {
+                case AdminAction.Export:
+                    @RenderExport()
+                    break;
+                case AdminAction.Import:
+                    @RenderImport()
+                    break;
+                case AdminAction.Permissions:
+                    @RenderPermissions()
+                    break;
+                case AdminAction.Purge:
+                    @RenderPurge()
+                    break;
+                case AdminAction.Settings:
+                    @RenderSettings()
+                    break;
+                case AdminAction.Benchmark:
+                    @RenderBenchmark()
+                    break;
+            }
+
+            @if (_statusMessage is not null)
+            {
+                <div class="admin-status @(_statusIsError ? "error" : "success")">@_statusMessage</div>
+            }
+        </div>
+    }
 </div>
+
+<!-- Hidden iframe for file downloads (no tab flicker) -->
+<iframe id="sproutdb-download-frame" style="display: none;"></iframe>
+
+@code {
+    [Inject] private SproutEngine Engine { get; set; } = default!;
+    [Inject] private SproutEngineSettings Settings { get; set; } = default!;
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+
+    private enum AdminAction { None, Export, Import, Permissions, Purge, Settings, Benchmark }
+
+    private sealed class CardDef
+    {
+        public string Icon { get; init; } = "";
+        public string Title { get; init; } = "";
+        public string Description { get; init; } = "";
+        public AdminAction Action { get; init; }
+    }
+
+    private static readonly CardDef[] _cards = new[]
+    {
+        new CardDef { Icon = "\U0001f4e6", Title = "Export Database", Description = "Download as ZIP with all data and migration history.", Action = AdminAction.Export },
+        new CardDef { Icon = "\U0001f4e5", Title = "Import Database", Description = "Restore a database from a ZIP archive.", Action = AdminAction.Import },
+        new CardDef { Icon = "\U0001f511", Title = "Permissions", Description = "Manage API keys and permissions per database.", Action = AdminAction.Permissions },
+        new CardDef { Icon = "\U0001f5d1\ufe0f", Title = "Purge Database", Description = "Permanently delete a database and all its data. Irreversible.", Action = AdminAction.Purge },
+        new CardDef { Icon = "\u2699\ufe0f", Title = "Settings", Description = "WAL sync interval, flush cycle, auto-paging defaults.", Action = AdminAction.Settings },
+        new CardDef { Icon = "\U0001f4ca", Title = "Benchmark", Description = "Run insert/get benchmarks against any table.", Action = AdminAction.Benchmark },
+    };
+
+    private AdminAction _activeAction = AdminAction.None;
+
+    // Status
+    private string? _statusMessage;
+    private bool _statusIsError;
+
+    // Export
+    private string _exportDb = string.Empty;
+
+    // Import
+    private string _importDbName = string.Empty;
+    private bool _importUploading;
+
+    // Purge
+    private string _purgeDb = string.Empty;
+    private string _purgeConfirm = string.Empty;
+
+    // Permissions
+    private List<Dictionary<string, object?>>? _apiKeys;
+    private List<Dictionary<string, object?>>? _apiPermissions;
+    private List<Dictionary<string, object?>>? _apiRestrictions;
+    private string _newKeyName = string.Empty;
+    private string? _expandedKey;
+    private string _grantDb = string.Empty;
+    private string _grantRole = "reader";
+    private string _restrictDb = string.Empty;
+    private string _restrictTable = string.Empty;
+    private string _restrictRole = "reader";
+
+    // Settings
+    private int _flushIntervalMs;
+    private int _walSyncIntervalMs;
+    private int _bulkLimit;
+    private int _defaultPageSize;
+    private int _chunkSize;
+    private bool _autoIndexEnabled;
+    private int _usageThresholdPct;
+    private int _selectivityThresholdPct;
+    private double _readWriteRatio;
+    private int _unusedRetentionDays;
+    private int _minimumQueryCount;
+
+    // Benchmark
+    private string _benchDb = string.Empty;
+    private string _benchTable = string.Empty;
+    private int _benchOps = 1000;
+    private bool _benchRunning;
+    private double _benchOpsPerSec;
+    private double _benchTotalMs;
+    private double _benchAvgLatencyMs;
+    private string? _benchLabel;
+    private CancellationTokenSource? _benchCts;
+
+    private IReadOnlyList<ISproutDatabase>? _databases;
+
+    private IReadOnlyList<ISproutDatabase> GetDatabases()
+    {
+        _databases ??= Engine.GetDatabases();
+        return _databases;
+    }
+
+    private void InvalidateDatabases() => _databases = null;
+
+    private List<string> GetTablesForDb(string dbName)
+    {
+        if (string.IsNullOrEmpty(dbName)) return new List<string>();
+        var resp = Engine.Execute("describe", dbName);
+        if (resp.Schema?.Tables is not { } tables) return new List<string>();
+        return tables.Where(t => !t.StartsWith("_")).OrderBy(t => t).ToList();
+    }
+
+    private static string GetTip(string key) => key switch
+    {
+        "FlushInterval" => "Interval between MMF flush + WAL truncate cycles. Lower = less data at risk, higher = better throughput.",
+        "WalSyncInterval" => "Interval for WAL fsync to durable storage. 0 = immediate fsync per write.",
+        "BulkLimit" => "Maximum number of records in a single bulk upsert operation.",
+        "DefaultPageSize" => "Default page size for GET results. Auto-paging kicks in above this limit.",
+        "ChunkSize" => "Pre-allocation chunk size for index and column files (rows per growth step).",
+        "Enabled" => "Enable or disable automatic index creation and removal.",
+        "UsageThreshold" => "Minimum fraction of queries using a column before indexing is considered.",
+        "SelectivityThreshold" => "Minimum fraction of rows filtered out for an index to be beneficial.",
+        "ReadWriteRatio" => "Minimum ratio of reads to writes to justify index maintenance cost.",
+        "UnusedRetention" => "Days after which an unused auto-index is automatically removed.",
+        "MinQueryCount" => "Minimum queries on a column before auto-index evaluation starts.",
+        _ => "",
+    };
+
+    private static MarkupString Tip(string label, string tipKey)
+    {
+        var tip = GetTip(tipKey);
+        if (string.IsNullOrEmpty(tip))
+            return new MarkupString(System.Net.WebUtility.HtmlEncode(label));
+        return new MarkupString(
+            System.Net.WebUtility.HtmlEncode(label) +
+            " <span class=\"settings-tip\" title=\"" +
+            System.Net.WebUtility.HtmlEncode(tip) +
+            "\">&#9432;</span>");
+    }
+
+    private void ToggleAction(AdminAction action)
+    {
+        ClearStatus();
+        if (_activeAction == action)
+        {
+            _activeAction = AdminAction.None;
+            return;
+        }
+
+        _activeAction = action;
+        InvalidateDatabases();
+        var dbs = GetDatabases();
+
+        switch (action)
+        {
+            case AdminAction.Export:
+                _exportDb = dbs.Count > 0 ? dbs[0].Name : string.Empty;
+                break;
+            case AdminAction.Purge:
+                _purgeDb = dbs.Count > 0 ? dbs[0].Name : string.Empty;
+                _purgeConfirm = string.Empty;
+                break;
+            case AdminAction.Permissions:
+                RefreshPermissions();
+                break;
+            case AdminAction.Settings:
+                LoadSettings();
+                break;
+            case AdminAction.Benchmark:
+                _benchDb = dbs.Count > 0 ? dbs[0].Name : string.Empty;
+                _benchTable = string.Empty;
+                _benchLabel = null;
+                break;
+            case AdminAction.Import:
+                _importDbName = string.Empty;
+                break;
+        }
+    }
+
+    private void ClearStatus()
+    {
+        _statusMessage = null;
+        _statusIsError = false;
+    }
+
+    private void SetStatus(string msg, bool isError = false)
+    {
+        _statusMessage = msg;
+        _statusIsError = isError;
+    }
+
+    // ── Export ──
+
+    private RenderFragment RenderExport() => __builder =>
+    {
+        var dbs = GetDatabases();
+        <div class="admin-field">
+            <label class="admin-label">Database</label>
+            <select class="admin-select" @bind="_exportDb">
+                @foreach (var db in dbs)
+                {
+                    <option value="@db.Name">@db.Name</option>
+                }
+            </select>
+        </div>
+        <button class="btn btn-primary" disabled="@string.IsNullOrEmpty(_exportDb)" @onclick="DoExport">Export</button>
+    };
+
+    private async Task DoExport()
+    {
+        if (string.IsNullOrEmpty(_exportDb)) return;
+        ClearStatus();
+
+        var url = "/sproutdb/admin/export/" + Uri.EscapeDataString(_exportDb);
+        await JS.InvokeVoidAsync("eval",
+            "document.getElementById('sproutdb-download-frame').src='" + url + "'");
+        SetStatus("Export initiated for '" + _exportDb + "'");
+    }
+
+    // ── Import ──
+
+    private RenderFragment RenderImport() => __builder =>
+    {
+        <div class="admin-field">
+            <label class="admin-label">Target Database Name</label>
+            <input class="admin-input" type="text" placeholder="my_database" @bind="_importDbName" />
+        </div>
+        <div class="admin-field">
+            <label class="admin-label">ZIP File</label>
+            <input type="file" accept=".zip" id="sproutdb-import-file"
+                   style="font-size: 12px; color: var(--text-1); font-family: var(--font-sans);" />
+        </div>
+        <button class="btn btn-primary"
+                disabled="@(string.IsNullOrEmpty(_importDbName) || _importUploading)"
+                @onclick="DoImport">
+            @if (_importUploading) { <span>Uploading...</span> } else { <span>Import</span> }
+        </button>
+    };
+
+    private async Task DoImport()
+    {
+        if (string.IsNullOrEmpty(_importDbName)) return;
+        ClearStatus();
+        _importUploading = true;
+        StateHasChanged();
+
+        try
+        {
+            var db = Uri.EscapeDataString(_importDbName);
+            var js = "(" +
+                "async function(){" +
+                "var input=document.getElementById('sproutdb-import-file');" +
+                "if(!input||!input.files||input.files.length===0)" +
+                "return JSON.stringify({error:'No file selected'});" +
+                "var fd=new FormData();" +
+                "fd.append('file',input.files[0]);" +
+                "try{" +
+                "var resp=await fetch('/sproutdb/admin/import/" + db + "',{method:'POST',body:fd});" +
+                "var data=await resp.json();" +
+                "return JSON.stringify(data);" +
+                "}catch(e){return JSON.stringify({error:e.message});}" +
+                "})()";
+
+            var result = await JS.InvokeAsync<string>("eval", js);
+            var parsed = System.Text.Json.JsonDocument.Parse(result);
+
+            if (parsed.RootElement.TryGetProperty("error", out var errProp))
+            {
+                SetStatus(errProp.GetString() ?? "Import failed", true);
+            }
+            else
+            {
+                var msg = parsed.RootElement.TryGetProperty("message", out var msgProp)
+                    ? msgProp.GetString() ?? "Imported"
+                    : "Imported";
+                SetStatus(msg);
+                InvalidateDatabases();
+                _importDbName = string.Empty;
+                Nav.NavigateTo(Nav.Uri, forceLoad: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, true);
+        }
+        finally
+        {
+            _importUploading = false;
+        }
+    }
+
+    // ── Permissions ──
+
+    private void RefreshPermissions()
+    {
+        _apiKeys = Engine.Execute("get _api_keys", "_system").Data;
+        _apiPermissions = Engine.Execute("get _api_permissions", "_system").Data;
+        _apiRestrictions = Engine.Execute("get _api_restrictions", "_system").Data;
+    }
+
+    private RenderFragment RenderPermissions() => __builder =>
+    {
+        if (Settings.MasterKey is null)
+        {
+            <div class="admin-hint">Auth is disabled. Set a MasterKey to enable API key management.</div>
+            return;
+        }
+
+        <!-- Key Tree -->
+        @if (_apiKeys is { Count: > 0 })
+        {
+            <div class="key-tree">
+                @foreach (var key in _apiKeys)
+                {
+                    var keyName = key.GetValueOrDefault("name")?.ToString() ?? "";
+                    var prefix = key.GetValueOrDefault("prefix")?.ToString() ?? "";
+                    var created = key.GetValueOrDefault("created_at")?.ToString() ?? "";
+                    var isExpanded = _expandedKey == keyName;
+
+                    var perms = _apiPermissions?.Where(p =>
+                        string.Equals(p.GetValueOrDefault("key_name")?.ToString(), keyName, StringComparison.OrdinalIgnoreCase)).ToList()
+                        ?? new List<Dictionary<string, object?>>();
+                    var rests = _apiRestrictions?.Where(r =>
+                        string.Equals(r.GetValueOrDefault("key_name")?.ToString(), keyName, StringComparison.OrdinalIgnoreCase)).ToList()
+                        ?? new List<Dictionary<string, object?>>();
+
+                    <div class="key-node @(isExpanded ? "expanded" : "")">
+                        <div class="key-header" @onclick="() => ToggleKey(keyName)">
+                            <span class="key-chevron">@(isExpanded ? "\u25BC" : "\u25B6")</span>
+                            <span class="key-name">@keyName</span>
+                            <span class="key-prefix">@prefix</span>
+                            <span class="key-date">@created</span>
+                        </div>
+
+                        @if (isExpanded)
+                        {
+                            <div class="key-detail">
+                                <!-- Permissions -->
+                                <div class="key-section">
+                                    <div class="key-section-title">Permissions</div>
+                                    <table class="key-mini-table">
+                                        <thead><tr><th>Database</th><th>Role</th><th></th></tr></thead>
+                                        <tbody>
+                                            @if (perms.Count > 0)
+                                            {
+                                                @foreach (var p in perms)
+                                                {
+                                                    var pDb = p.GetValueOrDefault("database")?.ToString() ?? "";
+                                                    var pRole = p.GetValueOrDefault("role")?.ToString() ?? "";
+                                                    <tr>
+                                                        <td>@pDb</td>
+                                                        <td><span class="key-row-role">@pRole</span></td>
+                                                        <td class="key-action-cell"><button class="key-row-action danger" @onclick="() => DoRevoke(keyName, pDb)">revoke</button></td>
+                                                    </tr>
+                                                }
+                                            }
+                                            <tr class="key-add-row">
+                                                <td>
+                                                    <select class="admin-select mini" @bind="_grantDb">
+                                                        <option value="">database…</option>
+                                                        @foreach (var db in GetDatabases())
+                                                        {
+                                                            <option value="@db.Name">@db.Name</option>
+                                                        }
+                                                    </select>
+                                                </td>
+                                                <td>
+                                                    <select class="admin-select mini" @bind="_grantRole">
+                                                        <option value="reader">reader</option>
+                                                        <option value="writer">writer</option>
+                                                        <option value="admin">admin</option>
+                                                    </select>
+                                                </td>
+                                                <td class="key-action-cell"><button class="btn btn-primary mini" disabled="@string.IsNullOrEmpty(_grantDb)" @onclick="() => DoGrant(keyName)">Grant</button></td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <!-- Restrictions -->
+                                <div class="key-section">
+                                    <div class="key-section-title">Restrictions</div>
+                                    <table class="key-mini-table">
+                                        <thead><tr><th>Database.Table</th><th>Max Role</th><th></th></tr></thead>
+                                        <tbody>
+                                            @if (rests.Count > 0)
+                                            {
+                                                @foreach (var r in rests)
+                                                {
+                                                    var rDb = r.GetValueOrDefault("database")?.ToString() ?? "";
+                                                    var rTable = r.GetValueOrDefault("table")?.ToString() ?? r.GetValueOrDefault("table_name")?.ToString() ?? "";
+                                                    var rRole = r.GetValueOrDefault("role")?.ToString() ?? "";
+                                                    <tr>
+                                                        <td>@rDb.@rTable</td>
+                                                        <td><span class="key-row-role">@(rRole == "none" ? "none (blocked)" : rRole + " (read-only)")</span></td>
+                                                        <td class="key-action-cell"><button class="key-row-action danger" @onclick="() => DoUnrestrict(keyName, rDb, rTable)">unrestrict</button></td>
+                                                    </tr>
+                                                }
+                                            }
+                                            <tr class="key-add-row">
+                                                <td style="display: flex; gap: 4px;">
+                                                    <select class="admin-select mini" @bind="_restrictDb">
+                                                        <option value="">database…</option>
+                                                        @foreach (var db in GetDatabases())
+                                                        {
+                                                            <option value="@db.Name">@db.Name</option>
+                                                        }
+                                                    </select>
+                                                    <select class="admin-select mini" @bind="_restrictTable">
+                                                        <option value="">table…</option>
+                                                        @if (!string.IsNullOrEmpty(_restrictDb))
+                                                        {
+                                                            @foreach (var t in GetTablesForDb(_restrictDb))
+                                                            {
+                                                                <option value="@t">@t</option>
+                                                            }
+                                                        }
+                                                    </select>
+                                                </td>
+                                                <td>
+                                                    <select class="admin-select mini" @bind="_restrictRole">
+                                                        <option value="none">none (blocked)</option>
+                                                        <option value="reader">reader (read-only)</option>
+                                                    </select>
+                                                </td>
+                                                <td class="key-action-cell"><button class="btn btn-primary mini" disabled="@(string.IsNullOrEmpty(_restrictDb) || string.IsNullOrEmpty(_restrictTable))" @onclick="() => DoRestrict(keyName)">Restrict</button></td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <div style="margin-top: 10px; text-align: right;">
+                                    <button class="btn-danger mini" @onclick="() => DoPurgeKey(keyName)">Purge Key</button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div style="font-size: 11.5px; color: var(--text-3); font-style: italic; margin-bottom: 12px;">No API keys</div>
+        }
+
+        <hr style="border: none; border-top: 1px solid var(--border); margin: 16px 0;" />
+
+        <div style="display: flex; gap: 8px; align-items: end;">
+            <div class="admin-field" style="margin-bottom: 0;">
+                <label class="admin-label">Create API Key</label>
+                <input class="admin-input" type="text" style="max-width: 180px;" placeholder="key name" @bind="_newKeyName" />
+            </div>
+            <button class="btn btn-primary" disabled="@string.IsNullOrWhiteSpace(_newKeyName)" @onclick="DoCreateKey">Create</button>
+        </div>
+    };
+
+    private void ToggleKey(string keyName)
+    {
+        ClearStatus();
+        _expandedKey = _expandedKey == keyName ? null : keyName;
+        _grantDb = string.Empty;
+        _grantRole = "reader";
+        _restrictDb = string.Empty;
+        _restrictTable = string.Empty;
+        _restrictRole = "reader";
+    }
+
+    private void DoCreateKey()
+    {
+        ClearStatus();
+        var response = Engine.Execute("create apikey '" + _newKeyName.Replace("'", "") + "'", "_system");
+        if (response.Operation == SproutOperation.Error)
+            SetStatus(response.Errors?.Count > 0 ? response.Errors[0].Message : "failed", true);
+        else
+        {
+            var keyValue = response.Data?.FirstOrDefault()?.GetValueOrDefault("key")?.ToString();
+            SetStatus(keyValue is not null ? "Key created: " + keyValue : "Key created");
+            _newKeyName = string.Empty;
+            RefreshPermissions();
+        }
+    }
+
+    private void DoGrant(string keyName)
+    {
+        ClearStatus();
+        var response = Engine.Execute("grant " + _grantRole + " on " + _grantDb + " to '" + keyName + "'", "_system");
+        if (response.Operation == SproutOperation.Error)
+            SetStatus(response.Errors?.Count > 0 ? response.Errors[0].Message : "failed", true);
+        else
+        {
+            SetStatus("Granted " + _grantRole + " on " + _grantDb + " to '" + keyName + "'");
+            _grantDb = string.Empty;
+            RefreshPermissions();
+        }
+    }
+
+    private void DoRevoke(string keyName, string database)
+    {
+        ClearStatus();
+        var response = Engine.Execute("revoke " + database + " from '" + keyName + "'", "_system");
+        if (response.Operation == SproutOperation.Error)
+            SetStatus(response.Errors?.Count > 0 ? response.Errors[0].Message : "failed", true);
+        else
+        {
+            SetStatus("Revoked " + database + " from '" + keyName + "'");
+            RefreshPermissions();
+        }
+    }
+
+    private void DoRestrict(string keyName)
+    {
+        ClearStatus();
+        var response = Engine.Execute("restrict " + _restrictTable + " to " + _restrictRole + " for '" + keyName + "' on " + _restrictDb, "_system");
+        if (response.Operation == SproutOperation.Error)
+            SetStatus(response.Errors?.Count > 0 ? response.Errors[0].Message : "failed", true);
+        else
+        {
+            var desc = _restrictRole == "none" ? "blocked" : "limited to read-only";
+            SetStatus("'" + keyName + "' is now " + desc + " on " + _restrictDb + "." + _restrictTable);
+            _restrictDb = string.Empty;
+            _restrictTable = string.Empty;
+            RefreshPermissions();
+        }
+    }
+
+    private void DoUnrestrict(string keyName, string database, string table)
+    {
+        ClearStatus();
+        var response = Engine.Execute("unrestrict " + table + " for '" + keyName + "' on " + database, "_system");
+        if (response.Operation == SproutOperation.Error)
+            SetStatus(response.Errors?.Count > 0 ? response.Errors[0].Message : "failed", true);
+        else
+        {
+            SetStatus("Unrestricted " + database + "." + table + " for '" + keyName + "'");
+            RefreshPermissions();
+        }
+    }
+
+    private void DoPurgeKey(string keyName)
+    {
+        ClearStatus();
+        var response = Engine.Execute("purge apikey '" + keyName + "'", "_system");
+        if (response.Operation == SproutOperation.Error)
+            SetStatus(response.Errors?.Count > 0 ? response.Errors[0].Message : "failed", true);
+        else
+        {
+            SetStatus("Key '" + keyName + "' purged");
+            _expandedKey = null;
+            RefreshPermissions();
+        }
+    }
+
+    // ── Purge Database ──
+
+    private RenderFragment RenderPurge() => __builder =>
+    {
+        var dbs = GetDatabases();
+        <div class="admin-field">
+            <label class="admin-label">Database</label>
+            <select class="admin-select" @bind="_purgeDb">
+                @foreach (var db in dbs)
+                {
+                    <option value="@db.Name">@db.Name</option>
+                }
+            </select>
+        </div>
+        <div class="admin-warning">
+            This will permanently delete all data in the selected database. This action is irreversible.
+        </div>
+        <div class="admin-field">
+            <label class="admin-label">Type "@_purgeDb" to confirm</label>
+            <input class="admin-input admin-danger" type="text" @bind="_purgeConfirm" @bind:event="oninput" />
+        </div>
+        <button class="btn-danger"
+                disabled="@(_purgeConfirm != _purgeDb || string.IsNullOrEmpty(_purgeDb))"
+                @onclick="DoPurge">Purge Database</button>
+    };
+
+    private void DoPurge()
+    {
+        if (_purgeConfirm != _purgeDb || string.IsNullOrEmpty(_purgeDb)) return;
+        ClearStatus();
+
+        var response = Engine.Execute("purge database", _purgeDb);
+        if (response.Operation == SproutOperation.Error)
+        {
+            SetStatus(response.Errors?.Count > 0 ? response.Errors[0].Message : "purge failed", true);
+        }
+        else
+        {
+            SetStatus($"Database '{_purgeDb}' purged");
+            InvalidateDatabases();
+            _purgeConfirm = string.Empty;
+            // Force full page reload to refresh sidebar tree
+            Nav.NavigateTo(Nav.Uri, forceLoad: true);
+        }
+    }
+
+    // ── Settings ──
+
+    private void LoadSettings()
+    {
+        _flushIntervalMs = (int)Settings.FlushInterval.TotalMilliseconds;
+        _walSyncIntervalMs = (int)Settings.WalSyncInterval.TotalMilliseconds;
+        _bulkLimit = Settings.BulkLimit;
+        _defaultPageSize = Settings.DefaultPageSize;
+        _chunkSize = Settings.ChunkSize;
+
+        var ai = Settings.AutoIndex;
+        _autoIndexEnabled = ai.Enabled;
+        _usageThresholdPct = (int)(ai.UsageThreshold * 100);
+        _selectivityThresholdPct = (int)(ai.SelectivityThreshold * 100);
+        _readWriteRatio = ai.ReadWriteRatio;
+        _unusedRetentionDays = ai.UnusedRetentionDays;
+        _minimumQueryCount = ai.MinimumQueryCount;
+    }
+
+    private RenderFragment RenderSettings() => __builder =>
+    {
+        <div style="font-weight: 600; font-size: 12px; margin-bottom: 10px; color: var(--text-1);">Engine Settings</div>
+        <div class="settings-grid" style="margin-bottom: 20px;">
+            <div class="settings-item">
+                <span class="settings-key">@Tip("Flush Interval (ms)", "FlushInterval")</span>
+                <input class="settings-value" type="number" @bind="_flushIntervalMs" />
+            </div>
+            <div class="settings-item">
+                <span class="settings-key">@Tip("WAL Sync Interval (ms)", "WalSyncInterval")</span>
+                <input class="settings-value" type="number" @bind="_walSyncIntervalMs" />
+            </div>
+            <div class="settings-item">
+                <span class="settings-key">@Tip("Bulk Limit", "BulkLimit")</span>
+                <input class="settings-value" type="number" @bind="_bulkLimit" />
+            </div>
+            <div class="settings-item">
+                <span class="settings-key">@Tip("Default Page Size", "DefaultPageSize")</span>
+                <input class="settings-value" type="number" @bind="_defaultPageSize" />
+            </div>
+            <div class="settings-item">
+                <span class="settings-key">@Tip("Chunk Size", "ChunkSize")</span>
+                <input class="settings-value" type="number" @bind="_chunkSize" />
+            </div>
+        </div>
+
+        <div style="font-weight: 600; font-size: 12px; margin-bottom: 10px; color: var(--text-1);">Auto-Index Settings</div>
+        <div class="settings-grid" style="margin-bottom: 16px;">
+            <div class="settings-item">
+                <span class="settings-key">@Tip("Enabled", "Enabled")</span>
+                <select class="settings-value" @bind="_autoIndexEnabled">
+                    <option value="true">On</option>
+                    <option value="false">Off</option>
+                </select>
+            </div>
+            <div class="settings-item">
+                <span class="settings-key">@Tip("Usage Threshold (%)", "UsageThreshold")</span>
+                <input class="settings-value" type="number" @bind="_usageThresholdPct" />
+            </div>
+            <div class="settings-item">
+                <span class="settings-key">@Tip("Selectivity Threshold (%)", "SelectivityThreshold")</span>
+                <input class="settings-value" type="number" @bind="_selectivityThresholdPct" />
+            </div>
+            <div class="settings-item">
+                <span class="settings-key">@Tip("Read/Write Ratio", "ReadWriteRatio")</span>
+                <input class="settings-value" type="number" step="0.1" @bind="_readWriteRatio" />
+            </div>
+            <div class="settings-item">
+                <span class="settings-key">@Tip("Unused Retention (days)", "UnusedRetention")</span>
+                <input class="settings-value" type="number" @bind="_unusedRetentionDays" />
+            </div>
+            <div class="settings-item">
+                <span class="settings-key">@Tip("Min Query Count", "MinQueryCount")</span>
+                <input class="settings-value" type="number" @bind="_minimumQueryCount" />
+            </div>
+        </div>
+
+        <button class="btn btn-primary" @onclick="SaveSettings">Save</button>
+        <div class="admin-settings-note">Changes take effect immediately but are not persisted across restarts.</div>
+    };
+
+    private void SaveSettings()
+    {
+        ClearStatus();
+        Settings.FlushInterval = TimeSpan.FromMilliseconds(_flushIntervalMs);
+        Settings.WalSyncInterval = TimeSpan.FromMilliseconds(_walSyncIntervalMs);
+        Settings.BulkLimit = _bulkLimit;
+        Settings.DefaultPageSize = _defaultPageSize;
+        Settings.ChunkSize = _chunkSize;
+
+        Settings.AutoIndex.Enabled = _autoIndexEnabled;
+        Settings.AutoIndex.UsageThreshold = _usageThresholdPct / 100.0;
+        Settings.AutoIndex.SelectivityThreshold = _selectivityThresholdPct / 100.0;
+        Settings.AutoIndex.ReadWriteRatio = _readWriteRatio;
+        Settings.AutoIndex.UnusedRetentionDays = _unusedRetentionDays;
+        Settings.AutoIndex.MinimumQueryCount = _minimumQueryCount;
+
+        SetStatus("Settings saved");
+    }
+
+    // ── Benchmark ──
+
+    private RenderFragment RenderBenchmark() => __builder =>
+    {
+        var dbs = GetDatabases();
+        <div style="display: flex; gap: 8px; align-items: end; flex-wrap: wrap; margin-bottom: 12px;">
+            <div class="admin-field" style="margin-bottom: 0;">
+                <label class="admin-label">Database</label>
+                <select class="admin-select" @bind="_benchDb">
+                    @foreach (var db in dbs)
+                    {
+                        <option value="@db.Name">@db.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="admin-field" style="margin-bottom: 0;">
+                <label class="admin-label">Table</label>
+                <input class="admin-input" type="text" style="max-width: 160px;" placeholder="table_name" @bind="_benchTable" />
+            </div>
+            <div class="admin-field" style="margin-bottom: 0;">
+                <label class="admin-label">Operations</label>
+                <input class="admin-input" type="number" style="max-width: 100px;" @bind="_benchOps" />
+            </div>
+        </div>
+        <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+            <button class="btn btn-primary"
+                    disabled="@(_benchRunning || string.IsNullOrEmpty(_benchDb) || string.IsNullOrEmpty(_benchTable))"
+                    @onclick="() => RunBenchmark(true)">Run Insert</button>
+            <button class="btn btn-ghost"
+                    disabled="@(_benchRunning || string.IsNullOrEmpty(_benchDb) || string.IsNullOrEmpty(_benchTable))"
+                    @onclick="() => RunBenchmark(false)">Run Get</button>
+            @if (_benchRunning)
+            {
+                <span style="font-size: 12px; color: var(--text-2); align-self: center;">Running...</span>
+            }
+        </div>
+        @if (_benchLabel is not null)
+        {
+            <div style="font-size: 12px; color: var(--text-2); margin-bottom: 8px;">@_benchLabel</div>
+            <div class="bench-results">
+                <div class="bench-stat">
+                    <div class="metric-value green">@_benchOpsPerSec.ToString("N0")</div>
+                    <div class="metric-label">ops/s</div>
+                </div>
+                <div class="bench-stat">
+                    <div class="metric-value">@_benchTotalMs.ToString("N1") ms</div>
+                    <div class="metric-label">Total</div>
+                </div>
+                <div class="bench-stat">
+                    <div class="metric-value orange">@_benchAvgLatencyMs.ToString("N3") ms</div>
+                    <div class="metric-label">Avg Latency</div>
+                </div>
+            </div>
+        }
+    };
+
+    private async Task RunBenchmark(bool isInsert)
+    {
+        if (_benchRunning) return;
+        _benchRunning = true;
+        _benchLabel = null;
+        ClearStatus();
+        StateHasChanged();
+
+        var db = _benchDb;
+        var table = _benchTable;
+        var ops = Math.Max(1, _benchOps);
+        _benchCts = new CancellationTokenSource();
+
+        try
+        {
+            if (isInsert)
+            {
+                await Task.Run(() => RunInsertBench(db, table, ops), _benchCts.Token);
+                _benchLabel = $"Insert: {ops} ops into {db}.{table}";
+            }
+            else
+            {
+                await Task.Run(() => RunGetBench(db, table, ops), _benchCts.Token);
+                _benchLabel = $"Get: {ops} queries on {db}.{table}";
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, true);
+        }
+        finally
+        {
+            _benchRunning = false;
+            _benchCts?.Dispose();
+            _benchCts = null;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void RunInsertBench(string db, string table, int ops)
+    {
+        var descResp = Engine.Execute($"describe {table}", db);
+        var columns = descResp.Schema?.Columns;
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        for (int i = 0; i < ops; i++)
+        {
+            var fields = new List<string>();
+            var values = new List<string>();
+
+            if (columns is { Count: > 0 })
+            {
+                foreach (var col in columns)
+                {
+                    if (string.Equals(col.Name, "id", StringComparison.OrdinalIgnoreCase)) continue;
+                    fields.Add(col.Name);
+                    values.Add(col.Type.ToLowerInvariant() switch
+                    {
+                        "sint" or "uint" or "slong" or "ulong" or "sshort" or "ushort"
+                            or "sbyte" or "ubyte" or "float" or "double" => i.ToString(),
+                        "bool" => "true",
+                        "datetime" or "date" or "time" => $"'{DateTime.UtcNow:O}'",
+                        _ => $"'bench_{i}'",
+                    });
+                }
+            }
+
+            string query;
+            if (fields.Count > 0)
+                query = $"upsert {table} ({string.Join(", ", fields)}) values ({string.Join(", ", values)})";
+            else
+                query = $"upsert {table} (value) values ('bench_{i}')";
+
+            Engine.Execute(query, db);
+        }
+
+        sw.Stop();
+        _benchTotalMs = sw.Elapsed.TotalMilliseconds;
+        _benchOpsPerSec = ops / sw.Elapsed.TotalSeconds;
+        _benchAvgLatencyMs = _benchTotalMs / ops;
+    }
+
+    private void RunGetBench(string db, string table, int ops)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        for (int i = 0; i < ops; i++)
+        {
+            Engine.Execute($"get {table}", db);
+        }
+
+        sw.Stop();
+        _benchTotalMs = sw.Elapsed.TotalMilliseconds;
+        _benchOpsPerSec = ops / sw.Elapsed.TotalSeconds;
+        _benchAvgLatencyMs = _benchTotalMs / ops;
+    }
+
+    public void Dispose()
+    {
+        _benchCts?.Cancel();
+        _benchCts?.Dispose();
+    }
+}
