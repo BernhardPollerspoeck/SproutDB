@@ -53,7 +53,11 @@
     <div class="query-actions">
         <button class="btn btn-primary" @onclick="RunQuery">&#9654; Run</button>
         <button class="btn btn-ghost">Format</button>
-        @if (lastResponse is not null)
+        @if (_runError is not null)
+        {
+            <span style="color: var(--red); font-size: 12px; font-weight: 500;">@_runError</span>
+        }
+        else if (lastResponse is not null)
         {
             <div class="query-stats @(_statsFlash ? "stats-flash" : "")">
                 <span class="stat-ok">&#10003;</span>
@@ -100,9 +104,15 @@
                     <tr>
                         @foreach (var col in columns)
                         {
+                            var isSorted = _sortColumn is not null
+                                && string.Equals(col.Name, _sortColumn, StringComparison.OrdinalIgnoreCase);
                             <th>
                                 <div class="th-content">
                                     @col.Name
+                                    @if (isSorted)
+                                    {
+                                        <span class="th-sort">@(_sortDesc ? "\u25BC" : "\u25B2")</span>
+                                    }
                                     <span class="th-type">@col.Type</span>
                                 </div>
                             </th>
@@ -164,9 +174,10 @@
             <button class="results-tab active">Result</button>
         </div>
         <div class="results-table-wrap">
-            <div class="placeholder-page">
-                <div class="placeholder-title" style="font-size: 14px;">@lastResponse.Operation completed</div>
-                <div class="placeholder-subtitle">@lastResponse.Affected row(s) affected</div>
+            <div style="padding: 16px;">
+                <div class="admin-status success" style="font-size: 14px; padding: 12px 16px;">
+                    <span style="font-weight: 600;">@lastResponse.Operation</span> completed — @lastResponse.Affected row(s) affected
+                </div>
             </div>
         </div>
     }
@@ -302,6 +313,8 @@
             await JS.InvokeVoidAsync("sproutAdmin.initEditor", _editorWrapRef);
             _dotnetRef = DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("sproutAdmin.initAutocomplete", _editorWrapRef, _dotnetRef);
+            await JS.InvokeVoidAsync("eval",
+                "document.addEventListener('keydown',function(e){if(e.altKey&&e.key==='l'){e.preventDefault();document.querySelector('.query-editor')?.focus();}})");
             await PushSchemaAsync();
         }
 
@@ -320,9 +333,19 @@
         }
     }
 
+    private string? _runError;
+
     private void RunQuery()
     {
-        if (string.IsNullOrWhiteSpace(selectedDatabase) || string.IsNullOrWhiteSpace(QueryText))
+        _runError = null;
+
+        if (string.IsNullOrWhiteSpace(selectedDatabase))
+        {
+            _runError = "Select a database first";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(QueryText))
             return;
 
         // Clear editing state
@@ -386,6 +409,7 @@
         elapsedMs = sw.Elapsed.TotalMilliseconds;
         rowCount = totalRows;
         payloadBytes = totalPayload;
+        ExtractSort(lines[^1]);
 
         // Flash the stats bar to signal execution
         _statsFlash = true;
@@ -849,6 +873,39 @@
         _statsFlashTimer?.Dispose();
         _flashTimer?.Dispose();
         _dotnetRef?.Dispose();
+    }
+
+    // Sort indicator
+    private string? _sortColumn;
+    private bool _sortDesc;
+
+    private void ExtractSort(string query)
+    {
+        _sortColumn = null;
+        _sortDesc = false;
+
+        var tokens = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        for (int i = 0; i < tokens.Length - 1; i++)
+        {
+            if (tokens[i].Equals("order", StringComparison.OrdinalIgnoreCase)
+                && i + 1 < tokens.Length && tokens[i + 1].Equals("by", StringComparison.OrdinalIgnoreCase)
+                && i + 2 < tokens.Length)
+            {
+                _sortColumn = tokens[i + 2];
+                if (i + 3 < tokens.Length && tokens[i + 3].Equals("desc", StringComparison.OrdinalIgnoreCase))
+                    _sortDesc = true;
+                return;
+            }
+            // SproutDB also supports "order col [desc]" without "by"
+            if (tokens[i].Equals("order", StringComparison.OrdinalIgnoreCase)
+                && !tokens[i + 1].Equals("by", StringComparison.OrdinalIgnoreCase))
+            {
+                _sortColumn = tokens[i + 1];
+                if (i + 2 < tokens.Length && tokens[i + 2].Equals("desc", StringComparison.OrdinalIgnoreCase))
+                    _sortDesc = true;
+                return;
+            }
+        }
     }
 
     private sealed class ColumnMeta

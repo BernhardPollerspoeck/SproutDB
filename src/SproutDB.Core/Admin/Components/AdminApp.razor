@@ -7,6 +7,7 @@
     <title>SproutDB Admin</title>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link href="/_content/SproutDB/css/sproutdb-admin.css" rel="stylesheet" />
+    <script src="/_content/SproutDB/js/sproutdb-autocomplete.js"></script>
     <HeadOutlet />
 </head>
 <body>
@@ -78,150 +79,12 @@
                     var items = [];
                     var visible = false;
 
-                    var COMMANDS = ['get','upsert','delete','describe','create','purge','add','alter','rename','backup','restore'];
-                    var CLAUSES = ['where','select','order','limit','page','count','distinct','group','follow','on','as'];
-                    var OPERATORS = ['=','!=','>','>=','<','<=','between','in','is','contains','starts','ends'];
-                    var DIRECTIONS = ['asc','desc'];
-                    var BOOLEANS = ['true','false','null'];
-                    var TYPES = ['string','bool','sbyte','ubyte','sshort','ushort','sint','uint','slong','ulong','float','double','date','time','datetime'];
-                    var CREATE_SUB = ['database','table','index','apikey'];
-                    var PURGE_SUB = ['database','table','column','index','apikey'];
-
                     function getContext(text, pos) {
-                        // Get current line up to cursor
-                        var before = text.substring(0, pos);
-                        var lineStart = before.lastIndexOf('\n') + 1;
-                        var line = before.substring(lineStart);
-                        var tokens = line.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
-                        var prefix = '';
-
-                        if (tokens.length === 0) return { type: 'command', prefix: '', table: null };
-
-                        // Determine if we're mid-word or starting a new token
-                        var endsWithSpace = line.length > 0 && line[line.length - 1] === ' ';
-                        if (!endsWithSpace && tokens.length > 0) {
-                            prefix = tokens[tokens.length - 1];
-                            tokens = tokens.slice(0, -1);
-                        }
-
-                        var cmd = tokens.length > 0 ? tokens[0].toLowerCase() : prefix.toLowerCase();
-
-                        if (tokens.length === 0) return { type: 'command', prefix: prefix, table: null };
-
-                        // Detect table from tokens
-                        var table = null;
-                        for (var i = 0; i < tokens.length; i++) {
-                            var tl = tokens[i].toLowerCase();
-                            if ((tl === 'get' || tl === 'upsert' || tl === 'delete' || tl === 'from' || tl === 'describe' || tl === 'purge') && i + 1 < tokens.length) {
-                                var next = tokens[i + 1].toLowerCase();
-                                if (next !== 'from' && next !== 'database' && next !== 'table' && next !== 'column' && next !== 'index' && next !== 'apikey') {
-                                    table = tokens[i + 1];
-                                }
-                            }
-                        }
-
-                        // Check for table.col pattern in prefix
-                        if (prefix.indexOf('.') > 0) {
-                            var parts = prefix.split('.');
-                            return { type: 'column', prefix: parts[1] || '', table: parts[0] };
-                        }
-
-                        var lastToken = tokens[tokens.length - 1].toLowerCase();
-
-                        // After create → create-sub
-                        if (cmd === 'create' && tokens.length === 1) return { type: 'create-sub', prefix: prefix, table: null };
-
-                        // After purge → purge-sub
-                        if (cmd === 'purge' && tokens.length === 1) return { type: 'purge-sub', prefix: prefix, table: null };
-
-                        // After command keyword → table
-                        if (tokens.length === 1 && (cmd === 'get' || cmd === 'upsert' || cmd === 'delete' || cmd === 'describe'))
-                            return { type: 'table', prefix: prefix, table: null };
-
-                        // After from/table keyword → table
-                        if (lastToken === 'from' || lastToken === 'table')
-                            return { type: 'table', prefix: prefix, table: null };
-
-                        // After purge subcommand → table
-                        if (cmd === 'purge' && tokens.length === 2)
-                            return { type: 'table', prefix: prefix, table: null };
-
-                        // After 'order by' → column
-                        if (tokens.length >= 2 && tokens[tokens.length - 2].toLowerCase() === 'order' && lastToken === 'by')
-                            return { type: 'column', prefix: prefix, table: table };
-
-                        // After where/select/by → column
-                        if (lastToken === 'where' || lastToken === 'select' || lastToken === 'by')
-                            return { type: 'column', prefix: prefix, table: table };
-
-                        // After 'order by <col>' → direction
-                        if (tokens.length >= 3) {
-                            var ob1 = tokens[tokens.length - 3] ? tokens[tokens.length - 3].toLowerCase() : '';
-                            var ob2 = tokens[tokens.length - 2] ? tokens[tokens.length - 2].toLowerCase() : '';
-                            if (ob1 === 'order' && ob2 === 'by')
-                                return { type: 'direction', prefix: prefix, table: table };
-                        }
-
-                        // After 'where <col>' → operator
-                        if (tokens.length >= 2 && tokens[tokens.length - 2].toLowerCase() === 'where')
-                            return { type: 'operator', prefix: prefix, table: table };
-
-                        // After 'and/or <col>' → operator
-                        if (tokens.length >= 2 && (tokens[tokens.length - 2].toLowerCase() === 'and' || tokens[tokens.length - 2].toLowerCase() === 'or'))
-                            return { type: 'operator', prefix: prefix, table: table };
-
-                        // After operator → boolean
-                        var ops = ['=','!=','>','>=','<','<=','contains','starts','ends','between','in','is'];
-                        if (ops.indexOf(lastToken) >= 0)
-                            return { type: 'boolean', prefix: prefix, table: table };
-
-                        // After 'add column tbl.col' or inside type context
-                        if (cmd === 'add' && tokens.length >= 3)
-                            return { type: 'type', prefix: prefix, table: table };
-
-                        // After table name → clause
-                        if (table) {
-                            // Check if lastToken is the table name or a value/direction — suggest clause
-                            return { type: 'clause', prefix: prefix, table: table };
-                        }
-
-                        return { type: 'command', prefix: prefix, table: null };
+                        return SproutAutocomplete.getContext(text, pos);
                     }
 
                     function getSuggestions(ctx) {
-                        var list, cat;
-                        switch (ctx.type) {
-                            case 'command': list = COMMANDS; cat = 'cmd'; break;
-                            case 'table': list = sproutAdmin._schema.tables || []; cat = 'tbl'; break;
-                            case 'column':
-                                var t = ctx.table;
-                                if (t && sproutAdmin._schema.columns) {
-                                    // Case-insensitive lookup
-                                    var cols = null;
-                                    var keys = Object.keys(sproutAdmin._schema.columns);
-                                    for (var k = 0; k < keys.length; k++) {
-                                        if (keys[k].toLowerCase() === t.toLowerCase()) {
-                                            cols = sproutAdmin._schema.columns[keys[k]];
-                                            break;
-                                        }
-                                    }
-                                    list = cols || [];
-                                } else {
-                                    list = [];
-                                }
-                                cat = 'col'; break;
-                            case 'clause': list = CLAUSES; cat = 'kw'; break;
-                            case 'operator': list = OPERATORS; cat = 'op'; break;
-                            case 'direction': list = DIRECTIONS; cat = 'dir'; break;
-                            case 'boolean': list = BOOLEANS; cat = 'val'; break;
-                            case 'type': list = TYPES; cat = 'type'; break;
-                            case 'create-sub': list = CREATE_SUB; cat = 'kw'; break;
-                            case 'purge-sub': list = PURGE_SUB; cat = 'kw'; break;
-                            default: list = []; cat = '';
-                        }
-                        var p = (ctx.prefix || '').toLowerCase();
-                        var filtered = list.filter(function(s) { return s.toLowerCase().indexOf(p) === 0; });
-                        return { items: filtered.slice(0, 12), cat: cat };
+                        return SproutAutocomplete.getSuggestions(ctx, sproutAdmin._schema);
                     }
 
                     function positionPopup() {
