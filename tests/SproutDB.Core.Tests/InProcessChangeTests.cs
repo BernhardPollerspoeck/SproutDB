@@ -13,6 +13,10 @@ public class InProcessChangeTests : IDisposable
         _engine.Execute(
             "create table users (name string 100, email string 200)",
             "testdb");
+
+        // Wait for any pending change events from setup to be dispatched
+        // before tests subscribe their callbacks.
+        Thread.Sleep(100);
     }
 
     public void Dispose()
