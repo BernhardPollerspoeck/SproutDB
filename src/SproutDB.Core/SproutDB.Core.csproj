@@ -5,6 +5,18 @@
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- NuGet Package -->
+    <PackageId>SproutDB</PackageId>
+    <VersionPrefix>9.0</VersionPrefix>
+    <Authors>Bernhard Pollerspoeck</Authors>
+    <Description>A .NET-native database engine. Embedded or networked. No Docker, no config, no ops.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/BernhardPollerspoeck/SproutDB</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/BernhardPollerspoeck/SproutDB</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>database;embedded;dotnet;nosql;sproutdb</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,6 +27,10 @@
   <ItemGroup>
     <InternalsVisibleTo Include="SproutDB.Core.Tests" />
     <InternalsVisibleTo Include="SproutDB.Benchmarks" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
 
 </Project>
