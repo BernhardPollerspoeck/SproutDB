@@ -824,10 +824,19 @@ internal static class GetParser
         var srcCol = ctx.GetLowercaseText(srcColToken);
         ctx.Advance();
 
-        // ->
-        if (ctx.Peek().Type != TokenType.Arrow)
+        // -> / ->? / ?-> / ?->?
+        var arrowToken = ctx.Peek();
+        var joinType = arrowToken.Type switch
         {
-            ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected '->' after source column");
+            TokenType.Arrow => JoinType.Inner,
+            TokenType.ArrowOptRight => JoinType.Left,
+            TokenType.ArrowOptLeft => JoinType.Right,
+            TokenType.ArrowOptBoth => JoinType.Outer,
+            _ => (JoinType?)null,
+        };
+        if (joinType is null)
+        {
+            ctx.AddError(arrowToken, ErrorCodes.SYNTAX_ERROR, "expected '->', '->?', '?->' or '?->?' after source column");
             return null;
         }
         ctx.Advance();
@@ -903,6 +912,7 @@ internal static class GetParser
             TargetColumn = tgtCol,
             TargetColumnPosition = tgtColToken.Start,
             TargetColumnLength = tgtColToken.Length,
+            JoinType = joinType.Value,
             Alias = alias,
             Select = followSelect,
             Where = followWhere,

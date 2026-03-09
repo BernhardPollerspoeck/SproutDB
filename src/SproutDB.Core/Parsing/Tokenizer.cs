@@ -88,14 +88,32 @@ internal static class Tokenizer
                 continue;
             }
 
-            // Two-character operators
+            // Multi-character operators (check longest first)
             if (pos + 1 < span.Length)
             {
                 var c1 = span[pos + 1];
+
+                // Join arrows: ?->? (4 chars), ?-> (3 chars), ->? (3 chars), -> (2 chars)
+                if (c == '?' && c1 == '-' && pos + 2 < span.Length && span[pos + 2] == '>')
+                {
+                    if (pos + 3 < span.Length && span[pos + 3] == '?')
+                    {
+                        tokens.Add(new Token(TokenType.ArrowOptBoth, pos, 4)); pos += 4; continue;
+                    }
+                    tokens.Add(new Token(TokenType.ArrowOptLeft, pos, 3)); pos += 3; continue;
+                }
+                if (c == '-' && c1 == '>')
+                {
+                    if (pos + 2 < span.Length && span[pos + 2] == '?')
+                    {
+                        tokens.Add(new Token(TokenType.ArrowOptRight, pos, 3)); pos += 3; continue;
+                    }
+                    tokens.Add(new Token(TokenType.Arrow, pos, 2)); pos += 2; continue;
+                }
+
                 if (c == '>' && c1 == '=') { tokens.Add(new Token(TokenType.GreaterThanOrEqual, pos, 2)); pos += 2; continue; }
                 if (c == '<' && c1 == '=') { tokens.Add(new Token(TokenType.LessThanOrEqual, pos, 2)); pos += 2; continue; }
                 if (c == '!' && c1 == '=') { tokens.Add(new Token(TokenType.NotEqual, pos, 2)); pos += 2; continue; }
-                if (c == '-' && c1 == '>') { tokens.Add(new Token(TokenType.Arrow, pos, 2)); pos += 2; continue; }
             }
 
             // Single-character tokens

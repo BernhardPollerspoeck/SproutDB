@@ -282,6 +282,82 @@ public class FollowTests : IDisposable
         Assert.Equal("rush", (string?)r.Data[0]["tags.tag"]);
     }
 
+    // ── Join types (->?, ?->, ?->?) ─────────────────────────
+
+    [Fact]
+    public void Follow_LeftJoin_KeepsUnmatchedSource()
+    {
+        _engine.Execute("upsert users {name: 'Diana', email: 'diana@test.com', active: true}", "testdb");
+
+        var r = _engine.Execute(
+            "get users where name = 'Diana' or name = 'Alice' follow users._id ->? orders.user_id as orders",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+        // Alice: 2 orders = 2 rows, Diana: 0 orders = 1 row with null target
+        var dianaRows = r.Data.Where(row => (string?)row["name"] == "Diana").ToList();
+        Assert.Single(dianaRows);
+        Assert.Null(dianaRows[0]["orders._id"]);
+        Assert.Null(dianaRows[0]["orders.product"]);
+
+        var aliceRows = r.Data.Where(row => (string?)row["name"] == "Alice").ToList();
+        Assert.Equal(2, aliceRows.Count);
+    }
+
+    [Fact]
+    public void Follow_RightJoin_KeepsUnmatchedTarget()
+    {
+        // Add an order with user_id that doesn't exist
+        _engine.Execute("upsert orders {user_id: 999, product: 'Orphan', amount: 1.0, status: 'lost'}", "testdb");
+
+        var r = _engine.Execute(
+            "get users where name = 'Alice' follow users._id ?-> orders.user_id as orders",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+        // Alice matched orders + unmatched orders (user_id != Alice's id)
+        var orphanRows = r.Data.Where(row => (string?)row["orders.product"] == "Orphan").ToList();
+        Assert.Single(orphanRows);
+        Assert.Null(orphanRows[0]["name"]); // source is null for unmatched target
+    }
+
+    [Fact]
+    public void Follow_OuterJoin_KeepsBothUnmatched()
+    {
+        _engine.Execute("upsert users {name: 'Eve', email: 'eve@test.com', active: true}", "testdb");
+        _engine.Execute("upsert orders {user_id: 888, product: 'Ghost', amount: 0.0, status: 'phantom'}", "testdb");
+
+        var r = _engine.Execute(
+            "get users where name = 'Eve' or name = 'Alice' follow users._id ?->? orders.user_id as orders",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+
+        // Eve: no orders → 1 row with null target
+        var eveRows = r.Data.Where(row => (string?)row["name"] == "Eve").ToList();
+        Assert.Single(eveRows);
+        Assert.Null(eveRows[0]["orders._id"]);
+
+        // Ghost order: no matching user → 1 row with null source
+        var ghostRows = r.Data.Where(row => (string?)row["orders.product"] == "Ghost").ToList();
+        Assert.Single(ghostRows);
+        Assert.Null(ghostRows[0]["name"]);
+    }
+
+    [Fact]
+    public void Follow_LeftJoin_WithFollowWhere_UnmatchedKept()
+    {
+        var r = _engine.Execute(
+            "get users where name = 'Alice' follow users._id ->? orders.user_id as orders where status = 'cancelled'",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+        // Alice has orders but none cancelled → left join keeps Alice with nulls
+        Assert.Single(r.Data);
+        Assert.Equal("Alice", (string?)r.Data[0]["name"]);
+        Assert.Null(r.Data[0]["orders._id"]);
+    }
+
     // ── Error cases ─────────────────────────────────────────
 
     [Fact]

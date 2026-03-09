@@ -665,6 +665,19 @@ body {
 
 .results-table tbody tr:hover td { background: var(--bg-2); }
 
+.row-number-header,
+.row-number {
+    color: var(--text-3);
+    font-size: 11px;
+    text-align: right;
+    padding-right: 8px;
+    user-select: none;
+    width: 1%;
+    white-space: nowrap;
+    border-right: 1px solid var(--border);
+}
+.row-number-header { font-weight: normal; }
+
 .cell-id { color: var(--text-3); }
 .cell-string { color: var(--sprout); }
 .cell-number { color: var(--orange); }

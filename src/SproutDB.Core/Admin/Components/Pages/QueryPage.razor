@@ -212,6 +212,7 @@
             <table class="results-table">
                 <thead>
                     <tr>
+                        <th class="row-number-header">#</th>
                         @foreach (var col in Tab.Columns)
                         {
                             var isSorted = Tab.SortColumn is not null
@@ -230,10 +231,13 @@
                     </tr>
                 </thead>
                 <tbody>
+                    @{ var rowIndex = 0; }
                     @foreach (var row in data)
                     {
                         var rowId = GetRowId(row);
-                        <tr @key="rowId" class="@GetRowFlashClass(rowId)">
+                        var rowKey = rowIndex++;
+                        <tr @key="rowKey" class="@GetRowFlashClass(rowId)">
+                            <td class="row-number">@(rowKey + 1)</td>
                             @foreach (var col in Tab.Columns)
                             {
                                 row.TryGetValue(col.Name, out var cellValue);

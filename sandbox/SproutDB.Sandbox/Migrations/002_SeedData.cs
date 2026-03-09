@@ -227,6 +227,10 @@ public sealed class SeedData : IMigration
             (29, "2025-03-18", "shipped", 55),     // 40: Japanischer Ahorn
         };
 
+        // Orphan order (no matching customer) — for testing RIGHT/OUTER joins
+        db.Query("upsert orders { customer_id: '9999', order_date: '2025-03-20', status: 'orphan', total: 1 }");
+
+
         var orderIds = new string[orders.Length];
         for (var i = 0; i < orders.Length; i++)
         {

@@ -598,16 +598,28 @@ internal static class GetExecutor
             ? follow.SourceColumn
             : $"{follow.SourceTable}.{follow.SourceColumn}";
 
+        var joinType = follow.JoinType;
+        var matchedTargetKeys = joinType is JoinType.Right or JoinType.Outer
+            ? new HashSet<string>()
+            : null;
+
         foreach (var row in data)
         {
             // Get the source value to join on
             if (!row.TryGetValue(sourceKey, out var sourceValue) || sourceValue is null)
-                continue; // INNER JOIN: no source value → skip
+            {
+                // Left/Outer: keep source row with null target columns
+                if (joinType is JoinType.Left or JoinType.Outer)
+                    result.Add(BuildNullTargetRow(row, alias, targetColumns));
+                continue;
+            }
 
             // Look up matching target rows
             var key = sourceValue.ToString() ?? "";
             if (targetIndex.TryGetValue(key, out var places))
             {
+                matchedTargetKeys?.Add(key);
+
                 // Expand: one output row per matching child
                 foreach (var (id, place) in places)
                 {
@@ -618,10 +630,48 @@ internal static class GetExecutor
                     result.Add(flat);
                 }
             }
-            // INNER JOIN: no match → row dropped
+            else if (joinType is JoinType.Left or JoinType.Outer)
+            {
+                // Left/Outer: no match → keep source row with null target columns
+                result.Add(BuildNullTargetRow(row, alias, targetColumns));
+            }
+            // Inner/Right: no match → row dropped
+        }
+
+        // Right/Outer: add unmatched target rows with null source columns
+        if (matchedTargetKeys is not null)
+        {
+            var sourceColumns = data.Count > 0 ? data[0].Keys.ToList() : [];
+            foreach (var (targetKey, places) in targetIndex)
+            {
+                if (matchedTargetKeys.Contains(targetKey))
+                    continue;
+
+                foreach (var (id, place) in places)
+                {
+                    var flat = new Dictionary<string, object?>();
+                    foreach (var col in sourceColumns)
+                        flat[col] = null;
+                    flat[$"{alias}._id"] = id;
+                    foreach (var (name, hasAlias, handle) in targetColumns)
+                        flat[hasAlias ? name : $"{alias}.{name}"] = handle.ReadValue(place);
+                    result.Add(flat);
+                }
+            }
         }
 
         return result;
+    }
+
+    private static Dictionary<string, object?> BuildNullTargetRow(
+        Dictionary<string, object?> sourceRow, string alias,
+        List<(string Name, bool HasAlias, ColumnHandle Handle)> targetColumns)
+    {
+        var flat = new Dictionary<string, object?>(sourceRow);
+        flat[$"{alias}._id"] = null;
+        foreach (var (name, hasAlias, _) in targetColumns)
+            flat[hasAlias ? name : $"{alias}.{name}"] = null;
+        return flat;
     }
 
     private static Dictionary<string, List<(ulong Id, long Place)>> BuildTargetIndex(

@@ -435,6 +435,44 @@ public class GetParserTests
         Assert.True(result.Success, string.Join("; ", result.Errors?.Select(e => e.Message) ?? []));
     }
 
+    // ── Follow join types ────────────────────────────────────
+
+    [Fact]
+    public void Follow_InnerJoin_Default()
+    {
+        var result = QueryParser.Parse("get users follow users._id -> orders.user_id as orders");
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.Equal(JoinType.Inner, q.Follow![0].JoinType);
+    }
+
+    [Fact]
+    public void Follow_LeftJoin_ArrowOptRight()
+    {
+        var result = QueryParser.Parse("get users follow users._id ->? orders.user_id as orders");
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.Equal(JoinType.Left, q.Follow![0].JoinType);
+    }
+
+    [Fact]
+    public void Follow_RightJoin_ArrowOptLeft()
+    {
+        var result = QueryParser.Parse("get users follow users._id ?-> orders.user_id as orders");
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.Equal(JoinType.Right, q.Follow![0].JoinType);
+    }
+
+    [Fact]
+    public void Follow_OuterJoin_ArrowOptBoth()
+    {
+        var result = QueryParser.Parse("get users follow users._id ?->? orders.user_id as orders");
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.Equal(JoinType.Outer, q.Follow![0].JoinType);
+    }
+
     // ── Follow select ────────────────────────────────────────
 
     [Fact]

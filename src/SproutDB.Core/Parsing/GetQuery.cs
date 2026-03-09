@@ -140,6 +140,14 @@ internal sealed class ComputedColumn
     public required string Alias { get; init; }
 }
 
+internal enum JoinType : byte
+{
+    Inner,  // ->
+    Left,   // ->?
+    Right,  // ?->
+    Outer,  // ?->?
+}
+
 internal sealed class FollowClause
 {
     /// <summary>Source table name (e.g. "users").</summary>
@@ -162,6 +170,9 @@ internal sealed class FollowClause
 
     public int TargetColumnPosition { get; init; }
     public int TargetColumnLength { get; init; }
+
+    /// <summary>Join type: Inner (->), Left (->?), Right (?->), Outer (?->?).</summary>
+    public JoinType JoinType { get; init; }
 
     /// <summary>Alias for the nested result array (e.g. "orders").</summary>
     public required string Alias { get; init; }

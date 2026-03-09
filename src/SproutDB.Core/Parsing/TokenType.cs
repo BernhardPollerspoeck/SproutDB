@@ -32,5 +32,8 @@ internal enum TokenType : byte
     GreaterThanOrEqual,
     LessThanOrEqual,
     NotEqual,
-    Arrow,
+    Arrow,          // ->   (inner join)
+    ArrowOptRight,  // ->?  (left join)
+    ArrowOptLeft,   // ?->  (right join)
+    ArrowOptBoth,   // ?->? (outer join)
 }
