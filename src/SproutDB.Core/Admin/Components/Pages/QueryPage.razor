@@ -112,8 +112,24 @@
     {
         <!-- Results table -->
         <div class="results-tabs">
-            <button class="results-tab active">Results <span class="tab-count">@data.Count</span></button>
+            <button class="results-tab @(_activeTab == "results" ? "active" : "")" @onclick='() => _activeTab = "results"'>Results <span class="tab-count">@data.Count</span></button>
+            <button class="results-tab @(_activeTab == "json" ? "active" : "")" @onclick="SwitchToJson">JSON</button>
         </div>
+        @if (_activeTab == "json")
+        {
+            <div class="json-panel">
+                <div class="json-toolbar">
+                    @if (_jsonCopied)
+                    {
+                        <span class="json-copied">Copied</span>
+                    }
+                    <button class="btn btn-ghost" style="font-size: 11px; padding: 3px 10px;" @onclick="CopyJson">Copy</button>
+                </div>
+                <pre class="json-content">@_jsonDisplay</pre>
+            </div>
+        }
+        else
+        {
         <div class="results-table-wrap">
             <table class="results-table">
                 <thead>
@@ -182,6 +198,7 @@
                 </tbody>
             </table>
         </div>
+        }
     }
     else if (lastResponse is not null)
     {
@@ -242,6 +259,9 @@
 
     private SproutResponse? lastResponse;
     private double elapsedMs;
+    private string _activeTab = "results";
+    private MarkupString _jsonDisplay;
+    private bool _jsonCopied;
     private int rowCount;
     private int payloadBytes;
     private List<ColumnMeta> columns = new();
@@ -427,6 +447,9 @@
         rowCount = totalRows;
         payloadBytes = totalPayload;
         ExtractSort(lines[^1]);
+
+        if (_activeTab == "json" && _displayData is { Count: > 0 })
+            _jsonDisplay = HighlightJson(BuildJsonString());
 
         // Flash the stats bar to signal execution
         _statsFlash = true;
@@ -743,6 +766,102 @@
         }
 
         return new { tables, columns };
+    }
+
+    // --- JSON tab ---
+
+    private string BuildJsonString()
+    {
+        if (_displayData is null or { Count: 0 })
+            return "[]";
+
+        return System.Text.Json.JsonSerializer.Serialize(_displayData, new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = true,
+        });
+    }
+
+    private void SwitchToJson()
+    {
+        _activeTab = "json";
+        _jsonDisplay = HighlightJson(BuildJsonString());
+    }
+
+    private static MarkupString HighlightJson(string json)
+    {
+        var sb = new System.Text.StringBuilder(json.Length * 2);
+        var i = 0;
+        while (i < json.Length)
+        {
+            var ch = json[i];
+
+            if (ch == '"')
+            {
+                // Find end of string
+                var end = i + 1;
+                while (end < json.Length && json[end] != '"')
+                {
+                    if (json[end] == '\\') end++; // skip escaped char
+                    end++;
+                }
+                if (end < json.Length) end++; // include closing quote
+                var str = System.Net.WebUtility.HtmlEncode(json.Substring(i, end - i));
+
+                // Check if this is a key (followed by ':')
+                var afterStr = end;
+                while (afterStr < json.Length && json[afterStr] == ' ') afterStr++;
+                if (afterStr < json.Length && json[afterStr] == ':')
+                    sb.Append($"<span class=\"json-key\">{str}</span>");
+                else
+                    sb.Append($"<span class=\"json-string\">{str}</span>");
+                i = end;
+                continue;
+            }
+            else if (char.IsDigit(ch) || (ch == '-' && i + 1 < json.Length && char.IsDigit(json[i + 1])))
+            {
+                var end = i + 1;
+                while (end < json.Length && (char.IsDigit(json[end]) || json[end] == '.' || json[end] == 'E' || json[end] == 'e'))
+                    end++;
+                sb.Append($"<span class=\"json-number\">{json.Substring(i, end - i)}</span>");
+                i = end;
+                continue;
+            }
+            else if (i + 4 <= json.Length && json.AsSpan(i, 4).SequenceEqual("true"))
+            {
+                sb.Append("<span class=\"json-bool\">true</span>");
+                i += 4;
+                continue;
+            }
+            else if (i + 5 <= json.Length && json.AsSpan(i, 5).SequenceEqual("false"))
+            {
+                sb.Append("<span class=\"json-bool\">false</span>");
+                i += 5;
+                continue;
+            }
+            else if (i + 4 <= json.Length && json.AsSpan(i, 4).SequenceEqual("null"))
+            {
+                sb.Append("<span class=\"json-null\">null</span>");
+                i += 4;
+                continue;
+            }
+            else
+            {
+                sb.Append(ch);
+            }
+            i++;
+        }
+        return new MarkupString(sb.ToString());
+    }
+
+    private async Task CopyJson()
+    {
+        var json = BuildJsonString();
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", json);
+        _jsonCopied = true;
+        StateHasChanged();
+        await Task.Delay(1500);
+        _jsonCopied = false;
+        StateHasChanged();
     }
 
     // --- Column fix suggestions ---
