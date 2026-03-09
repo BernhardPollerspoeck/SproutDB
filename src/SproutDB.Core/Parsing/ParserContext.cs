@@ -64,7 +64,7 @@ internal sealed class ParserContext
     /// <summary>
     /// Gets the text of a string literal token, stripping the surrounding quotes.
     /// </summary>
-    public string GetStringLiteralText(Token token) => _input.Substring(token.Start + 1, token.Length - 2);
+    public string GetStringLiteralText(Token token) => _input.Substring(token.Start + 1, token.Length - 2).Replace("\\'", "'");
 
     public string GetLowercaseText(Token token)
     {

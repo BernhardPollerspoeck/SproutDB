@@ -378,7 +378,7 @@
     private void LoadTables()
     {
         var response = Engine.Execute("describe", selectedDatabase);
-        tables = response.Schema?.Tables ?? [];
+        tables = response.Schema?.Tables?.Where(t => !t.StartsWith("_")).ToList() ?? [];
     }
 
     private void ToggleTable(string table)

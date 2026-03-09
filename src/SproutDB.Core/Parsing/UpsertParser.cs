@@ -194,7 +194,7 @@ internal static class UpsertParser
             return new UpsertValue
             {
                 Kind = UpsertValueKind.String,
-                Raw = ctx.Input.Substring(token.Start + 1, token.Length - 2),
+                Raw = ctx.Input.Substring(token.Start + 1, token.Length - 2).Replace("\\'", "'"),
             };
         }
 

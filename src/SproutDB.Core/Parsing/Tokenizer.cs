@@ -37,13 +37,22 @@ internal static class Tokenizer
                 continue;
             }
 
-            // String literal: 'text'
+            // String literal: 'text' with \' escape support
             if (c == '\'')
             {
                 var start = pos;
                 pos++;
-                while (pos < span.Length && span[pos] != '\'')
+                while (pos < span.Length)
+                {
+                    if (span[pos] == '\\' && pos + 1 < span.Length && span[pos + 1] == '\'')
+                    {
+                        pos += 2; // skip escaped quote
+                        continue;
+                    }
+                    if (span[pos] == '\'')
+                        break;
                     pos++;
+                }
                 if (pos < span.Length)
                     pos++; // closing quote
                 // Token spans full literal including quotes

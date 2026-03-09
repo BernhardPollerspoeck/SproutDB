@@ -534,8 +534,8 @@ internal static class GetParser
         {
             case TokenType.StringLiteral:
                 ctx.Advance();
-                // Strip quotes
-                return ctx.Input.Substring(token.Start + 1, token.Length - 2);
+                // Strip quotes and unescape \'
+                return ctx.Input.Substring(token.Start + 1, token.Length - 2).Replace("\\'", "'");
 
             case TokenType.IntegerLiteral:
                 ctx.Advance();

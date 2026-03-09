@@ -2,36 +2,10 @@
 
 Aufwand: `░` = 1 Punkt, 10 = max
 
-## Query Page
-
-### Result Tabs
-- [ ] #T01 `███░░░░░░░` 3 **JSON-Tab** — Raw JSON Response anzeigen (kopierfähig, Syntax Highlighted). PRD 3.3.2
-- [x] #T02 ~~**Schema-Tab**~~ — Nicht nötig, Schema Page existiert bereits.
-
-### Paging
-- [ ] #T03 `█████░░░░░` 5 **Paging-Bar** — "Showing 1–100 of 12,847 rows · Page 1 of 129", Prev/Next Buttons. PRD 3.4
-- [ ] #T04 `██░░░░░░░░` 2 **Next-Query** — Vollständige Query für nächste Seite in Read-Only-Feld mit Copy-Button. PRD 3.4
-- [ ] #T05 `██░░░░░░░░` 2 **Auto-Paging Info** — Badge zeigt aktuelles Paging (`100 rows`), reagiert auf tatsächliche Response-Paging-Daten
-
-### Error UX
-- [ ] #T06 `███░░░░░░░` 3 **Available Columns bei Errors** — Bei UNKNOWN_COLUMN die verfügbaren Spalten als Badges anzeigen. PRD 3.5
-
-### Editor
-- [ ] #T07 `██████░░░░` 6 **Format-Button** — Query formatieren (aktuell Placeholder, tut nichts). PRD 3.1
-- [x] #T08 `█░░░░░░░░░` 1 **Alt+L** — Editor fokussieren. PRD 8
-
-### Tabellen-UX
-- [ ] #T09 `██░░░░░░░░` 2 **Sort-Indikator** — Dreiecke in Spaltenheadern bei sortierter Query (order by). PRD 3.3.1
-
 ## Monitoring Page
 
 - [ ] #T10 `████░░░░░░` 4 **Auto-Index Status** — Aktive Indizes mit auto/manual Badge, Selectivity/Usage aus index_metrics. PRD 5.3
 - [ ] #T11 `█████░░░░░` 5 **Auto-Index Suggestions** — Spalten die Schwellenwerte fast erreichen, mit Progress-Bar. PRD 5.3
-
-## Nice-to-have (spätere Phase)
-
-- [ ] #T12 `████░░░░░░` 4 CSV/Excel Export der Query-Ergebnisse. PRD 14
-- [ ] #T13 `███████░░░` 7 Gespeicherte Queries / Custom Dashboard. PRD 14
 
 ---
 

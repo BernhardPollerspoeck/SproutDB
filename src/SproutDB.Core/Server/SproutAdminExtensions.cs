@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using SproutDB.Core.Admin;
 using SproutDB.Core.Admin.Components;
 
 namespace SproutDB.Core.Server;
@@ -35,6 +36,7 @@ public static class SproutAdminExtensions
     {
         services.AddRazorComponents()
             .AddInteractiveServerComponents();
+        services.AddSingleton<QueryWorkspaceState>();
         return services;
     }
 

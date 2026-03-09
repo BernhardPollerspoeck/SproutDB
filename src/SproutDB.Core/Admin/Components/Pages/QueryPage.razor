@@ -3,6 +3,25 @@
 @using SproutDB.Core.Parsing
 @implements IDisposable
 
+<!-- Query Tabs -->
+<div class="query-tabs">
+    @for (var idx = 0; idx < Workspace.Tabs.Count; idx++)
+    {
+        var i = idx;
+        var tab = Workspace.Tabs[i];
+        var isActive = i == Workspace.ActiveTabIndex;
+        <button class="query-tab @(isActive ? "active" : "")" @onclick="() => SwitchTab(i)">
+            @if (tab.HasChanges)
+            {
+                <span class="query-tab-dot">●</span>
+            }
+            @tab.Title
+            <span class="query-tab-close" @onclick="() => CloseTab(i)" @onclick:stopPropagation="true">×</span>
+        </button>
+    }
+    <button class="query-tab-add" @onclick="AddTab" title="New tab">+</button>
+</div>
+
 <!-- Query Editor -->
 <div class="query-section">
     <div class="query-toolbar">
@@ -14,8 +33,47 @@
             }
         </select>
         <div class="query-toolbar-sep"></div>
+        <div class="saved-queries-wrap">
+            <button class="btn btn-ghost @(_showSaved ? "btn-ghost-active" : "")" style="font-size: 11px; padding: 3px 8px;" @onclick="ToggleSaved">Saved</button>
+            @if (_showSaved)
+            {
+                <div class="saved-queries-dropdown">
+                    @if (_savedQueries is { Count: > 0 })
+                    {
+                        var pinned = _savedQueries.Where(q => q.Pinned).ToList();
+                        var unpinned = _savedQueries.Where(q => !q.Pinned).ToList();
+                        @foreach (var sq in pinned)
+                        {
+                            var captured = sq;
+                            <div class="saved-query-item" @onclick="() => LoadSavedQuery(captured)">
+                                <span class="saved-query-pin pinned" @onclick="() => TogglePin(captured)" @onclick:stopPropagation="true">📌</span>
+                                <span class="saved-query-name">@sq.Name</span>
+                                <button class="saved-query-delete" @onclick="() => DeleteSavedQuery(captured)" @onclick:stopPropagation="true">×</button>
+                            </div>
+                        }
+                        @if (pinned.Count > 0 && unpinned.Count > 0)
+                        {
+                            <div class="saved-query-sep"></div>
+                        }
+                        @foreach (var sq in unpinned)
+                        {
+                            var captured = sq;
+                            <div class="saved-query-item" @onclick="() => LoadSavedQuery(captured)">
+                                <span class="saved-query-pin" @onclick="() => TogglePin(captured)" @onclick:stopPropagation="true">📌</span>
+                                <span class="saved-query-name">@sq.Name</span>
+                                <button class="saved-query-delete" @onclick="() => DeleteSavedQuery(captured)" @onclick:stopPropagation="true">×</button>
+                            </div>
+                        }
+                    }
+                    else
+                    {
+                        <div class="saved-query-empty">No saved queries</div>
+                    }
+                </div>
+            }
+        </div>
         <button class="btn btn-ghost @(_showHistory ? "btn-ghost-active" : "")" style="font-size: 11px; padding: 3px 8px;" @onclick="ToggleHistory">History</button>
-        @if (lastResponse?.Paging is { } paging)
+        @if (Tab.LastResponse?.Paging is { } paging)
         {
             <span class="auto-paged-badge">&#9889; Page @paging.Page · @paging.PageSize rows of @paging.Total.ToString("N0")</span>
         }
@@ -57,17 +115,30 @@
     <div class="query-actions">
         <button class="btn btn-primary" @onclick="RunQuery">&#9654; Run</button>
         <button class="btn btn-ghost" @onclick="FormatQuery">Format</button>
+        @if (_showSaveDialog)
+        {
+            <div class="save-dialog">
+                <input type="text" placeholder="Query name..." @bind="_saveName" @bind:event="oninput"
+                       @onkeyup="HandleSaveKeyUp" />
+                <button class="btn btn-primary" style="font-size: 11px; padding: 3px 10px;" @onclick="SaveQuery" disabled="@(string.IsNullOrWhiteSpace(_saveName))">Save</button>
+                <button class="btn btn-ghost" style="font-size: 11px; padding: 3px 8px;" @onclick="() => _showSaveDialog = false">Cancel</button>
+            </div>
+        }
+        else
+        {
+            <button class="btn btn-ghost" @onclick="ShowSaveDialog">💾 Save</button>
+        }
         @if (_runError is not null)
         {
             <span style="color: var(--red); font-size: 12px; font-weight: 500;">@_runError</span>
         }
-        else if (lastResponse is not null)
+        else if (Tab.LastResponse is not null)
         {
             <div class="query-stats @(_statsFlash ? "stats-flash" : "")">
                 <span class="stat-ok">&#10003;</span>
-                <span><span class="stat-value">@FormatElapsed(elapsedMs)</span> <span class="stat-label">time</span></span>
-                <span><span class="stat-value">@rowCount</span> <span class="stat-label">rows</span></span>
-                <span><span class="stat-value">@FormatBytes(payloadBytes)</span> <span class="stat-label">size</span></span>
+                <span><span class="stat-value">@FormatElapsed(Tab.ElapsedMs)</span> <span class="stat-label">time</span></span>
+                <span><span class="stat-value">@Tab.RowCount</span> <span class="stat-label">rows</span></span>
+                <span><span class="stat-value">@FormatBytes(Tab.PayloadBytes)</span> <span class="stat-label">size</span></span>
             </div>
         }
     </div>
@@ -75,12 +146,12 @@
 
 <!-- Results / Error -->
 <div class="results-section">
-    @if (lastResponse is not null && lastResponse.Operation == SproutOperation.Error)
+    @if (Tab.LastResponse is not null && Tab.LastResponse.Operation == SproutOperation.Error)
     {
         <!-- Error display -->
         <div class="error-panel">
             <div class="error-panel-header">Query Error</div>
-            @if (lastResponse.Errors is { Count: > 0 } errors)
+            @if (Tab.LastResponse.Errors is { Count: > 0 } errors)
             {
                 @foreach (var err in errors)
                 {
@@ -106,23 +177,23 @@
                     }
                 }
             }
-            @if (!string.IsNullOrEmpty(lastResponse.AnnotatedQuery))
+            @if (!string.IsNullOrEmpty(Tab.LastResponse.AnnotatedQuery))
             {
-                <pre class="error-annotated">@lastResponse.AnnotatedQuery</pre>
+                <pre class="error-annotated">@Tab.LastResponse.AnnotatedQuery</pre>
             }
         </div>
     }
-    else if (_displayData is { Count: > 0 } data)
+    else if (Tab.DisplayData is { Count: > 0 } data)
     {
         <!-- Results table -->
         <div class="results-tabs">
-            <button class="results-tab @(_activeTab == "results" ? "active" : "")" @onclick='() => _activeTab = "results"'>Results <span class="tab-count">@data.Count</span></button>
-            <button class="results-tab @(_activeTab == "json" ? "active" : "")" @onclick="SwitchToJson">JSON</button>
+            <button class="results-tab @(Tab.ActiveResultTab == "results" ? "active" : "")" @onclick='() => Tab.ActiveResultTab = "results"'>Results <span class="tab-count">@data.Count</span></button>
+            <button class="results-tab @(Tab.ActiveResultTab == "json" ? "active" : "")" @onclick="SwitchToJson">JSON</button>
             <div style="flex:1"></div>
             <button class="btn btn-ghost" style="font-size: 11px; padding: 3px 10px;" @onclick="ExportCsv">CSV</button>
             <button class="btn btn-ghost" style="font-size: 11px; padding: 3px 10px;" @onclick="ExportJson">JSON</button>
         </div>
-        @if (_activeTab == "json")
+        @if (Tab.ActiveResultTab == "json")
         {
             <div class="json-panel">
                 <div class="json-toolbar">
@@ -141,16 +212,16 @@
             <table class="results-table">
                 <thead>
                     <tr>
-                        @foreach (var col in columns)
+                        @foreach (var col in Tab.Columns)
                         {
-                            var isSorted = _sortColumn is not null
-                                && string.Equals(col.Name, _sortColumn, StringComparison.OrdinalIgnoreCase);
+                            var isSorted = Tab.SortColumn is not null
+                                && string.Equals(col.Name, Tab.SortColumn, StringComparison.OrdinalIgnoreCase);
                             <th>
                                 <div class="th-content">
                                     @col.Name
                                     @if (isSorted)
                                     {
-                                        <span class="th-sort">@(_sortDesc ? "\u25BC" : "\u25B2")</span>
+                                        <span class="th-sort">@(Tab.SortDesc ? "\u25BC" : "\u25B2")</span>
                                     }
                                     <span class="th-type">@col.Type</span>
                                 </div>
@@ -163,7 +234,7 @@
                     {
                         var rowId = GetRowId(row);
                         <tr @key="rowId" class="@GetRowFlashClass(rowId)">
-                            @foreach (var col in columns)
+                            @foreach (var col in Tab.Columns)
                             {
                                 row.TryGetValue(col.Name, out var cellValue);
                                 @if (_editingRowId is not null && _editingRowId == rowId && _editingColumn == col.Name)
@@ -184,7 +255,7 @@
                                 }
                                 else
                                 {
-                                    @if (_canEdit && col.Name != "_id" && _hasIdColumn)
+                                    @if (Tab.CanEdit && col.Name != "_id" && Tab.HasIdColumn)
                                     {
                                         <td class="@GetCellClass(col, cellValue) cell-editable"
                                             @ondblclick="() => StartEdit(rowId, col.Name, cellValue)">
@@ -206,7 +277,7 @@
             </table>
         </div>
         }
-        @if (lastResponse?.Paging is { } pg)
+        @if (Tab.LastResponse?.Paging is { } pg)
         {
             var start = (pg.Page - 1) * pg.PageSize + 1;
             var end = Math.Min(pg.Page * pg.PageSize, pg.Total);
@@ -228,7 +299,7 @@
             }
         }
     }
-    else if (lastResponse is not null)
+    else if (Tab.LastResponse is not null)
     {
         <!-- Non-data response (e.g. upsert, delete, describe) -->
         <div class="results-tabs">
@@ -237,7 +308,7 @@
         <div class="results-table-wrap">
             <div style="padding: 16px;">
                 <div class="admin-status success" style="font-size: 14px; padding: 12px 16px;">
-                    <span style="font-weight: 600;">@lastResponse.Operation</span> completed — @lastResponse.Affected row(s) affected
+                    <span style="font-weight: 600;">@Tab.LastResponse.Operation</span> completed — @Tab.LastResponse.Affected row(s) affected
                 </div>
             </div>
         </div>
@@ -264,6 +335,9 @@
     [Inject]
     private IJSRuntime JS { get; set; } = default!;
 
+    [Inject]
+    private QueryWorkspaceState Workspace { get; set; } = default!;
+
     [SupplyParameterFromQuery(Name = "db")]
     private string? DbParam { get; set; }
 
@@ -271,28 +345,26 @@
     private string? QParam { get; set; }
 
     private IReadOnlyList<ISproutDatabase> databases => Engine.GetDatabases();
-    private string selectedDatabase = string.Empty;
-    private string _QueryText = string.Empty;
+    private QueryTab Tab => Workspace.ActiveTab;
+
+    // Convenience accessors that bridge Tab state to local binding
+    private string selectedDatabase
+    {
+        get => Tab.Database;
+        set => Tab.Database = value;
+    }
+
     private MarkupString _highlightedQuery;
 
     private string QueryText
     {
-        get => _QueryText;
+        get => Tab.QueryText;
         set
         {
-            _QueryText = value;
+            Tab.QueryText = value;
             _highlightedQuery = SyntaxHighlighter.Highlight(value);
         }
     }
-
-    private SproutResponse? lastResponse;
-    private double elapsedMs;
-    private string _activeTab = "results";
-    private MarkupString _jsonDisplay;
-    private bool _jsonCopied;
-    private int rowCount;
-    private int payloadBytes;
-    private List<ColumnMeta> columns = new();
 
     private bool autoExecuted;
     private bool _statsFlash;
@@ -302,13 +374,10 @@
     private IDisposable? _tableSubscription;
     private string? _subscribedDb;
     private string? _subscribedTable;
-    private List<Dictionary<string, object?>>? _displayData;
     private readonly HashSet<ulong> _flashGreenIds = new();
     private readonly HashSet<ulong> _flashRedIds = new();
     private System.Threading.Timer? _flashTimer;
     private List<Dictionary<string, object?>>? _pendingData;
-    private bool _canEdit;
-    private bool _hasIdColumn;
 
     // Editor overlay
     private ElementReference _editorWrapRef;
@@ -341,12 +410,29 @@
     private string _editValue = string.Empty;
     private string? _editError;
 
+    // Saved queries
+    private bool _showSaved;
+    private bool _showSaveDialog;
+    private string _saveName = string.Empty;
+    private List<SavedQueryEntry>? _savedQueries;
+
+    // JSON display
+    private MarkupString _jsonDisplay;
+    private bool _jsonCopied;
+
     protected override void OnInitialized()
     {
-        if (databases.Count == 1)
+        // If first tab has no database set and there's only one, auto-select
+        if (string.IsNullOrEmpty(Tab.Database) && databases.Count == 1)
         {
-            selectedDatabase = databases[0].Name;
+            Tab.Database = databases[0].Name;
         }
+
+        // Sync highlight with current tab text
+        _highlightedQuery = SyntaxHighlighter.Highlight(Tab.QueryText);
+
+        // Load saved queries for initial database
+        LoadSavedQueries();
     }
 
     protected override void OnParametersSet()
@@ -389,6 +475,56 @@
         }
     }
 
+    // --- Tabs ---
+
+    private void SwitchTab(int index)
+    {
+        if (index == Workspace.ActiveTabIndex) return;
+
+        // Clean up live subscription for current tab
+        _tableSubscription?.Dispose();
+        _tableSubscription = null;
+        _subscribedDb = null;
+        _subscribedTable = null;
+        CancelEdit();
+
+        Workspace.ActiveTabIndex = index;
+
+        // Sync local state with new tab
+        _highlightedQuery = SyntaxHighlighter.Highlight(Tab.QueryText);
+        _ = PushSchemaAsync();
+
+        // Re-establish live subscription if the tab had results
+        SetupLiveSubscription();
+    }
+
+    private void AddTab()
+    {
+        Workspace.AddTab(title: Workspace.NextTitle());
+        _highlightedQuery = SyntaxHighlighter.Highlight(Tab.QueryText);
+
+        // Auto-select database if only one
+        if (string.IsNullOrEmpty(Tab.Database) && databases.Count == 1)
+            Tab.Database = databases[0].Name;
+
+        _ = PushSchemaAsync();
+    }
+
+    private void CloseTab(int index)
+    {
+        if (index == Workspace.ActiveTabIndex)
+        {
+            _tableSubscription?.Dispose();
+            _tableSubscription = null;
+            _subscribedDb = null;
+            _subscribedTable = null;
+        }
+
+        Workspace.CloseTab(index);
+        _highlightedQuery = SyntaxHighlighter.Highlight(Tab.QueryText);
+        _ = PushSchemaAsync();
+    }
+
     private void HandleKeyDown(KeyboardEventArgs e)
     {
         if (e is { CtrlKey: true, Key: "Enter" })
@@ -423,63 +559,30 @@
         CancelEdit();
 
         // Normalize: collapse formatted line breaks into a single query line
-        var lines = new List<string> { CollapseQuery(QueryText) };
-
-        if (lines.Count == 0)
+        var query = CollapseQuery(QueryText);
+        if (query.Length == 0)
             return;
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-
-        SproutResponse? lastDataResponse = null;
-        string? lastDataQuery = null;
-        lastResponse = null;
-        int totalRows = 0;
-        int totalPayload = 0;
-
-        foreach (var line in lines)
-        {
-            var response = Engine.Execute(line, selectedDatabase);
-            lastResponse = response;
-
-            if (response.Operation != SproutOperation.Error)
-            {
-                RecordHistory(line, selectedDatabase, response.Operation.ToString().ToUpperInvariant());
-            }
-
-            if (response.Operation == SproutOperation.Error)
-                break;
-
-            totalRows += response.Data?.Count ?? response.Affected;
-            totalPayload += EstimatePayload(response);
-
-            if (response.Data is { Count: > 0 })
-            {
-                lastDataResponse = response;
-                lastDataQuery = line;
-            }
-        }
-
+        var response = Engine.Execute(query, selectedDatabase);
         sw.Stop();
 
-        // Show the last data-returning result, or the very last result
-        if (lastDataResponse is not null)
+        if (response.Operation != SproutOperation.Error)
         {
-            lastResponse = lastDataResponse;
-            RebuildColumns(lastDataResponse, lastDataQuery ?? lines[^1]);
-            _displayData = lastDataResponse.Data;
-        }
-        else if (lastResponse is not null)
-        {
-            RebuildColumns(lastResponse, lines[^1]);
-            _displayData = lastResponse.Data;
+            RecordHistory(query, selectedDatabase, response.Operation.ToString().ToUpperInvariant());
         }
 
-        elapsedMs = sw.Elapsed.TotalMilliseconds;
-        rowCount = totalRows;
-        payloadBytes = totalPayload;
-        ExtractSort(lines[^1]);
+        Tab.LastResponse = response;
+        Tab.ElapsedMs = sw.Elapsed.TotalMilliseconds;
+        Tab.RowCount = response.Data?.Count ?? response.Affected;
+        Tab.PayloadBytes = EstimatePayload(response);
 
-        if (_activeTab == "json" && _displayData is { Count: > 0 })
+        RebuildColumns(response, query);
+        Tab.DisplayData = response.Data;
+
+        ExtractSort(query);
+
+        if (Tab.ActiveResultTab == "json" && Tab.DisplayData is { Count: > 0 })
             _jsonDisplay = HighlightJson(BuildJsonString());
 
         // Flash the stats bar to signal execution
@@ -497,8 +600,8 @@
 
     private void RebuildColumns(SproutResponse response, string query)
     {
-        columns.Clear();
-        _hasIdColumn = false;
+        Tab.Columns.Clear();
+        Tab.HasIdColumn = false;
 
         if (response.Data is not { Count: > 0 } data)
             return;
@@ -522,7 +625,7 @@
 
         foreach (var key in firstRow.Keys)
         {
-            if (key == "_id") _hasIdColumn = true;
+            if (key == "_id") Tab.HasIdColumn = true;
 
             var type = "unknown";
             if (schemaMap is not null && schemaMap.TryGetValue(key, out var colInfo))
@@ -543,7 +646,7 @@
                     _ => val.GetType().Name.ToLowerInvariant()
                 };
             }
-            columns.Add(new ColumnMeta { Name = key, Type = type });
+            Tab.Columns.Add(new ColumnMeta { Name = key, Type = type });
         }
     }
 
@@ -554,11 +657,11 @@
         _tableSubscription = null;
         _subscribedDb = null;
         _subscribedTable = null;
-        _canEdit = false;
+        Tab.CanEdit = false;
         _flashGreenIds.Clear();
         _flashRedIds.Clear();
 
-        if (lastResponse?.Operation != SproutOperation.Get || lastResponse.Data is not { Count: > 0 })
+        if (Tab.LastResponse?.Operation != SproutOperation.Get || Tab.DisplayData is not { Count: > 0 })
             return;
 
         var tableName = ExtractTableName(QueryText);
@@ -567,26 +670,26 @@
 
         _subscribedDb = selectedDatabase;
         _subscribedTable = tableName;
-        _canEdit = _hasIdColumn;
+        Tab.CanEdit = Tab.HasIdColumn;
 
         _tableSubscription = Engine.ChangeNotifier.Subscribe(selectedDatabase, tableName, OnTableChanged);
     }
 
     private void OnTableChanged(SproutResponse _)
     {
-        // Skip live updates while inline editing is active
-        if (_editingRowId is not null)
+        if (Tab.LastResponse is null)
             return;
 
         if (_subscribedDb is null || _subscribedTable is null)
             return;
 
         // Re-run the query to get fresh data
-        var freshResponse = Engine.Execute(QueryText.Trim(), _subscribedDb);
+        var query = CollapseQuery(QueryText);
+        var freshResponse = Engine.Execute(query, _subscribedDb);
         if (freshResponse.Operation == SproutOperation.Error || freshResponse.Data is null)
             return;
 
-        var oldIds = CollectIds(_displayData);
+        var oldIds = CollectIds(Tab.DisplayData);
         var newIds = CollectIds(freshResponse.Data);
 
         // New rows: in new but not in old
@@ -615,8 +718,8 @@
         }
         else
         {
-            _displayData = freshResponse.Data;
-            rowCount = freshResponse.Data.Count;
+            Tab.DisplayData = freshResponse.Data;
+            Tab.RowCount = freshResponse.Data.Count;
         }
 
         // Clear flash after 1.5 seconds
@@ -634,8 +737,8 @@
         // Swap to pending data if we were showing deleted rows
         if (_pendingData is not null)
         {
-            _displayData = _pendingData;
-            rowCount = _pendingData.Count;
+            Tab.DisplayData = _pendingData;
+            Tab.RowCount = _pendingData.Count;
             _pendingData = null;
         }
 
@@ -721,11 +824,12 @@
         CancelEdit();
 
         // Refresh data
-        var freshResponse = Engine.Execute(QueryText.Trim(), selectedDatabase);
+        var collapsed = CollapseQuery(QueryText);
+        var freshResponse = Engine.Execute(collapsed, selectedDatabase);
         if (freshResponse.Data is not null)
         {
-            _displayData = freshResponse.Data;
-            rowCount = freshResponse.Data.Count;
+            Tab.DisplayData = freshResponse.Data;
+            Tab.RowCount = freshResponse.Data.Count;
         }
     }
 
@@ -752,6 +856,8 @@
         {
             await PushSchemaAsync();
         }
+        // Refresh saved queries for new database
+        LoadSavedQueries();
     }
 
     // --- Autocomplete ---
@@ -759,7 +865,7 @@
     [JSInvokable]
     public void OnAutoCompleteInput(string value)
     {
-        _QueryText = value;
+        Tab.QueryText = value;
         _highlightedQuery = SyntaxHighlighter.Highlight(value);
         StateHasChanged();
     }
@@ -803,13 +909,13 @@
 
     private void GoToNextPage()
     {
-        if (lastResponse?.Paging?.Next is { } nextQuery)
+        if (Tab.LastResponse?.Paging?.Next is { } nextQuery)
             RunNextPage(nextQuery);
     }
 
     private void GoToPrevPage()
     {
-        if (lastResponse?.Paging is not { } pg || pg.Page <= 1)
+        if (Tab.LastResponse?.Paging is not { } pg || pg.Page <= 1)
             return;
 
         var prevPage = pg.Page - 1;
@@ -833,14 +939,172 @@
         await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
     }
 
+    // --- Saved Queries ---
+
+    private void ToggleSaved()
+    {
+        _showSaved = !_showSaved;
+        if (_showSaved)
+            LoadSavedQueries();
+    }
+
+    private void LoadSavedQueries()
+    {
+        _savedQueries = null;
+
+        if (string.IsNullOrEmpty(selectedDatabase))
+            return;
+
+        try
+        {
+            var response = Engine.ExecuteInternal("get _saved_queries", selectedDatabase);
+            if (response.Operation == SproutOperation.Error || response.Data is null)
+            {
+                // Table might not exist yet — that's fine
+                _savedQueries = [];
+                return;
+            }
+
+            var list = new List<SavedQueryEntry>();
+            foreach (var row in response.Data)
+            {
+                row.TryGetValue("name", out var nameVal);
+                row.TryGetValue("query", out var queryVal);
+                row.TryGetValue("pinned", out var pinnedVal);
+
+                var name = nameVal?.ToString();
+                var query = queryVal?.ToString();
+                if (name is null || query is null) continue;
+
+                list.Add(new SavedQueryEntry
+                {
+                    Name = name,
+                    Query = query,
+                    Pinned = pinnedVal is true,
+                });
+            }
+
+            // Sort: pinned first, then alphabetical
+            list.Sort((a, b) =>
+            {
+                if (a.Pinned != b.Pinned) return a.Pinned ? -1 : 1;
+                return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+            });
+
+            _savedQueries = list;
+        }
+        catch
+        {
+            _savedQueries = [];
+        }
+    }
+
+    private void EnsureSavedQueriesTable()
+    {
+        if (string.IsNullOrEmpty(selectedDatabase)) return;
+
+        // Try to create if not exists — ignore error if it already exists
+        var response = Engine.ExecuteInternal("describe _saved_queries", selectedDatabase);
+        if (response.Operation == SproutOperation.Error)
+        {
+            Engine.ExecuteInternal("create table _saved_queries (name string 200, query string 4000, pinned bool)", selectedDatabase);
+        }
+    }
+
+    private void ShowSaveDialog()
+    {
+        _saveName = Tab.SavedName ?? "";
+        _showSaveDialog = true;
+    }
+
+    private void HandleSaveKeyUp(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_saveName))
+            SaveQuery();
+        else if (e.Key == "Escape")
+            _showSaveDialog = false;
+    }
+
+    private void SaveQuery()
+    {
+        if (string.IsNullOrWhiteSpace(_saveName) || string.IsNullOrWhiteSpace(selectedDatabase))
+            return;
+
+        EnsureSavedQueriesTable();
+
+        var collapsed = CollapseQuery(QueryText);
+        var escapedName = _saveName.Replace("'", "\\'");
+        var escapedQuery = collapsed.Replace("'", "\\'");
+
+        Engine.ExecuteInternal(
+            $"upsert _saved_queries {{ name: '{escapedName}', query: '{escapedQuery}', pinned: false }} on name",
+            selectedDatabase);
+
+        Tab.SavedName = _saveName;
+        Tab.Title = _saveName;
+        Tab.OriginalText = Tab.QueryText;
+
+        _showSaveDialog = false;
+        LoadSavedQueries();
+    }
+
+    private void LoadSavedQuery(SavedQueryEntry entry)
+    {
+        _showSaved = false;
+
+        var formatted = SproutQueryFormatter.Format(entry.Query);
+
+        // If current tab is empty, load into it. Otherwise open new tab.
+        if (string.IsNullOrWhiteSpace(Tab.QueryText))
+        {
+            Tab.Title = entry.Name;
+            Tab.SavedName = entry.Name;
+            Tab.OriginalText = formatted;
+            QueryText = formatted;
+        }
+        else
+        {
+            Workspace.AddTab(
+                title: entry.Name,
+                query: formatted,
+                database: selectedDatabase,
+                savedName: entry.Name);
+            Tab.OriginalText = formatted;
+            _highlightedQuery = SyntaxHighlighter.Highlight(Tab.QueryText);
+        }
+
+        SetupLiveSubscription();
+    }
+
+    private void DeleteSavedQuery(SavedQueryEntry entry)
+    {
+        if (string.IsNullOrEmpty(selectedDatabase)) return;
+
+        var escapedName = entry.Name.Replace("'", "\\'");
+        Engine.ExecuteInternal($"delete _saved_queries where name = '{escapedName}'", selectedDatabase);
+        LoadSavedQueries();
+    }
+
+    private void TogglePin(SavedQueryEntry entry)
+    {
+        if (string.IsNullOrEmpty(selectedDatabase)) return;
+
+        var newPinned = !entry.Pinned;
+        var escapedName = entry.Name.Replace("'", "\\'");
+        Engine.ExecuteInternal(
+            $"upsert _saved_queries {{ name: '{escapedName}', pinned: {(newPinned ? "true" : "false")} }} on name",
+            selectedDatabase);
+        LoadSavedQueries();
+    }
+
     // --- JSON tab ---
 
     private string BuildJsonString()
     {
-        if (_displayData is null or { Count: 0 })
+        if (Tab.DisplayData is null or { Count: 0 })
             return "[]";
 
-        return System.Text.Json.JsonSerializer.Serialize(_displayData, new System.Text.Json.JsonSerializerOptions
+        return System.Text.Json.JsonSerializer.Serialize(Tab.DisplayData, new System.Text.Json.JsonSerializerOptions
         {
             WriteIndented = true,
         });
@@ -848,7 +1112,7 @@
 
     private void SwitchToJson()
     {
-        _activeTab = "json";
+        Tab.ActiveResultTab = "json";
         _jsonDisplay = HighlightJson(BuildJsonString());
     }
 
@@ -933,20 +1197,20 @@
 
     private async Task ExportCsv()
     {
-        if (_displayData is not { Count: > 0 } || columns is not { Count: > 0 })
+        if (Tab.DisplayData is not { Count: > 0 } || Tab.Columns is not { Count: > 0 })
             return;
 
         var sb = new System.Text.StringBuilder();
 
         // Header
-        sb.AppendJoin(',', columns.Select(c => EscapeCsvField(c.Name)));
+        sb.AppendJoin(',', Tab.Columns.Select(c => EscapeCsvField(c.Name)));
         sb.AppendLine();
 
         // Rows
-        foreach (var row in _displayData)
+        foreach (var row in Tab.DisplayData)
         {
             var first = true;
-            foreach (var col in columns)
+            foreach (var col in Tab.Columns)
             {
                 if (!first) sb.Append(',');
                 first = false;
@@ -961,7 +1225,7 @@
 
     private async Task ExportJson()
     {
-        if (_displayData is not { Count: > 0 })
+        if (Tab.DisplayData is not { Count: > 0 })
             return;
 
         await DownloadFile("export.json", BuildJsonString(), "application/json");
@@ -994,7 +1258,8 @@
             return [];
 
         // Extract table name from query (second token, e.g. "get users ...")
-        var tokens = QueryText.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var collapsed = CollapseQuery(QueryText);
+        var tokens = collapsed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         if (tokens.Length < 2)
             return [];
 
@@ -1178,13 +1443,10 @@
     }
 
     // Sort indicator
-    private string? _sortColumn;
-    private bool _sortDesc;
-
     private void ExtractSort(string query)
     {
-        _sortColumn = null;
-        _sortDesc = false;
+        Tab.SortColumn = null;
+        Tab.SortDesc = false;
 
         var tokens = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         for (int i = 0; i < tokens.Length - 1; i++)
@@ -1193,18 +1455,18 @@
                 && i + 1 < tokens.Length && tokens[i + 1].Equals("by", StringComparison.OrdinalIgnoreCase)
                 && i + 2 < tokens.Length)
             {
-                _sortColumn = tokens[i + 2];
+                Tab.SortColumn = tokens[i + 2];
                 if (i + 3 < tokens.Length && tokens[i + 3].Equals("desc", StringComparison.OrdinalIgnoreCase))
-                    _sortDesc = true;
+                    Tab.SortDesc = true;
                 return;
             }
             // SproutDB also supports "order col [desc]" without "by"
             if (tokens[i].Equals("order", StringComparison.OrdinalIgnoreCase)
                 && !tokens[i + 1].Equals("by", StringComparison.OrdinalIgnoreCase))
             {
-                _sortColumn = tokens[i + 1];
+                Tab.SortColumn = tokens[i + 1];
                 if (i + 2 < tokens.Length && tokens[i + 2].Equals("desc", StringComparison.OrdinalIgnoreCase))
-                    _sortDesc = true;
+                    Tab.SortDesc = true;
                 return;
             }
         }
@@ -1233,17 +1495,18 @@
         return sb.ToString();
     }
 
-    private sealed class ColumnMeta
-    {
-        public string Name { get; set; } = string.Empty;
-        public string Type { get; set; } = string.Empty;
-    }
-
     private sealed class HistoryItem
     {
         public string Query { get; set; } = string.Empty;
         public string Database { get; set; } = string.Empty;
         public string Operation { get; set; } = string.Empty;
         public DateTime Timestamp { get; set; }
+    }
+
+    private sealed class SavedQueryEntry
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Query { get; set; } = string.Empty;
+        public bool Pinned { get; set; }
     }
 }
