@@ -98,6 +98,68 @@ public class GetParserTests
         Assert.Equal("name", q.Select![0].Name);
     }
 
+    // ── Column alias (select ... as) ──────────────────────────
+
+    [Fact]
+    public void SelectAs_SingleColumn_ParsedCorrectly()
+    {
+        var result = QueryParser.Parse("get users select name as username");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.NotNull(q.Select);
+        Assert.Single(q.Select);
+        Assert.Equal("name", q.Select[0].Name);
+        Assert.Equal("username", q.Select[0].Alias);
+        Assert.Equal("username", q.Select[0].OutputName);
+    }
+
+    [Fact]
+    public void SelectAs_MultipleColumns_MixedAlias()
+    {
+        var result = QueryParser.Parse("get users select name as username, email, age as user_age");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.NotNull(q.Select);
+        Assert.Equal(3, q.Select.Count);
+        Assert.Equal("username", q.Select[0].Alias);
+        Assert.Null(q.Select[1].Alias);
+        Assert.Equal("email", q.Select[1].OutputName);
+        Assert.Equal("user_age", q.Select[2].Alias);
+    }
+
+    [Fact]
+    public void SelectAs_NoAlias_AliasIsNull()
+    {
+        var result = QueryParser.Parse("get users select name");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.Null(q.Select![0].Alias);
+        Assert.Equal("name", q.Select[0].OutputName);
+    }
+
+    [Fact]
+    public void SelectAs_WithWhere_ParsedCorrectly()
+    {
+        var result = QueryParser.Parse("get users select name as username where age > 25");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<GetQuery>(result.Query);
+        Assert.Equal("username", q.Select![0].Alias);
+        Assert.NotNull(q.Where);
+    }
+
+    [Fact]
+    public void SelectAs_MissingAliasName_Error()
+    {
+        var result = QueryParser.Parse("get users select name as");
+
+        Assert.False(result.Success);
+        Assert.Contains("expected alias name", result.Errors![0].Message);
+    }
+
     // ── Exclude select (-select) ──────────────────────────────
 
     [Fact]

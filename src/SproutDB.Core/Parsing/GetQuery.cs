@@ -97,11 +97,15 @@ internal enum AggregateFunction
     Max,
 }
 
-internal readonly struct SelectColumn(string name, int position, int length)
+internal readonly struct SelectColumn(string name, int position, int length, string? alias = null)
 {
     public string Name { get; } = name;
     public int Position { get; } = position;
     public int Length { get; } = length;
+    public string? Alias { get; } = alias;
+
+    /// <summary>Returns the alias if set, otherwise the original column name.</summary>
+    public string OutputName => Alias ?? Name;
 }
 
 internal readonly struct OrderByColumn(string name, int position, int length, bool descending)

@@ -572,20 +572,20 @@ internal static class GetExecutor
         var targetIndex = BuildTargetIndex(targetTable, follow.TargetColumn, targetFilter);
 
         // Resolve target columns for projection (apply follow select if present)
-        var targetColumns = new List<(string Name, ColumnHandle Handle)>();
+        var targetColumns = new List<(string Name, bool HasAlias, ColumnHandle Handle)>();
         if (follow.Select is not null)
         {
             foreach (var sel in follow.Select)
             {
                 if (sel.Name == "_id") continue; // _id is always included separately
                 if (targetTable.HasColumn(sel.Name))
-                    targetColumns.Add((sel.Name, targetTable.GetColumn(sel.Name)));
+                    targetColumns.Add((sel.OutputName, sel.Alias is not null, targetTable.GetColumn(sel.Name)));
             }
         }
         else
         {
             foreach (var col in targetTable.Schema.Columns)
-                targetColumns.Add((col.Name, targetTable.GetColumn(col.Name)));
+                targetColumns.Add((col.Name, false, targetTable.GetColumn(col.Name)));
         }
 
         var alias = follow.Alias;
@@ -613,8 +613,8 @@ internal static class GetExecutor
                 {
                     var flat = new Dictionary<string, object?>(row);
                     flat[$"{alias}._id"] = id;
-                    foreach (var (name, handle) in targetColumns)
-                        flat[$"{alias}.{name}"] = handle.ReadValue(place);
+                    foreach (var (name, hasAlias, handle) in targetColumns)
+                        flat[hasAlias ? name : $"{alias}.{name}"] = handle.ReadValue(place);
                     result.Add(flat);
                 }
             }
@@ -832,9 +832,9 @@ internal static class GetExecutor
             foreach (var col in selectColumns)
             {
                 if (col.Name == "_id")
-                    result.Add(new ProjectionEntry("_id", null));
+                    result.Add(new ProjectionEntry(col.OutputName, null));
                 else
-                    result.Add(new ProjectionEntry(col.Name, table.GetColumn(col.Name)));
+                    result.Add(new ProjectionEntry(col.OutputName, table.GetColumn(col.Name)));
             }
             return result;
         }

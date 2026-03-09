@@ -167,14 +167,22 @@ public class InProcessChangeTests : IDisposable
 
         _engine.Execute("create database", "newdb");
 
-        WaitForDispatch();
+        WaitForDispatch(() => received.Count > 0);
 
         Assert.Single(received);
         Assert.Equal(SproutOperation.CreateDatabase, received[0].Operation);
     }
 
-    private static void WaitForDispatch()
+    private static void WaitForDispatch(Func<bool>? condition = null, int timeoutMs = 2000)
     {
-        Thread.Sleep(100);
+        if (condition is null)
+        {
+            Thread.Sleep(100);
+            return;
+        }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (!condition() && sw.ElapsedMilliseconds < timeoutMs)
+            Thread.Sleep(10);
     }
 }

@@ -609,8 +609,23 @@ internal static class GetParser
             }
             else
             {
-                columns.Add(new SelectColumn(colName, token.Start, token.Length));
                 ctx.Advance();
+
+                // Check for optional alias: column as alias
+                string? alias = null;
+                if (ctx.MatchKeyword("as"))
+                {
+                    var aliasToken = ctx.Peek();
+                    if (aliasToken.Type != TokenType.Identifier)
+                    {
+                        ctx.AddError(aliasToken, ErrorCodes.SYNTAX_ERROR, "expected alias name after 'as'");
+                        return (columns, computed);
+                    }
+                    alias = ctx.GetLowercaseText(aliasToken);
+                    ctx.Advance();
+                }
+
+                columns.Add(new SelectColumn(colName, token.Start, token.Length, alias));
             }
 
             if (ctx.Peek().Type == TokenType.Comma)
@@ -911,8 +926,23 @@ internal static class GetParser
             if (text is "where" or "follow")
                 break;
 
-            columns.Add(new SelectColumn(text, token.Start, token.Length));
             ctx.Advance();
+
+            // Check for optional alias: column as alias
+            string? alias = null;
+            if (ctx.MatchKeyword("as"))
+            {
+                var aliasToken = ctx.Peek();
+                if (aliasToken.Type != TokenType.Identifier)
+                {
+                    ctx.AddError(aliasToken, ErrorCodes.SYNTAX_ERROR, "expected alias name after 'as'");
+                    return columns;
+                }
+                alias = ctx.GetLowercaseText(aliasToken);
+                ctx.Advance();
+            }
+
+            columns.Add(new SelectColumn(text, token.Start, token.Length, alias));
 
             // Consume optional comma
             if (ctx.Peek().Type == TokenType.Comma)
