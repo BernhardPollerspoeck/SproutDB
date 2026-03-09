@@ -45,7 +45,7 @@ public class FollowTests : IDisposable
             Directory.Delete(_tempDir, true);
     }
 
-    // ── Basic follow (#072) ─────────────────────────────────
+    // ── Basic follow — flat INNER JOIN ────────────────────────
 
     [Fact]
     public void Follow_Basic_JoinById()
@@ -56,26 +56,28 @@ public class FollowTests : IDisposable
 
         Assert.Equal(SproutOperation.Get, r.Operation);
         Assert.NotNull(r.Data);
-        Assert.Equal(3, r.Data.Count);
 
-        // Alice (id=1) has 2 orders
-        var alice = r.Data.First(row => (string?)row["name"] == "Alice");
-        var aliceOrders = (IList<Dictionary<string, object?>>)alice["orders"]!;
-        Assert.Equal(2, aliceOrders.Count);
+        // Alice has 2 orders, Bob has 1, Charlie has 1 → 4 flat rows
+        Assert.Equal(4, r.Data.Count);
 
-        // Bob (id=2) has 1 order
-        var bob = r.Data.First(row => (string?)row["name"] == "Bob");
-        var bobOrders = (IList<Dictionary<string, object?>>)bob["orders"]!;
-        Assert.Single(bobOrders);
+        // Alice rows
+        var aliceRows = r.Data.Where(row => (string?)row["name"] == "Alice").ToList();
+        Assert.Equal(2, aliceRows.Count);
+        Assert.Contains(aliceRows, row => (string?)row["orders.product"] == "Widget");
+        Assert.Contains(aliceRows, row => (string?)row["orders.product"] == "Gadget");
 
-        // Charlie (id=3) has 1 order
-        var charlie = r.Data.First(row => (string?)row["name"] == "Charlie");
-        var charlieOrders = (IList<Dictionary<string, object?>>)charlie["orders"]!;
-        Assert.Single(charlieOrders);
+        // Bob rows
+        var bobRows = r.Data.Where(row => (string?)row["name"] == "Bob").ToList();
+        Assert.Single(bobRows);
+        Assert.Equal("Doohickey", (string?)bobRows[0]["orders.product"]);
+
+        // Charlie rows
+        var charlieRows = r.Data.Where(row => (string?)row["name"] == "Charlie").ToList();
+        Assert.Single(charlieRows);
     }
 
     [Fact]
-    public void Follow_NoMatchingRows_EmptyArray()
+    public void Follow_NoMatchingRows_Dropped()
     {
         // Add user with no orders
         _engine.Execute("upsert users {name: 'Diana', email: 'diana@test.com', active: true}", "testdb");
@@ -85,28 +87,32 @@ public class FollowTests : IDisposable
             "testdb");
 
         Assert.NotNull(r.Data);
-        Assert.Single(r.Data);
-        var diana = r.Data[0];
-        var orders = (IList<Dictionary<string, object?>>)diana["orders"]!;
-        Assert.Empty(orders);
+        // INNER JOIN: Diana has no orders → dropped entirely
+        Assert.Empty(r.Data);
     }
 
     [Fact]
-    public void Follow_NestedRowsContainAllColumns()
+    public void Follow_FlatRowsContainAllColumns()
     {
         var r = _engine.Execute(
             "get users where name = 'Bob' follow users._id -> orders.user_id as orders",
             "testdb");
 
-        var bob = r.Data![0];
-        var orders = (IList<Dictionary<string, object?>>)bob["orders"]!;
-        var order = orders[0];
+        Assert.NotNull(r.Data);
+        Assert.Single(r.Data);
+        var row = r.Data[0];
 
-        Assert.True(order.ContainsKey("_id"));
-        Assert.True(order.ContainsKey("user_id"));
-        Assert.True(order.ContainsKey("product"));
-        Assert.True(order.ContainsKey("amount"));
-        Assert.True(order.ContainsKey("status"));
+        // Parent columns
+        Assert.True(row.ContainsKey("_id"));
+        Assert.True(row.ContainsKey("name"));
+        Assert.True(row.ContainsKey("email"));
+
+        // Child columns (prefixed with alias)
+        Assert.True(row.ContainsKey("orders._id"));
+        Assert.True(row.ContainsKey("orders.user_id"));
+        Assert.True(row.ContainsKey("orders.product"));
+        Assert.True(row.ContainsKey("orders.amount"));
+        Assert.True(row.ContainsKey("orders.status"));
     }
 
     [Fact]
@@ -117,12 +123,12 @@ public class FollowTests : IDisposable
             "testdb");
 
         Assert.NotNull(r.Data);
-        // Only active users: Alice and Bob
-        Assert.Equal(2, r.Data.Count);
+        // Active users: Alice (2 orders) + Bob (1 order) = 3 flat rows
+        Assert.Equal(3, r.Data.Count);
         Assert.True(r.Data.All(row => (string?)row["name"] is "Alice" or "Bob"));
     }
 
-    // ── Filtered follow (#073) ──────────────────────────────
+    // ── Filtered follow ──────────────────────────────────────
 
     [Fact]
     public void Follow_WithFollowWhere()
@@ -133,11 +139,10 @@ public class FollowTests : IDisposable
 
         Assert.NotNull(r.Data);
 
-        // Alice: 2 orders, but only 1 completed
-        var alice = r.Data.First(row => (string?)row["name"] == "Alice");
-        var aliceOrders = (IList<Dictionary<string, object?>>)alice["orders"]!;
-        Assert.Single(aliceOrders);
-        Assert.Equal("completed", (string?)aliceOrders[0]["status"]);
+        // Alice: 1 completed, Bob: 1 completed, Charlie: 1 completed = 3 rows
+        var aliceRows = r.Data.Where(row => (string?)row["name"] == "Alice").ToList();
+        Assert.Single(aliceRows);
+        Assert.Equal("completed", (string?)aliceRows[0]["orders.status"]);
     }
 
     [Fact]
@@ -148,36 +153,33 @@ public class FollowTests : IDisposable
             "testdb");
 
         Assert.NotNull(r.Data);
-        Assert.Equal(2, r.Data.Count); // Alice and Bob
+        // Active users: Alice (1 completed) + Bob (1 completed) = 2 flat rows
+        Assert.Equal(2, r.Data.Count);
 
-        var alice = r.Data.First(row => (string?)row["name"] == "Alice");
-        var aliceOrders = (IList<Dictionary<string, object?>>)alice["orders"]!;
-        Assert.Single(aliceOrders); // Only completed
+        var aliceRow = r.Data.First(row => (string?)row["name"] == "Alice");
+        Assert.Equal("completed", (string?)aliceRow["orders.status"]);
 
-        var bob = r.Data.First(row => (string?)row["name"] == "Bob");
-        var bobOrders = (IList<Dictionary<string, object?>>)bob["orders"]!;
-        Assert.Single(bobOrders); // Bob's order is completed
+        var bobRow = r.Data.First(row => (string?)row["name"] == "Bob");
+        Assert.Equal("completed", (string?)bobRow["orders.status"]);
     }
 
     [Fact]
-    public void Follow_WhereFiltersAllTarget_EmptyArray()
+    public void Follow_WhereFiltersAllTarget_Dropped()
     {
         var r = _engine.Execute(
             "get users where name = 'Alice' follow users._id -> orders.user_id as orders where status = 'cancelled'",
             "testdb");
 
-        var alice = r.Data![0];
-        var orders = (IList<Dictionary<string, object?>>)alice["orders"]!;
-        Assert.Empty(orders);
+        Assert.NotNull(r.Data);
+        // INNER JOIN: no matching orders → Alice dropped
+        Assert.Empty(r.Data);
     }
 
-    // ── Multiple follows (#074) ─────────────────────────────
+    // ── Multiple follows ─────────────────────────────────────
 
     [Fact]
     public void Follow_Multiple_ChainedJoins()
     {
-        // Add product_id to orders referencing products by name
-        // We need a numeric link. Let's use a dedicated table for this test.
         _engine.Execute(
             "create table items (code uint, label string 50)",
             "testdb");
@@ -196,16 +198,14 @@ public class FollowTests : IDisposable
             "testdb");
 
         Assert.NotNull(r.Data);
-        Assert.Equal(2, r.Data.Count);
+        // Item 1 (Alpha, code=100): 2 shipments × user_orders for id=1 (Alice: 2 orders) = 4 rows
+        // Item 2 (Beta, code=200): 1 shipment × user_orders for id=2 (Bob: 1 order) = 1 row
+        // Total: 5 rows (cartesian product of both follows per parent)
+        var alphaRows = r.Data.Where(row => (string?)row["label"] == "Alpha").ToList();
+        Assert.Equal(4, alphaRows.Count); // 2 shipments × 2 user_orders
 
-        // Item 1 (code=100): 2 shipments
-        var item1 = r.Data.First(row => (string?)row["label"] == "Alpha");
-        var shipments = (IList<Dictionary<string, object?>>)item1["shipments"]!;
-        Assert.Equal(2, shipments.Count);
-
-        // Item 1 (id=1): user_orders where user_id=1
-        var userOrders = (IList<Dictionary<string, object?>>)item1["user_orders"]!;
-        Assert.Equal(2, userOrders.Count); // Alice has id=1 → 2 orders with user_id=1
+        var betaRows = r.Data.Where(row => (string?)row["label"] == "Beta").ToList();
+        Assert.Single(betaRows); // 1 shipment × 1 user_order
     }
 
     [Fact]
@@ -224,17 +224,62 @@ public class FollowTests : IDisposable
             "testdb");
 
         Assert.NotNull(r.Data);
+        // Alice: 1 completed order × 1 urgent tag = 1 flat row
         Assert.Single(r.Data);
-        var alice = r.Data[0];
+        var row = r.Data[0];
+        Assert.Equal("Alice", (string?)row["name"]);
+        Assert.Equal("completed", (string?)row["orders.status"]);
+        Assert.Equal("urgent", (string?)row["tags.tag"]);
+    }
 
-        // Only completed orders for Alice
-        var orders = (IList<Dictionary<string, object?>>)alice["orders"]!;
-        Assert.Single(orders);
+    // ── Chained follow (second follow joins on result of first) ──
 
-        // Only urgent tags where order_id = 1 (Alice's id)
-        var tags = (IList<Dictionary<string, object?>>)alice["tags"]!;
-        Assert.Single(tags);
-        Assert.Equal("urgent", (string?)tags[0]["tag"]);
+    [Fact]
+    public void Follow_Chained_SecondFollowUsesFirstResult()
+    {
+        // users -> orders -> tags (chained: second follow on orders._id)
+        _engine.Execute(
+            "create table tags (order_id ulong, tag string 50)",
+            "testdb");
+        _engine.Execute("upsert tags {order_id: 1, tag: 'urgent'}", "testdb");
+        _engine.Execute("upsert tags {order_id: 1, tag: 'fragile'}", "testdb");
+        _engine.Execute("upsert tags {order_id: 3, tag: 'priority'}", "testdb");
+
+        var r = _engine.Execute(
+            "get users where name = 'Alice' follow users._id -> orders.user_id as orders follow orders._id -> tags.order_id as tags",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+        // Alice has 2 orders (id=1: Widget, id=2: Gadget)
+        // Order 1 has 2 tags (urgent, fragile) → 2 rows
+        // Order 2 has 0 tags → INNER JOIN drops it
+        // Total: 2 rows
+        Assert.Equal(2, r.Data.Count);
+
+        Assert.Contains(r.Data, row => (string?)row["tags.tag"] == "urgent");
+        Assert.Contains(r.Data, row => (string?)row["tags.tag"] == "fragile");
+        Assert.True(r.Data.All(row => (string?)row["orders.product"] == "Widget"));
+    }
+
+    [Fact]
+    public void Follow_Chained_WithSelectWithoutId()
+    {
+        // The exact bug scenario: select without _id + chained follows
+        _engine.Execute(
+            "create table tags (order_id ulong, tag string 50)",
+            "testdb");
+        _engine.Execute("upsert tags {order_id: 1, tag: 'rush'}", "testdb");
+
+        var r = _engine.Execute(
+            "get users select name where name = 'Alice' follow users._id -> orders.user_id as orders follow orders._id -> tags.order_id as tags",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+        // Alice, 2 orders: order 1 has 1 tag → 1 row. Order 2 has 0 tags → dropped.
+        Assert.Single(r.Data);
+        Assert.False(r.Data[0].ContainsKey("_id")); // not in select
+        Assert.True(r.Data[0].ContainsKey("orders.product"));
+        Assert.Equal("rush", (string?)r.Data[0]["tags.tag"]);
     }
 
     // ── Error cases ─────────────────────────────────────────
@@ -297,10 +342,48 @@ public class FollowTests : IDisposable
             "testdb");
 
         Assert.NotNull(r.Data);
-        var alice = r.Data.First(row => (string?)row["name"] == "Alice");
-        // Should have name + orders (no email, no active, no id since select only name)
-        Assert.False(alice.ContainsKey("email"));
-        Assert.True(alice.ContainsKey("orders"));
+        var aliceRow = r.Data.First(row => (string?)row["name"] == "Alice");
+        // Should have name + orders columns (no email, no active)
+        Assert.False(aliceRow.ContainsKey("email"));
+        Assert.True(aliceRow.ContainsKey("orders.product"));
+    }
+
+    [Fact]
+    public void Follow_WithSelect_WithoutId_StillJoins()
+    {
+        // select without _id — follow uses _id as source, must still work
+        var r = _engine.Execute(
+            "get users select name, email follow users._id -> orders.user_id as orders",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+        // Alice has 2 orders, Bob 1, Charlie 1 = 4 flat rows
+        Assert.Equal(4, r.Data.Count);
+
+        var aliceRows = r.Data.Where(row => (string?)row["name"] == "Alice").ToList();
+        Assert.Equal(2, aliceRows.Count);
+
+        // _id should NOT be in the output (not in select)
+        Assert.False(aliceRows[0].ContainsKey("_id"));
+        // But orders columns should be there
+        Assert.True(aliceRows[0].ContainsKey("orders.product"));
+    }
+
+    [Fact]
+    public void Follow_WithSelect_FullComplexQuery()
+    {
+        // The exact pattern from the bug: select without _id + where + order by + follow
+        var r = _engine.Execute(
+            "get users select name, email where active = true order by name asc follow users._id -> orders.user_id as orders where status = 'completed'",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+        // Active users: Alice (1 completed) + Bob (1 completed) = 2 flat rows
+        Assert.Equal(2, r.Data.Count);
+        Assert.Equal("Alice", (string?)r.Data[0]["name"]);
+        Assert.Equal("Bob", (string?)r.Data[1]["name"]);
+        Assert.Equal("completed", (string?)r.Data[0]["orders.status"]);
+        Assert.False(r.Data[0].ContainsKey("_id")); // not in select
     }
 
     // ── With order by / limit ───────────────────────────────
@@ -313,10 +396,70 @@ public class FollowTests : IDisposable
             "testdb");
 
         Assert.NotNull(r.Data);
+        // Limit applies after flattening: 2 flat rows total
         Assert.Equal(2, r.Data.Count);
-        // First two alphabetically: Alice, Bob
-        Assert.Equal("Alice", (string?)r.Data[0]["name"]);
-        Assert.Equal("Bob", (string?)r.Data[1]["name"]);
-        Assert.True(r.Data[0].ContainsKey("orders"));
+        Assert.True(r.Data.All(row => row.ContainsKey("orders.product")));
+    }
+
+    // ── Follow select (column projection) ───────────────────
+
+    [Fact]
+    public void Follow_WithFollowSelect_ProjectsColumns()
+    {
+        var r = _engine.Execute(
+            "get users where name = 'Alice' follow users._id -> orders.user_id as orders select product, status",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+        Assert.Equal(2, r.Data.Count);
+        var row = r.Data[0];
+
+        // Selected columns should be present
+        Assert.True(row.ContainsKey("orders.product"));
+        Assert.True(row.ContainsKey("orders.status"));
+
+        // Non-selected columns should be absent (including _id)
+        Assert.False(row.ContainsKey("orders._id"));
+        Assert.False(row.ContainsKey("orders.amount"));
+        Assert.False(row.ContainsKey("orders.user_id"));
+    }
+
+    [Fact]
+    public void Follow_WithFollowSelect_AndWhere()
+    {
+        var r = _engine.Execute(
+            "get users where name = 'Alice' follow users._id -> orders.user_id as orders select product where status = 'completed'",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+        Assert.Single(r.Data);
+        var row = r.Data[0];
+        Assert.Equal("Widget", (string?)row["orders.product"]);
+        Assert.False(row.ContainsKey("orders.amount"));
+        Assert.False(row.ContainsKey("orders.status")); // not in follow select
+    }
+
+    [Fact]
+    public void Follow_WithFollowSelect_ChainedFollows()
+    {
+        _engine.Execute("create table tags (order_id ulong, tag string 50, priority sint)", "testdb");
+        _engine.Execute("upsert tags {order_id: 1, tag: 'urgent', priority: 1}", "testdb");
+
+        var r = _engine.Execute(
+            "get users where name = 'Alice' follow users._id -> orders.user_id as orders select product where status = 'completed' follow orders._id -> tags.order_id as tags select tag",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+        Assert.Single(r.Data);
+        var row = r.Data[0];
+
+        // First follow: only product
+        Assert.True(row.ContainsKey("orders.product"));
+        Assert.False(row.ContainsKey("orders.amount"));
+
+        // Second follow: only tag (no _id since not in select)
+        Assert.True(row.ContainsKey("tags.tag"));
+        Assert.False(row.ContainsKey("tags._id"));
+        Assert.False(row.ContainsKey("tags.priority"));
     }
 }

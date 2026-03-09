@@ -407,7 +407,7 @@ body {
 .query-editor-wrap {
     position: relative;
     background: var(--bg-2);
-    min-height: 150px;
+    min-height: 280px;
     max-height: 60vh;
     resize: vertical;
     overflow: hidden;
@@ -2228,4 +2228,51 @@ body {
 .key-add-row td {
     padding-top: 6px;
     border-bottom: none;
+}
+
+/* ─── Paging Bar ─── */
+.paging-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    background: var(--bg-1);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.paging-info {
+    font-size: 12px;
+    color: var(--text-2);
+    font-family: var(--font-mono);
+}
+
+.paging-buttons {
+    display: flex;
+    gap: 6px;
+}
+
+.paging-btn {
+    font-size: 11px;
+    padding: 3px 12px;
+}
+
+.paging-next-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px 10px;
+    background: var(--bg-1);
+}
+
+.paging-next-query {
+    flex: 1;
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 4px 8px;
+    outline: none;
 }

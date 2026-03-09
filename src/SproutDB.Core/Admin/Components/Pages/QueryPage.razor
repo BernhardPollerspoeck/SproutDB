@@ -1,5 +1,6 @@
 @page "/sproutdb/admin"
 @using SproutDB.Core.Admin
+@using SproutDB.Core.Parsing
 @implements IDisposable
 
 <!-- Query Editor -->
@@ -14,7 +15,10 @@
         </select>
         <div class="query-toolbar-sep"></div>
         <button class="btn btn-ghost @(_showHistory ? "btn-ghost-active" : "")" style="font-size: 11px; padding: 3px 8px;" @onclick="ToggleHistory">History</button>
-        <span class="auto-paged-badge">&#9889; auto-paged</span>
+        @if (lastResponse?.Paging is { } paging)
+        {
+            <span class="auto-paged-badge">&#9889; Page @paging.Page · @paging.PageSize rows of @paging.Total.ToString("N0")</span>
+        }
         <span class="query-hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd></span>
     </div>
     @if (_showHistory)
@@ -52,7 +56,7 @@
     </div>
     <div class="query-actions">
         <button class="btn btn-primary" @onclick="RunQuery">&#9654; Run</button>
-        <button class="btn btn-ghost">Format</button>
+        <button class="btn btn-ghost" @onclick="FormatQuery">Format</button>
         @if (_runError is not null)
         {
             <span style="color: var(--red); font-size: 12px; font-weight: 500;">@_runError</span>
@@ -201,6 +205,27 @@
                 </tbody>
             </table>
         </div>
+        }
+        @if (lastResponse?.Paging is { } pg)
+        {
+            var start = (pg.Page - 1) * pg.PageSize + 1;
+            var end = Math.Min(pg.Page * pg.PageSize, pg.Total);
+            var totalPages = (pg.Total + pg.PageSize - 1) / pg.PageSize;
+            <div class="paging-bar">
+                <span class="paging-info">Showing @start–@end of @pg.Total.ToString("N0") rows · Page @pg.Page of @totalPages</span>
+                <div class="paging-buttons">
+                    <button class="btn btn-ghost paging-btn" disabled="@(pg.Page <= 1)" @onclick="GoToPrevPage">Prev</button>
+                    <button class="btn btn-ghost paging-btn" disabled="@(pg.Next is null)" @onclick="GoToNextPage">Next</button>
+                </div>
+            </div>
+            @if (pg.Next is not null)
+            {
+                <div class="paging-next-row">
+                    <input type="text" class="paging-next-query" readonly value="@pg.Next" />
+                    <button class="btn btn-ghost" style="font-size: 11px; padding: 3px 10px; flex-shrink:0;" @onclick="() => CopyToClipboard(pg.Next)">Copy</button>
+                    <button class="btn btn-primary" style="font-size: 11px; padding: 3px 10px; flex-shrink:0;" @onclick="() => RunNextPage(pg.Next)">Run</button>
+                </div>
+            }
         }
     }
     else if (lastResponse is not null)
@@ -374,6 +399,12 @@
 
     private string? _runError;
 
+    private void FormatQuery()
+    {
+        if (!string.IsNullOrWhiteSpace(QueryText))
+            QueryText = SproutQueryFormatter.Format(QueryText);
+    }
+
     private void RunQuery()
     {
         _runError = null;
@@ -391,11 +422,8 @@
         // Clear editing state
         CancelEdit();
 
-        // Split into individual queries (one per line, skip empty/comment-only lines)
-        var lines = QueryText.Split('\n')
-            .Select(l => l.Trim())
-            .Where(l => l.Length > 0 && !l.StartsWith("##"))
-            .ToList();
+        // Normalize: collapse formatted line breaks into a single query line
+        var lines = new List<string> { CollapseQuery(QueryText) };
 
         if (lines.Count == 0)
             return;
@@ -769,6 +797,40 @@
         }
 
         return new { tables, columns };
+    }
+
+    // --- Paging ---
+
+    private void GoToNextPage()
+    {
+        if (lastResponse?.Paging?.Next is { } nextQuery)
+            RunNextPage(nextQuery);
+    }
+
+    private void GoToPrevPage()
+    {
+        if (lastResponse?.Paging is not { } pg || pg.Page <= 1)
+            return;
+
+        var prevPage = pg.Page - 1;
+        // Build prev query by replacing page number
+        var prevQuery = System.Text.RegularExpressions.Regex.Replace(
+            pg.Next ?? QueryText,
+            @"page\s+\d+",
+            $"page {prevPage}",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        RunNextPage(prevQuery);
+    }
+
+    private void RunNextPage(string query)
+    {
+        QueryText = SproutQueryFormatter.Format(query);
+        RunQuery();
+    }
+
+    private async Task CopyToClipboard(string text)
+    {
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
     }
 
     // --- JSON tab ---
@@ -1146,6 +1208,29 @@
                 return;
             }
         }
+    }
+
+    /// <summary>
+    /// Collapses a formatted (multi-line) query into a single line.
+    /// Line breaks are purely cosmetic — the editor always contains a single query.
+    /// </summary>
+    internal static string CollapseQuery(string text)
+    {
+        var parts = text.Split('\n');
+        var sb = new System.Text.StringBuilder();
+
+        foreach (var part in parts)
+        {
+            var trimmed = part.Trim();
+            if (trimmed.Length == 0 || trimmed.StartsWith("##"))
+                continue;
+
+            if (sb.Length > 0)
+                sb.Append(' ');
+            sb.Append(trimmed);
+        }
+
+        return sb.ToString();
     }
 
     private sealed class ColumnMeta

@@ -47,6 +47,7 @@ public class InProcessChangeTests : IDisposable
     {
         var db = _engine.SelectDatabase("testdb");
         _engine.Execute("upsert users {name: 'John', email: 'john@test.com'}", "testdb");
+        WaitForDispatch(); // let upsert event drain before subscribing
 
         var received = new List<SproutResponse>();
         db.OnChange("users", r => received.Add(r));

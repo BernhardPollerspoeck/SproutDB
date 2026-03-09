@@ -155,8 +155,10 @@ internal static class GetExecutor
         // Prepare where filter
         var filter = WhereEngine.PrepareFilter(table, q.Where);
 
-        // If computed fields reference columns not in select, include them temporarily
+        // If computed fields or follow source columns reference columns not in select, include them temporarily
         var extraColumns = ResolveExtraColumnsForComputed(q);
+        var followExtras = ResolveExtraColumnsForFollow(q);
+        extraColumns = MergeExtras(extraColumns, followExtras);
         var effectiveSelect = MergeSelectWithExtra(q.Select, extraColumns);
 
         // Try B-Tree shortcut for simple WHERE conditions
@@ -213,7 +215,7 @@ internal static class GetExecutor
             });
         }
 
-        // Follow (join): attach nested rows from target tables
+        // Follow (join): flat LEFT JOIN — each follow expands rows
         if (q.Follow is not null && tableResolver is not null)
         {
             foreach (var follow in q.Follow)
@@ -222,7 +224,29 @@ internal static class GetExecutor
                 if (targetTable is null) continue;
 
                 var targetFilter = WhereEngine.PrepareFilter(targetTable, follow.Where);
-                ExecuteFollow(data, follow, targetTable, targetFilter);
+                data = ExecuteFollow(data, follow, targetTable, targetFilter, q.Table);
+            }
+
+            // Remove extra columns that were only needed for follow join resolution
+            if (followExtras is not null)
+            {
+                foreach (var row in data)
+                {
+                    foreach (var extra in followExtras)
+                        row.Remove(extra.Name);
+                }
+            }
+
+            // Remove follow _id columns that were not explicitly selected
+            foreach (var follow in q.Follow)
+            {
+                if (follow.Select is null) continue;
+                var hasId = follow.Select.Exists(s => s.Name == "_id");
+                if (hasId) continue;
+
+                var key = $"{follow.Alias}._id";
+                foreach (var row in data)
+                    row.Remove(key);
             }
         }
 
@@ -302,13 +326,35 @@ internal static class GetExecutor
 
     private static string BuildNextPageQuery(string query, int nextPage, int pageSize)
     {
-        // If query already has 'page N size M', replace it
-        // Otherwise append it
+        // If query already has 'page N size M', replace it while preserving follow clauses after it.
+        // Query syntax order: ... page N size M follow ...
         var pageIdx = query.LastIndexOf(" page ", StringComparison.OrdinalIgnoreCase);
         if (pageIdx >= 0)
         {
-            return $"{query[..pageIdx]} page {nextPage} size {pageSize}";
+            var before = query[..pageIdx];
+
+            // Find the end of "page N size M" — skip past "page", number, "size", number
+            var afterPage = pageIdx + 6; // skip " page "
+            // Skip page number
+            while (afterPage < query.Length && (char.IsDigit(query[afterPage]) || query[afterPage] == ' '))
+                afterPage++;
+            // Now we might be at "size" or at follow/end
+            if (afterPage + 4 < query.Length && query[afterPage..].StartsWith("size", StringComparison.OrdinalIgnoreCase))
+            {
+                afterPage += 4; // skip "size"
+                // Skip spaces and size number
+                while (afterPage < query.Length && (char.IsDigit(query[afterPage]) || query[afterPage] == ' '))
+                    afterPage++;
+            }
+
+            var tail = afterPage < query.Length ? query[afterPage..] : "";
+            return $"{before} page {nextPage} size {pageSize}{(tail.Length > 0 ? " " : "")}{tail.TrimStart()}";
         }
+
+        // No existing page clause — insert before follow if present, otherwise append
+        var followIdx = query.IndexOf(" follow ", StringComparison.OrdinalIgnoreCase);
+        if (followIdx >= 0)
+            return $"{query[..followIdx]} page {nextPage} size {pageSize}{query[followIdx..]}";
 
         return $"{query} page {nextPage} size {pageSize}";
     }
@@ -515,51 +561,67 @@ internal static class GetExecutor
 
     // ── Follow (join) ─────────────────────────────────────────
 
-    private static void ExecuteFollow(
+    private static List<Dictionary<string, object?>> ExecuteFollow(
         List<Dictionary<string, object?>> data,
         FollowClause follow,
         TableHandle targetTable,
-        WhereEngine.FilterNode? targetFilter)
+        WhereEngine.FilterNode? targetFilter,
+        string baseTable)
     {
         // Build a lookup: for each row in the target table, group by the join column value
         var targetIndex = BuildTargetIndex(targetTable, follow.TargetColumn, targetFilter);
 
-        // Resolve all target columns for projection
-        var targetColumns = new List<(string Name, ColumnHandle Handle)>(targetTable.Schema.Columns.Count);
-        foreach (var col in targetTable.Schema.Columns)
-            targetColumns.Add((col.Name, targetTable.GetColumn(col.Name)));
+        // Resolve target columns for projection (apply follow select if present)
+        var targetColumns = new List<(string Name, ColumnHandle Handle)>();
+        if (follow.Select is not null)
+        {
+            foreach (var sel in follow.Select)
+            {
+                if (sel.Name == "_id") continue; // _id is always included separately
+                if (targetTable.HasColumn(sel.Name))
+                    targetColumns.Add((sel.Name, targetTable.GetColumn(sel.Name)));
+            }
+        }
+        else
+        {
+            foreach (var col in targetTable.Schema.Columns)
+                targetColumns.Add((col.Name, targetTable.GetColumn(col.Name)));
+        }
+
+        var alias = follow.Alias;
+        var result = new List<Dictionary<string, object?>>();
+
+        // Base table columns are stored directly ("_id", "name").
+        // Columns from previous follows are stored as "alias.column" ("orders._id").
+        // If SourceTable matches the base query table, use direct key. Otherwise aliased.
+        var sourceKey = follow.SourceTable == baseTable
+            ? follow.SourceColumn
+            : $"{follow.SourceTable}.{follow.SourceColumn}";
 
         foreach (var row in data)
         {
             // Get the source value to join on
-            if (!row.TryGetValue(follow.SourceColumn, out var sourceValue) || sourceValue is null)
-            {
-                row[follow.Alias] = Array.Empty<Dictionary<string, object?>>();
-                continue;
-            }
+            if (!row.TryGetValue(sourceKey, out var sourceValue) || sourceValue is null)
+                continue; // INNER JOIN: no source value → skip
 
             // Look up matching target rows
             var key = sourceValue.ToString() ?? "";
             if (targetIndex.TryGetValue(key, out var places))
             {
-                var nested = new List<Dictionary<string, object?>>(places.Count);
+                // Expand: one output row per matching child
                 foreach (var (id, place) in places)
                 {
-                    var record = new Dictionary<string, object?>(targetColumns.Count + 1)
-                    {
-                        ["_id"] = id
-                    };
+                    var flat = new Dictionary<string, object?>(row);
+                    flat[$"{alias}._id"] = id;
                     foreach (var (name, handle) in targetColumns)
-                        record[name] = handle.ReadValue(place);
-                    nested.Add(record);
+                        flat[$"{alias}.{name}"] = handle.ReadValue(place);
+                    result.Add(flat);
                 }
-                row[follow.Alias] = nested;
             }
-            else
-            {
-                row[follow.Alias] = Array.Empty<Dictionary<string, object?>>();
-            }
+            // INNER JOIN: no match → row dropped
         }
+
+        return result;
     }
 
     private static Dictionary<string, List<(ulong Id, long Place)>> BuildTargetIndex(
@@ -830,6 +892,44 @@ internal static class GetExecutor
         }
 
         return extras;
+    }
+
+    private static List<SelectColumn>? ResolveExtraColumnsForFollow(GetQuery q)
+    {
+        if (q.Follow is null || q.Select is null)
+            return null;
+
+        var selectedNames = new HashSet<string>(q.Select.Count);
+        foreach (var col in q.Select)
+            selectedNames.Add(col.Name);
+
+        List<SelectColumn>? extras = null;
+
+        foreach (var follow in q.Follow)
+        {
+            if (!selectedNames.Contains(follow.SourceColumn))
+            {
+                extras ??= [];
+                if (!extras.Exists(e => e.Name == follow.SourceColumn))
+                    extras.Add(new SelectColumn(follow.SourceColumn, 0, 0));
+            }
+        }
+
+        return extras;
+    }
+
+    private static List<SelectColumn>? MergeExtras(List<SelectColumn>? a, List<SelectColumn>? b)
+    {
+        if (a is null) return b;
+        if (b is null) return a;
+        var merged = new List<SelectColumn>(a.Count + b.Count);
+        merged.AddRange(a);
+        foreach (var item in b)
+        {
+            if (!merged.Exists(e => e.Name == item.Name))
+                merged.Add(item);
+        }
+        return merged;
     }
 
     private static List<SelectColumn>? MergeSelectWithExtra(List<SelectColumn>? select, List<SelectColumn>? extras)

@@ -162,6 +162,9 @@ internal sealed class FollowClause
     /// <summary>Alias for the nested result array (e.g. "orders").</summary>
     public required string Alias { get; init; }
 
+    /// <summary>Optional SELECT projection for the target table columns.</summary>
+    public List<SelectColumn>? Select { get; init; }
+
     /// <summary>Optional WHERE filter for the target table rows.</summary>
     public WhereNode? Where { get; init; }
 }

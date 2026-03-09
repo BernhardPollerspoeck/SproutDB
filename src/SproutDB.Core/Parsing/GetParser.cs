@@ -859,6 +859,15 @@ internal static class GetParser
         var alias = ctx.GetLowercaseText(aliasToken);
         ctx.Advance();
 
+        // Optional: select clause for this follow (before where)
+        List<SelectColumn>? followSelect = null;
+        if (ctx.Peek().Type != TokenType.Eof && ctx.IsKeyword(ctx.Peek(), "select"))
+        {
+            ctx.Advance(); // consume "select"
+            followSelect = ParseFollowSelectList(ctx);
+            if (ctx.HasErrors) return null;
+        }
+
         // Optional: where clause for this follow
         WhereNode? followWhere = null;
         if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("where"))
@@ -880,8 +889,37 @@ internal static class GetParser
             TargetColumnPosition = tgtColToken.Start,
             TargetColumnLength = tgtColToken.Length,
             Alias = alias,
+            Select = followSelect,
             Where = followWhere,
         };
+    }
+
+    /// <summary>
+    /// Parses the SELECT list for a follow clause. Stops before 'where', 'follow' or EOF.
+    /// </summary>
+    private static List<SelectColumn> ParseFollowSelectList(ParserContext ctx)
+    {
+        var columns = new List<SelectColumn>();
+        while (ctx.Peek().Type != TokenType.Eof)
+        {
+            var token = ctx.Peek();
+            if (token.Type != TokenType.Identifier)
+                break;
+
+            var text = ctx.GetLowercaseText(token);
+            // Stop at follow-terminating keywords
+            if (text is "where" or "follow")
+                break;
+
+            columns.Add(new SelectColumn(text, token.Start, token.Length));
+            ctx.Advance();
+
+            // Consume optional comma
+            if (ctx.Peek().Type == TokenType.Comma)
+                ctx.Advance();
+        }
+
+        return columns;
     }
 
     /// <summary>
@@ -993,6 +1031,10 @@ internal static class GetParser
             {
                 descending = true;
                 ctx.Advance();
+            }
+            else if (ctx.Peek().Type == TokenType.Identifier && ctx.IsKeyword(ctx.Peek(), "asc"))
+            {
+                ctx.Advance(); // asc is default, just consume it
             }
 
             columns.Add(new OrderByColumn(name, token.Start, token.Length, descending));
