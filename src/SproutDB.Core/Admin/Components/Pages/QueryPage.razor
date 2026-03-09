@@ -114,6 +114,9 @@
         <div class="results-tabs">
             <button class="results-tab @(_activeTab == "results" ? "active" : "")" @onclick='() => _activeTab = "results"'>Results <span class="tab-count">@data.Count</span></button>
             <button class="results-tab @(_activeTab == "json" ? "active" : "")" @onclick="SwitchToJson">JSON</button>
+            <div style="flex:1"></div>
+            <button class="btn btn-ghost" style="font-size: 11px; padding: 3px 10px;" @onclick="ExportCsv">CSV</button>
+            <button class="btn btn-ghost" style="font-size: 11px; padding: 3px 10px;" @onclick="ExportJson">JSON</button>
         </div>
         @if (_activeTab == "json")
         {
@@ -862,6 +865,63 @@
         await Task.Delay(1500);
         _jsonCopied = false;
         StateHasChanged();
+    }
+
+    // --- Export ---
+
+    private async Task ExportCsv()
+    {
+        if (_displayData is not { Count: > 0 } || columns is not { Count: > 0 })
+            return;
+
+        var sb = new System.Text.StringBuilder();
+
+        // Header
+        sb.AppendJoin(',', columns.Select(c => EscapeCsvField(c.Name)));
+        sb.AppendLine();
+
+        // Rows
+        foreach (var row in _displayData)
+        {
+            var first = true;
+            foreach (var col in columns)
+            {
+                if (!first) sb.Append(',');
+                first = false;
+                row.TryGetValue(col.Name, out var val);
+                sb.Append(EscapeCsvField(FormatCellValue(val)));
+            }
+            sb.AppendLine();
+        }
+
+        await DownloadFile("export.csv", sb.ToString(), "text/csv");
+    }
+
+    private async Task ExportJson()
+    {
+        if (_displayData is not { Count: > 0 })
+            return;
+
+        await DownloadFile("export.json", BuildJsonString(), "application/json");
+    }
+
+    private static string EscapeCsvField(string value)
+    {
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
+            return '"' + value.Replace("\"", "\"\"") + '"';
+        return value;
+    }
+
+    private static string FormatCellValue(object? val)
+    {
+        if (val is null) return "";
+        if (val is bool b) return b ? "true" : "false";
+        return val.ToString() ?? "";
+    }
+
+    private async Task DownloadFile(string filename, string content, string mimeType)
+    {
+        await JS.InvokeVoidAsync("sproutAdmin.downloadFile", filename, content, mimeType);
     }
 
     // --- Column fix suggestions ---

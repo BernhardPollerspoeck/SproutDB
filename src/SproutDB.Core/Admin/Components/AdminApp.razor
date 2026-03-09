@@ -51,6 +51,19 @@
                     });
                 },
 
+                // ── File download ──
+                downloadFile: function(filename, content, mimeType) {
+                    var blob = new Blob([content], { type: mimeType + ';charset=utf-8' });
+                    var url = URL.createObjectURL(blob);
+                    var a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                },
+
                 // ── Schema store ──
                 _schema: { tables: [], columns: {} },
                 updateSchema: function(schema) {
