@@ -705,15 +705,7 @@ internal static class GetExecutor
     private static IEnumerable<Dictionary<string, object?>> ReadRows(
         TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect, WhereEngine.FilterNode? filter)
     {
-        // Determine which columns to project
-        bool includeId;
-        if (excludeSelect)
-            includeId = selectColumns is null || !selectColumns.Exists(c => c.Name == "_id");
-        else
-            includeId = selectColumns is null || selectColumns.Exists(c => c.Name == "_id");
-
-        var columns = ResolveColumns(table, selectColumns, excludeSelect);
-
+        var projection = ResolveProjection(table, selectColumns, excludeSelect);
         var nextId = table.Index.ReadNextId();
 
         for (ulong id = 1; id < nextId; id++)
@@ -726,56 +718,78 @@ internal static class GetExecutor
             if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place))
                 continue;
 
-            var record = new Dictionary<string, object?>(columns.Count + 1);
-
-            if (includeId)
-                record["_id"] = id;
-
-            foreach (var (name, handle) in columns)
-                record[name] = handle.ReadValue(place);
-
-            yield return record;
+            yield return ProjectRow(projection, id, place);
         }
     }
 
-    private static List<(string Name, ColumnHandle Handle)> ResolveColumns(
+    /// <summary>
+    /// A projection entry: either _id (Handle is null) or a real column.
+    /// Preserves the order from the SELECT clause.
+    /// </summary>
+    private readonly record struct ProjectionEntry(string Name, ColumnHandle? Handle);
+
+    /// <summary>
+    /// Builds an ordered projection list that respects the SELECT column order.
+    /// _id is included at the position specified in SELECT (or first if no SELECT).
+    /// </summary>
+    private static List<ProjectionEntry> ResolveProjection(
         TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect)
     {
         if (selectColumns is null)
         {
-            // All columns
-            var all = new List<(string, ColumnHandle)>(table.Schema.Columns.Count);
+            // All columns: _id first, then table columns
+            var all = new List<ProjectionEntry>(table.Schema.Columns.Count + 1)
+            {
+                new("_id", null)
+            };
             foreach (var col in table.Schema.Columns)
-                all.Add((col.Name, table.GetColumn(col.Name)));
+                all.Add(new ProjectionEntry(col.Name, table.GetColumn(col.Name)));
             return all;
         }
 
         if (excludeSelect)
         {
-            // All columns EXCEPT the named ones
             var excluded = new HashSet<string>(selectColumns.Count);
             foreach (var col in selectColumns)
                 excluded.Add(col.Name);
 
-            var result = new List<(string, ColumnHandle)>(table.Schema.Columns.Count);
+            var result = new List<ProjectionEntry>(table.Schema.Columns.Count + 1);
+            if (!excluded.Contains("_id"))
+                result.Add(new ProjectionEntry("_id", null));
             foreach (var col in table.Schema.Columns)
             {
                 if (!excluded.Contains(col.Name))
-                    result.Add((col.Name, table.GetColumn(col.Name)));
+                    result.Add(new ProjectionEntry(col.Name, table.GetColumn(col.Name)));
             }
             return result;
         }
 
         {
-            // Only selected columns (excluding "_id" which is handled separately)
-            var result = new List<(string, ColumnHandle)>(selectColumns.Count);
+            // Preserve SELECT order — _id at the position where it appears in the list
+            var result = new List<ProjectionEntry>(selectColumns.Count);
             foreach (var col in selectColumns)
             {
-                if (col.Name == "_id") continue;
-                result.Add((col.Name, table.GetColumn(col.Name)));
+                if (col.Name == "_id")
+                    result.Add(new ProjectionEntry("_id", null));
+                else
+                    result.Add(new ProjectionEntry(col.Name, table.GetColumn(col.Name)));
             }
             return result;
         }
+    }
+
+    private static Dictionary<string, object?> ProjectRow(
+        List<ProjectionEntry> projection, ulong id, long place)
+    {
+        var record = new Dictionary<string, object?>(projection.Count);
+        foreach (var entry in projection)
+        {
+            if (entry.Handle is null)
+                record[entry.Name] = id;
+            else
+                record[entry.Name] = entry.Handle.ReadValue(place);
+        }
+        return record;
     }
 
     // ── Computed fields ────────────────────────────────────────
@@ -972,13 +986,7 @@ internal static class GetExecutor
         TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect,
         List<long> places, WhereEngine.FilterNode? filter)
     {
-        bool includeId;
-        if (excludeSelect)
-            includeId = selectColumns is null || !selectColumns.Exists(c => c.Name == "_id");
-        else
-            includeId = selectColumns is null || selectColumns.Exists(c => c.Name == "_id");
-
-        var columns = ResolveColumns(table, selectColumns, excludeSelect);
+        var projection = ResolveProjection(table, selectColumns, excludeSelect);
         var data = new List<Dictionary<string, object?>>(places.Count);
 
         foreach (var place in places)
@@ -991,15 +999,7 @@ internal static class GetExecutor
             if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place))
                 continue;
 
-            var record = new Dictionary<string, object?>(columns.Count + 1);
-
-            if (includeId)
-                record["_id"] = id;
-
-            foreach (var (name, handle) in columns)
-                record[name] = handle.ReadValue(place);
-
-            data.Add(record);
+            data.Add(ProjectRow(projection, id, place));
         }
 
         return data;

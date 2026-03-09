@@ -884,6 +884,40 @@ body {
     overflow-x: auto;
 }
 
+/* ─── Error fix suggestions ─── */
+.error-fix-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin: -2px 14px 8px 14px;
+    padding-left: 2px;
+}
+.error-fix-label {
+    font-size: 11px;
+    color: var(--text-2);
+    margin-right: 2px;
+    font-style: italic;
+}
+.error-fix-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    color: var(--green);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    line-height: 1.4;
+}
+.error-fix-badge:hover {
+    background: var(--green);
+    color: var(--bg-0);
+    border-color: var(--green);
+}
+
 /* ─── Schema Browser ─── */
 .schema-toolbar {
     display: flex;

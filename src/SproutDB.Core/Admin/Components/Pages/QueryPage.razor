@@ -84,6 +84,22 @@
                         <span class="error-code">@err.Code</span>
                         <span class="error-message">@err.Message</span>
                     </div>
+                    @if (err.Code == "UNKNOWN_COLUMN" && err.Position >= 0 && err.Length > 0)
+                    {
+                        var availableCols = GetAvailableColumnsForError();
+                        if (availableCols.Count > 0)
+                        {
+                            var capturedErr = err;
+                            <div class="error-fix-row">
+                                <span class="error-fix-label">Available:</span>
+                                @foreach (var col in availableCols)
+                                {
+                                    var capturedCol = col;
+                                    <button class="error-fix-badge" @onclick="() => FixColumnInQuery(capturedErr, capturedCol)">@col</button>
+                                }
+                            </div>
+                        }
+                    }
                 }
             }
             @if (!string.IsNullOrEmpty(lastResponse.AnnotatedQuery))
@@ -338,6 +354,7 @@
     private void RunQuery()
     {
         _runError = null;
+        _appliedFixes.Clear();
 
         if (string.IsNullOrWhiteSpace(selectedDatabase))
         {
@@ -726,6 +743,50 @@
         }
 
         return new { tables, columns };
+    }
+
+    // --- Column fix suggestions ---
+
+    private List<string> GetAvailableColumnsForError()
+    {
+        if (string.IsNullOrEmpty(selectedDatabase) || string.IsNullOrWhiteSpace(QueryText))
+            return [];
+
+        // Extract table name from query (second token, e.g. "get users ...")
+        var tokens = QueryText.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length < 2)
+            return [];
+
+        var tableName = tokens[1];
+        var describeResponse = Engine.Execute($"describe {tableName}", selectedDatabase);
+        if (describeResponse.Schema?.Columns is not { } cols)
+            return [];
+
+        return cols.Select(c => c.Name).ToList();
+    }
+
+    private readonly List<(int OriginalPosition, int Delta)> _appliedFixes = [];
+
+    private void FixColumnInQuery(SproutError err, string correctColumn)
+    {
+        if (string.IsNullOrEmpty(QueryText) || err.Position < 0 || err.Length <= 0)
+            return;
+
+        // Calculate offset from all fixes that were applied before this error's position
+        var offset = _appliedFixes
+            .Where(f => f.OriginalPosition < err.Position)
+            .Sum(f => f.Delta);
+
+        var adjustedPos = err.Position + offset;
+        if (adjustedPos < 0 || adjustedPos + err.Length > QueryText.Length)
+            return;
+
+        QueryText = string.Concat(
+            QueryText.AsSpan(0, adjustedPos),
+            correctColumn,
+            QueryText.AsSpan(adjustedPos + err.Length));
+
+        _appliedFixes.Add((err.Position, correctColumn.Length - err.Length));
     }
 
     // --- History ---
