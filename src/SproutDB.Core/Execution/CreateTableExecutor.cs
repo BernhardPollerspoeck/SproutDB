@@ -43,20 +43,9 @@ internal static class CreateTableExecutor
 
         SchemaFile.Write(Path.Combine(tablePath, "_schema.bin"), schema);
 
-        // Create _index file (pre-allocated, all zeros = free)
-        // Slot 0 stores next_id as ulong
+        // Create _index file (slot-based format with header)
         var indexPath = Path.Combine(tablePath, "_index");
-        CreatePreAllocatedFile(
-            indexPath,
-            (long)(chunkSize + 1) * StorageConstants.INDEX_ENTRY_SIZE);
-
-        // Write initial next_id = 1 into index header
-        using (var fs = new FileStream(indexPath, FileMode.Open, FileAccess.Write, FileShare.None))
-        {
-            Span<byte> buf = stackalloc byte[8];
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(buf, 1);
-            fs.Write(buf);
-        }
+        IndexHandle.CreateNew(indexPath, chunkSize);
 
         // Create .col files for each column
         foreach (var col in q.Columns)

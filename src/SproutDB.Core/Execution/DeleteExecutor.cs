@@ -17,18 +17,16 @@ internal static class DeleteExecutor
         if (filter is null)
             return new SproutResponse { Operation = SproutOperation.Delete, Affected = 0 };
 
-        var nextId = table.Index.ReadNextId();
-        var deletedCount = 0;
-
-        for (ulong id = 1; id < nextId; id++)
+        // Collect matching rows first, then delete (safe slot-based iteration)
+        var toDelete = new List<(ulong Id, long Place)>();
+        table.Index.ForEachUsed((id, place) =>
         {
-            var place = table.Index.ReadPlace(id);
-            if (place < 0)
-                continue; // already deleted / free
+            if (WhereEngine.EvaluateFilter(filter, id, place))
+                toDelete.Add((id, place));
+        });
 
-            if (!WhereEngine.EvaluateFilter(filter, id, place))
-                continue;
-
+        foreach (var (_, place) in toDelete)
+        {
             // Remove from B-Trees before clearing data
             foreach (var col in table.Schema.Columns)
             {
@@ -47,19 +45,14 @@ internal static class DeleteExecutor
                 }
             }
 
-            // Clear index slot (marks row as deleted)
-            table.Index.ClearPlace(id);
+            // Free slot (marks as deleted, decrements count)
+            table.Index.FreeSlot(place);
 
             // Write null flag for each column
             foreach (var col in table.Schema.Columns)
                 table.GetColumn(col.Name).WriteNull(place);
-
-            deletedCount++;
-
-            // Register freed place for reuse
-            table.Index.AddFreePlace(place);
         }
 
-        return new SproutResponse { Operation = SproutOperation.Delete, Affected = deletedCount };
+        return new SproutResponse { Operation = SproutOperation.Delete, Affected = toDelete.Count };
     }
 }

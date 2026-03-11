@@ -161,12 +161,14 @@ public class SproutEngineTests : IDisposable
         Assert.True(File.Exists(schemaPath));
         Assert.True(new FileInfo(schemaPath).Length > 0);
 
-        // Verify next_id is in _index header (slot 0)
+        // Verify slot-index header: [Count:4][NextId:8][LowestUsed:4][TotalSlots:4]
         var indexPath = Path.Combine(_tempDir, "shop", "users", "_index");
         using var fs = new FileStream(indexPath, FileMode.Open, FileAccess.Read);
         using var br = new BinaryReader(fs);
-        var nextId = br.ReadUInt64();
-        Assert.Equal((ulong)1, nextId);
+        var count = br.ReadInt32();      // [0..3] Count
+        var nextId = br.ReadInt64();     // [4..11] NextId
+        Assert.Equal(0, count);
+        Assert.Equal(1L, nextId);
     }
 
     [Fact]
@@ -178,7 +180,7 @@ public class SproutEngineTests : IDisposable
         var indexPath = Path.Combine(_tempDir, "shop", "users", "_index");
         Assert.True(File.Exists(indexPath));
 
-        var expectedSize = (long)(10_000 + 1) * sizeof(long); // CHUNK_SIZE+1 entries * 8 bytes
+        var expectedSize = 20 + (long)10_000 * sizeof(long); // 20B header + CHUNK_SIZE slots * 8 bytes
         Assert.Equal(expectedSize, new FileInfo(indexPath).Length);
     }
 

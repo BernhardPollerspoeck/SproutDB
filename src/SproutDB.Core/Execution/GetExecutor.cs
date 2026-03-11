@@ -165,7 +165,7 @@ internal static class GetExecutor
         var btreeResult = TryBTreeLookup(table, q.Where, filter);
         var data = btreeResult is not null
             ? ReadRowsByPlaces(table, effectiveSelect, q.ExcludeSelect, btreeResult, filter)
-            : ReadRows(table, effectiveSelect, q.ExcludeSelect, filter).ToList();
+            : ReadRows(table, effectiveSelect, q.ExcludeSelect, filter);
 
         // Compute and add computed field values
         if (q.ComputedSelect is not null)
@@ -523,7 +523,6 @@ internal static class GetExecutor
         TableHandle table, List<SelectColumn> groupByCols, WhereEngine.FilterNode? filter)
     {
         var groups = new Dictionary<string, List<(ulong, long)>>();
-        var nextId = table.Index.ReadNextId();
 
         // Resolve group-by column handles
         var handles = new (string Name, ColumnHandle? Handle)[groupByCols.Count];
@@ -533,11 +532,9 @@ internal static class GetExecutor
             handles[i] = (col.Name, col.Name == "_id" ? null : table.GetColumn(col.Name));
         }
 
-        for (ulong id = 1; id < nextId; id++)
+        table.Index.ForEachUsed((id, place) =>
         {
-            var place = table.Index.ReadPlace(id);
-            if (place < 0) continue;
-            if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place)) continue;
+            if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place)) return;
 
             // Build group key from column values
             var keyParts = new string[handles.Length];
@@ -554,7 +551,7 @@ internal static class GetExecutor
                 groups[key] = list;
             }
             list.Add((id, place));
-        }
+        });
 
         return groups;
     }
@@ -678,21 +675,14 @@ internal static class GetExecutor
         TableHandle table, string joinColumn, WhereEngine.FilterNode? filter)
     {
         var index = new Dictionary<string, List<(ulong, long)>>();
-        var nextId = table.Index.ReadNextId();
-
         ColumnHandle? colHandle = joinColumn == "_id" ? null : table.GetColumn(joinColumn);
 
-        for (ulong id = 1; id < nextId; id++)
+        table.Index.ForEachUsed((id, place) =>
         {
-            var place = table.Index.ReadPlace(id);
-            if (place < 0) continue;
+            if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place)) return;
 
-            // Apply follow where filter
-            if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place)) continue;
-
-            // Get the join column value
             object? val = colHandle is null ? (object)id : colHandle.ReadValue(place);
-            if (val is null) continue;
+            if (val is null) return;
 
             var key = val.ToString() ?? "";
             if (!index.TryGetValue(key, out var list))
@@ -701,7 +691,7 @@ internal static class GetExecutor
                 index[key] = list;
             }
             list.Add((id, place));
-        }
+        });
 
         return index;
     }
@@ -709,32 +699,26 @@ internal static class GetExecutor
     private static List<object> ReadAggregateValues(TableHandle table, string colName, WhereEngine.FilterNode? filter)
     {
         var values = new List<object>();
-        var nextId = table.Index.ReadNextId();
 
-        // For "_id" column, the value is the id itself
         if (colName == "_id")
         {
-            for (ulong id = 1; id < nextId; id++)
+            table.Index.ForEachUsed((id, place) =>
             {
-                var place = table.Index.ReadPlace(id);
-                if (place < 0) continue;
-                if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place)) continue;
+                if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place)) return;
                 values.Add(id);
-            }
+            });
             return values;
         }
 
         var handle = table.GetColumn(colName);
-        for (ulong id = 1; id < nextId; id++)
+        table.Index.ForEachUsed((id, place) =>
         {
-            var place = table.Index.ReadPlace(id);
-            if (place < 0) continue;
-            if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place)) continue;
+            if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place)) return;
 
             var val = handle.ReadValue(place);
             if (val is not null)
                 values.Add(val);
-        }
+        });
         return values;
     }
 
@@ -814,24 +798,20 @@ internal static class GetExecutor
 
     // ── Read rows ─────────────────────────────────────────────
 
-    private static IEnumerable<Dictionary<string, object?>> ReadRows(
+    private static List<Dictionary<string, object?>> ReadRows(
         TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect, WhereEngine.FilterNode? filter)
     {
         var projection = ResolveProjection(table, selectColumns, excludeSelect);
-        var nextId = table.Index.ReadNextId();
+        var data = new List<Dictionary<string, object?>>();
 
-        for (ulong id = 1; id < nextId; id++)
+        table.Index.ForEachUsed((id, place) =>
         {
-            var place = table.Index.ReadPlace(id);
-            if (place < 0)
-                continue; // deleted / free slot
-
-            // Apply where filter
             if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place))
-                continue;
+                return;
+            data.Add(ProjectRow(projection, id, place));
+        });
 
-            yield return ProjectRow(projection, id, place);
-        }
+        return data;
     }
 
     /// <summary>
