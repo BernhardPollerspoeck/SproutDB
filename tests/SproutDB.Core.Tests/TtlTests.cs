@@ -281,4 +281,69 @@ public class TtlTests : IDisposable
         Assert.NotNull(result.Data);
         Assert.Equal(3L, Convert.ToInt64(result.Data[0]["count"]));
     }
+
+    // ── Virtual TTL columns ─────────────────────────────────
+
+    [Fact]
+    public void Select_ExpiresAt_ReturnsTimestamp()
+    {
+        _engine.Execute("create table cache (key string 64) ttl 1h", "shop");
+        _engine.Execute("upsert cache {key: 'hello'}", "shop");
+
+        var result = _engine.Execute("get cache select _id, key, _expiresat", "shop");
+        Assert.NotNull(result.Data);
+        Assert.Single(result.Data);
+
+        var row = result.Data[0];
+        Assert.True(row.ContainsKey("_expiresat"));
+        var expiresAt = Convert.ToInt64(row["_expiresat"]);
+        Assert.True(expiresAt > 0, "expiresAt should be a future timestamp");
+    }
+
+    [Fact]
+    public void Select_Ttl_ReturnsRowTtlSeconds()
+    {
+        _engine.Execute("create table cache (key string 64) ttl 1h", "shop");
+        _engine.Execute("upsert cache {key: 'a', ttl: 7d}", "shop");
+        _engine.Execute("upsert cache {key: 'b'}", "shop");
+
+        var result = _engine.Execute("get cache select key, _ttl", "shop");
+        Assert.NotNull(result.Data);
+        Assert.Equal(2, result.Data.Count);
+
+        // Row with row-TTL override: 7d = 604800s
+        var rowA = result.Data.First(r => (string?)r["key"] == "a");
+        Assert.Equal(604800L, Convert.ToInt64(rowA["_ttl"]));
+
+        // Row without row-TTL override: 0 means "uses table default"
+        var rowB = result.Data.First(r => (string?)r["key"] == "b");
+        Assert.Equal(0L, Convert.ToInt64(rowB["_ttl"]));
+    }
+
+    [Fact]
+    public void Select_TtlColumns_NoTtlTable_ReturnsZero()
+    {
+        _engine.Execute("create table users (name string 64)", "shop");
+        _engine.Execute("upsert users {name: 'Alice'}", "shop");
+
+        var result = _engine.Execute("get users select name, _expiresat, _ttl", "shop");
+        Assert.NotNull(result.Data);
+        Assert.Single(result.Data);
+
+        Assert.Equal(0L, Convert.ToInt64(result.Data[0]["_expiresat"]));
+        Assert.Equal(0L, Convert.ToInt64(result.Data[0]["_ttl"]));
+    }
+
+    [Fact]
+    public void Select_TtlColumns_WithAlias()
+    {
+        _engine.Execute("create table cache (key string 64) ttl 1h", "shop");
+        _engine.Execute("upsert cache {key: 'test'}", "shop");
+
+        var result = _engine.Execute("get cache select key, _expiresat as expires, _ttl as ttl_sec", "shop");
+        Assert.NotNull(result.Data);
+        Assert.Single(result.Data);
+        Assert.True(result.Data[0].ContainsKey("expires"));
+        Assert.True(result.Data[0].ContainsKey("ttl_sec"));
+    }
 }

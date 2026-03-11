@@ -188,6 +188,35 @@ internal static class GetParser
             }
         }
 
+        // Optional: select / -select after follow (shapes the final joined result)
+        List<SelectColumn>? postFollowSelect = null;
+        var postFollowExclude = false;
+
+        if (followClauses is not null && aggregate is null && ctx.Peek().Type != TokenType.Eof)
+        {
+            if (ctx.MatchKeyword("select"))
+            {
+                (postFollowSelect, _) = ParseSelectList(ctx);
+                if (ctx.HasErrors) return ctx.Fail();
+            }
+            else if (ctx.Peek().Type == TokenType.Minus)
+            {
+                var minusToken = ctx.Peek();
+                ctx.Advance();
+                if (ctx.MatchKeyword("select"))
+                {
+                    postFollowExclude = true;
+                    (postFollowSelect, _) = ParseSelectList(ctx);
+                    if (ctx.HasErrors) return ctx.Fail();
+                }
+                else
+                {
+                    return ctx.Error(minusToken, ErrorCodes.SYNTAX_ERROR,
+                        "expected 'select' after '-'");
+                }
+            }
+        }
+
         ctx.ExpectEof();
         if (ctx.HasErrors) return ctx.Fail();
 
@@ -211,6 +240,8 @@ internal static class GetParser
             AggregateAlias = aggregateAlias,
             GroupBy = groupBy,
             Follow = followClauses,
+            PostFollowSelect = postFollowSelect,
+            PostFollowExclude = postFollowExclude,
         });
     }
 
@@ -596,9 +627,38 @@ internal static class GetParser
 
             var colName = ctx.GetLowercaseText(token);
 
+            // Check for dot notation: alias.column (e.g. customer._id)
+            if (ctx.PeekAt(1).Type == TokenType.Dot)
+            {
+                ctx.Advance(); // consume identifier
+                ctx.Advance(); // consume dot
+                var subToken = ctx.Peek();
+                if (subToken.Type != TokenType.Identifier)
+                {
+                    ctx.AddError(subToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLUMN_NAME);
+                    return (columns, computed);
+                }
+                colName = $"{colName}.{ctx.GetLowercaseText(subToken)}";
+                ctx.Advance();
+
+                // Check for optional alias
+                string? dotAlias = null;
+                if (ctx.MatchKeyword("as"))
+                {
+                    var aliasToken = ctx.Peek();
+                    if (aliasToken.Type != TokenType.Identifier)
+                    {
+                        ctx.AddError(aliasToken, ErrorCodes.SYNTAX_ERROR, "expected alias name after 'as'");
+                        return (columns, computed);
+                    }
+                    dotAlias = ctx.GetLowercaseText(aliasToken);
+                    ctx.Advance();
+                }
+
+                columns.Add(new SelectColumn(colName, token.Start, subToken.Start + subToken.Length - token.Start, dotAlias));
+            }
             // Check if next token is an arithmetic operator → computed field
-            var next = ctx.PeekAt(1);
-            if (IsArithmeticOp(next.Type))
+            else if (IsArithmeticOp(ctx.PeekAt(1).Type))
             {
                 var comp = ParseComputedColumn(ctx, token, colName);
                 if (ctx.HasErrors) return (columns, computed);
@@ -885,8 +945,10 @@ internal static class GetParser
         ctx.Advance();
 
         // Optional: select clause for this follow (before where)
+        // Lookahead: if select is followed by alias.col (dot notation), it's a post-follow select, not follow-level.
         List<SelectColumn>? followSelect = null;
-        if (ctx.Peek().Type != TokenType.Eof && ctx.IsKeyword(ctx.Peek(), "select"))
+        if (ctx.Peek().Type != TokenType.Eof && ctx.IsKeyword(ctx.Peek(), "select")
+            && !IsPostFollowSelect(ctx))
         {
             ctx.Advance(); // consume "select"
             followSelect = ParseFollowSelectList(ctx);
@@ -918,6 +980,32 @@ internal static class GetParser
             Select = followSelect,
             Where = followWhere,
         };
+    }
+
+    /// <summary>
+    /// Checks whether a 'select' keyword at the current position is a post-follow select
+    /// (contains dot-notation columns like alias.col) rather than a follow-level select.
+    /// Scans ahead through the comma-separated column list looking for any dot token.
+    /// </summary>
+    private static bool IsPostFollowSelect(ParserContext ctx)
+    {
+        // ctx.Peek() is 'select'. Look at tokens after it.
+        var offset = 1; // skip 'select'
+        while (true)
+        {
+            var t = ctx.PeekAt(offset);
+            if (t.Type == TokenType.Eof) break;
+            if (t.Type == TokenType.Dot) return true;
+            // Stop scanning at keywords that end a column list
+            if (t.Type == TokenType.Identifier)
+            {
+                var text = ctx.GetLowercaseText(t);
+                if (text is "where" or "follow" or "order" or "limit" or "page" or "group" or "count")
+                    break;
+            }
+            offset++;
+        }
+        return false;
     }
 
     /// <summary>

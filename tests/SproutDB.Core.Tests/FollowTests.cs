@@ -538,4 +538,72 @@ public class FollowTests : IDisposable
         Assert.False(row.ContainsKey("tags._id"));
         Assert.False(row.ContainsKey("tags.priority"));
     }
+
+    // ── Post-follow select ──────────────────────────────────
+
+    [Fact]
+    public void PostFollow_Select_FiltersFlatResult()
+    {
+        var r = _engine.Execute(
+            "get users follow users._id -> orders.user_id as orders select name, orders.product",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+        Assert.Equal(4, r.Data.Count);
+
+        var row = r.Data[0];
+        Assert.True(row.ContainsKey("name"));
+        Assert.True(row.ContainsKey("orders.product"));
+        // Excluded columns should not be present
+        Assert.False(row.ContainsKey("_id"));
+        Assert.False(row.ContainsKey("email"));
+        Assert.False(row.ContainsKey("orders._id"));
+        Assert.False(row.ContainsKey("orders.amount"));
+    }
+
+    [Fact]
+    public void PostFollow_Select_WithAlias()
+    {
+        var r = _engine.Execute(
+            "get users follow users._id -> orders.user_id as orders select name, orders.product as item",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+        var row = r.Data[0];
+        Assert.True(row.ContainsKey("name"));
+        Assert.True(row.ContainsKey("item"));
+        Assert.False(row.ContainsKey("orders.product"));
+    }
+
+    [Fact]
+    public void PostFollow_ExcludeSelect_RemovesColumns()
+    {
+        var r = _engine.Execute(
+            "get users follow users._id -> orders.user_id as orders -select email, orders.status",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+        Assert.Equal(4, r.Data.Count);
+
+        var row = r.Data[0];
+        Assert.True(row.ContainsKey("name"));
+        Assert.True(row.ContainsKey("orders.product"));
+        // Excluded columns
+        Assert.False(row.ContainsKey("email"));
+        Assert.False(row.ContainsKey("orders.status"));
+    }
+
+    [Fact]
+    public void PostFollow_Select_DotNotation_Id()
+    {
+        var r = _engine.Execute(
+            "get users follow users._id -> orders.user_id as orders select _id, orders._id",
+            "testdb");
+
+        Assert.NotNull(r.Data);
+        var row = r.Data[0];
+        Assert.Equal(2, row.Count);
+        Assert.True(row.ContainsKey("_id"));
+        Assert.True(row.ContainsKey("orders._id"));
+    }
 }

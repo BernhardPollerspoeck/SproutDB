@@ -15,7 +15,7 @@ internal static class GetExecutor
         {
             foreach (var col in q.Select)
             {
-                if (col.Name != "_id" && !table.HasColumn(col.Name))
+                if (!IsVirtualColumn(col.Name) && !table.HasColumn(col.Name))
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{col.Name}' does not exist", Position = col.Position, Length = col.Length });
@@ -28,12 +28,12 @@ internal static class GetExecutor
         {
             foreach (var comp in q.ComputedSelect)
             {
-                if (comp.LeftColumn != "_id" && !table.HasColumn(comp.LeftColumn))
+                if (!IsVirtualColumn(comp.LeftColumn) && !table.HasColumn(comp.LeftColumn))
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{comp.LeftColumn}' does not exist", Position = comp.LeftPosition, Length = comp.LeftLength });
                 }
-                if (comp.RightColumn is not null && comp.RightColumn != "_id" && !table.HasColumn(comp.RightColumn))
+                if (comp.RightColumn is not null && !IsVirtualColumn(comp.RightColumn) && !table.HasColumn(comp.RightColumn))
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{comp.RightColumn}' does not exist", Position = comp.RightPosition, Length = comp.RightLength });
@@ -62,7 +62,7 @@ internal static class GetExecutor
 
             foreach (var col in q.OrderBy)
             {
-                if (col.Name != "_id" && !table.HasColumn(col.Name)
+                if (!IsVirtualColumn(col.Name) && !table.HasColumn(col.Name)
                     && (computedAliases is null || !computedAliases.Contains(col.Name)))
                 {
                     validationErrors ??= [];
@@ -74,13 +74,13 @@ internal static class GetExecutor
         // Validate aggregate column
         if (q.Aggregate.HasValue && q.AggregateColumn is not null)
         {
-            if (q.AggregateColumn != "_id" && !table.HasColumn(q.AggregateColumn))
+            if (!IsVirtualColumn(q.AggregateColumn) && !table.HasColumn(q.AggregateColumn))
             {
                 validationErrors ??= [];
                 validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{q.AggregateColumn}' does not exist", Position = q.AggregateColumnPosition, Length = q.AggregateColumnLength });
             }
             else if (q.Aggregate is AggregateFunction.Sum or AggregateFunction.Avg
-                     && q.AggregateColumn != "_id" && !IsNumericColumn(table, q.AggregateColumn))
+                     && !IsVirtualColumn(q.AggregateColumn) && !IsNumericColumn(table, q.AggregateColumn))
             {
                 validationErrors ??= [];
                 validationErrors.Add(new SproutError { Code = ErrorCodes.TYPE_MISMATCH, Message = $"'{AggregateName(q.Aggregate.Value)}' can only be used on numeric columns", Position = q.AggregateColumnPosition, Length = q.AggregateColumnLength });
@@ -102,14 +102,14 @@ internal static class GetExecutor
 
                 // Validate source column exists on appropriate table
                 var sourceTable = follow.SourceTable == q.Table ? table : tableResolver(follow.SourceTable);
-                if (follow.SourceColumn != "_id" && (sourceTable is null || !sourceTable.HasColumn(follow.SourceColumn)))
+                if (!IsVirtualColumn(follow.SourceColumn) && (sourceTable is null || !sourceTable.HasColumn(follow.SourceColumn)))
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{follow.SourceColumn}' does not exist on '{follow.SourceTable}'", Position = follow.SourceColumnPosition, Length = follow.SourceColumnLength });
                 }
 
                 // Validate target column exists
-                if (follow.TargetColumn != "_id" && !targetTable.HasColumn(follow.TargetColumn))
+                if (!IsVirtualColumn(follow.TargetColumn) && !targetTable.HasColumn(follow.TargetColumn))
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{follow.TargetColumn}' does not exist on '{follow.TargetTable}'", Position = follow.TargetColumnPosition, Length = follow.TargetColumnLength });
@@ -129,7 +129,7 @@ internal static class GetExecutor
         {
             foreach (var col in q.GroupBy)
             {
-                if (col.Name != "_id" && !table.HasColumn(col.Name))
+                if (!IsVirtualColumn(col.Name) && !table.HasColumn(col.Name))
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{col.Name}' does not exist", Position = col.Position, Length = col.Length });
@@ -250,6 +250,46 @@ internal static class GetExecutor
                 var key = $"{follow.Alias}._id";
                 foreach (var row in data)
                     row.Remove(key);
+            }
+        }
+
+        // Post-follow select/exclude: filter keys on the flat joined result
+        if (q.PostFollowSelect is not null && data.Count > 0)
+        {
+            var names = new HashSet<string>(q.PostFollowSelect.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var col in q.PostFollowSelect)
+                names.Add(col.Name);
+
+            if (q.PostFollowExclude)
+            {
+                // Remove listed columns
+                foreach (var row in data)
+                {
+                    foreach (var col in q.PostFollowSelect)
+                        row.Remove(col.Name);
+                }
+            }
+            else
+            {
+                // Keep only listed columns (in order), support alias
+                var aliasMap = new Dictionary<string, string>(q.PostFollowSelect.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var col in q.PostFollowSelect)
+                {
+                    if (col.Alias is not null)
+                        aliasMap[col.Name] = col.Alias;
+                }
+
+                for (var i = 0; i < data.Count; i++)
+                {
+                    var row = data[i];
+                    var projected = new Dictionary<string, object?>(q.PostFollowSelect.Count);
+                    foreach (var col in q.PostFollowSelect)
+                    {
+                        if (row.TryGetValue(col.Name, out var val))
+                            projected[col.OutputName] = val;
+                    }
+                    data[i] = projected;
+                }
             }
         }
 
@@ -832,17 +872,29 @@ internal static class GetExecutor
 
             if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place))
                 return;
-            data.Add(ProjectRow(projection, id, place));
+            data.Add(ProjectRow(projection, id, place, ttl));
         });
 
         return data;
     }
 
+    private enum VirtualColumn : byte { None, Id, ExpiresAt, Ttl }
+
     /// <summary>
-    /// A projection entry: either _id (Handle is null) or a real column.
+    /// A projection entry: a real column (Handle set) or a virtual column (_id, _expiresAt, _ttl).
     /// Preserves the order from the SELECT clause.
     /// </summary>
-    private readonly record struct ProjectionEntry(string Name, ColumnHandle? Handle);
+    private readonly record struct ProjectionEntry(string Name, ColumnHandle? Handle, VirtualColumn Virtual = VirtualColumn.None);
+
+    private static bool IsVirtualColumn(string name) => name is "_id" or "_expiresat" or "_ttl";
+
+    private static VirtualColumn ToVirtual(string name) => name switch
+    {
+        "_id" => VirtualColumn.Id,
+        "_expiresat" => VirtualColumn.ExpiresAt,
+        "_ttl" => VirtualColumn.Ttl,
+        _ => VirtualColumn.None,
+    };
 
     /// <summary>
     /// Builds an ordered projection list that respects the SELECT column order.
@@ -856,7 +908,7 @@ internal static class GetExecutor
             // All columns: _id first, then table columns
             var all = new List<ProjectionEntry>(table.Schema.Columns.Count + 1)
             {
-                new("_id", null)
+                new("_id", null, VirtualColumn.Id)
             };
             foreach (var col in table.Schema.Columns)
                 all.Add(new ProjectionEntry(col.Name, table.GetColumn(col.Name)));
@@ -871,7 +923,7 @@ internal static class GetExecutor
 
             var result = new List<ProjectionEntry>(table.Schema.Columns.Count + 1);
             if (!excluded.Contains("_id"))
-                result.Add(new ProjectionEntry("_id", null));
+                result.Add(new ProjectionEntry("_id", null, VirtualColumn.Id));
             foreach (var col in table.Schema.Columns)
             {
                 if (!excluded.Contains(col.Name))
@@ -881,12 +933,13 @@ internal static class GetExecutor
         }
 
         {
-            // Preserve SELECT order — _id at the position where it appears in the list
+            // Preserve SELECT order — virtual columns at their position in the list
             var result = new List<ProjectionEntry>(selectColumns.Count);
             foreach (var col in selectColumns)
             {
-                if (col.Name == "_id")
-                    result.Add(new ProjectionEntry(col.OutputName, null));
+                var virt = ToVirtual(col.Name);
+                if (virt != VirtualColumn.None)
+                    result.Add(new ProjectionEntry(col.OutputName, null, virt));
                 else
                     result.Add(new ProjectionEntry(col.OutputName, table.GetColumn(col.Name)));
             }
@@ -895,15 +948,24 @@ internal static class GetExecutor
     }
 
     private static Dictionary<string, object?> ProjectRow(
-        List<ProjectionEntry> projection, ulong id, long place)
+        List<ProjectionEntry> projection, ulong id, long place, TtlHandle? ttl = null)
     {
         var record = new Dictionary<string, object?>(projection.Count);
         foreach (var entry in projection)
         {
-            if (entry.Handle is null)
-                record[entry.Name] = id;
-            else
+            if (entry.Handle is not null)
+            {
                 record[entry.Name] = entry.Handle.ReadValue(place);
+                continue;
+            }
+
+            record[entry.Name] = entry.Virtual switch
+            {
+                VirtualColumn.Id => id,
+                VirtualColumn.ExpiresAt => ttl?.ReadExpiresAt(place) ?? 0L,
+                VirtualColumn.Ttl => ttl?.ReadRowTtlDuration(place) ?? 0L,
+                _ => null,
+            };
         }
         return record;
     }
@@ -1161,7 +1223,7 @@ internal static class GetExecutor
             if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place))
                 continue;
 
-            data.Add(ProjectRow(projection, id, place));
+            data.Add(ProjectRow(projection, id, place, ttl));
         }
 
         return data;

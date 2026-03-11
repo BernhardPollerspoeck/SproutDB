@@ -378,4 +378,55 @@ public class AutocompleteTests
         var ctx = GetContext("get users select name from ");
         Assert.Equal("table", ctx.Type);
     }
+
+    // ── Multiline: select/−select on new line ──────────────
+
+    [Fact]
+    public void Multiline_AfterSelect_ReturnsColumn()
+    {
+        var ctx = GetContext("get customers\n    select ");
+        Assert.Equal("column", ctx.Type);
+        Assert.Equal("customers", ctx.Table);
+    }
+
+    [Fact]
+    public void Multiline_AfterMinusSelect_ReturnsColumn()
+    {
+        var ctx = GetContext("get customers\n    -select ");
+        Assert.Equal("column", ctx.Type);
+        Assert.Equal("customers", ctx.Table);
+    }
+
+    [Fact]
+    public void Multiline_ClauseSuggestions_IncludeSelect()
+    {
+        var (items, cat) = GetSuggestions("get users ");
+        Assert.Equal("kw", cat);
+        Assert.Contains("select", items);
+        Assert.Contains("-select", items);
+    }
+
+    [Fact]
+    public void Multiline_AfterSelectComma_ReturnsColumn()
+    {
+        var ctx = GetContext("get users select name, ");
+        Assert.Equal("column", ctx.Type);
+        Assert.Equal("users", ctx.Table);
+    }
+
+    [Fact]
+    public void Multiline_AfterFollow_Select_ReturnsColumn()
+    {
+        var ctx = GetContext("get users\n    follow users._id -> orders.user_id as orders\n    select ");
+        Assert.Equal("column", ctx.Type);
+        Assert.Equal("users", ctx.Table);
+    }
+
+    [Fact]
+    public void Multiline_AfterFollow_MinusSelect_ReturnsColumn()
+    {
+        var ctx = GetContext("get users\n    follow users._id -> orders.user_id as orders\n    -select ");
+        Assert.Equal("column", ctx.Type);
+        Assert.Equal("users", ctx.Table);
+    }
 }

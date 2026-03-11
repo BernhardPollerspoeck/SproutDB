@@ -901,7 +901,10 @@
                 var describeTable = Engine.Execute($"describe {table}", dbName);
                 if (describeTable.Schema?.Columns is { } cols)
                 {
-                    columns[table] = cols.Select(c => c.Name).ToList();
+                    var colNames = cols.Select(c => c.Name).ToList();
+                    colNames.Add("_expiresat");
+                    colNames.Add("_ttl");
+                    columns[table] = colNames;
                 }
             }
         }

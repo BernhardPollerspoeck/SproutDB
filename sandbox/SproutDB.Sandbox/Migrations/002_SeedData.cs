@@ -412,5 +412,26 @@ public sealed class SeedData : IMigration
             var pid = plantIds[it.PlantIdx];
             db.Query($"upsert order_items {{ order_id: '{oid}', plant_id: '{pid}', quantity: {it.Qty}, unit_price: {it.UnitPrice} }}");
         }
+
+        // ── Carts (TTL 5m) ── active shopping carts that expire after 5 minutes
+        var carts = new (int CustIdx, int PlantIdx, int Qty, string Note, string? RowTtl)[]
+        {
+            (0, 2, 3, "für den Vorgarten", null),          // Anna: Lavendel×3, table TTL (5m)
+            (1, 35, 1, "Geburtstagsgeschenk", null),       // Thomas: Jap. Ahorn, table TTL (5m)
+            (2, 13, 10, "Frühlingsbestellung", null),       // Sophie: Tulpe gelb×10, table TTL (5m)
+            (3, 33, 1, "", "10m"),                          // Markus: Olivenbaum, row TTL 10m override
+            (4, 40, 5, "Balkon", null),                     // Laura: Erdbeere×5, table TTL (5m)
+            (7, 20, 8, "Hochbeet", null),                   // Felix: Tomate×8, table TTL (5m)
+            (15, 46, 2, "Geschenk Mama", "15m"),            // Noah: Weinrebe×2, row TTL 15m override
+        };
+
+        for (var i = 0; i < carts.Length; i++)
+        {
+            var c = carts[i];
+            var cid = customerIds[c.CustIdx];
+            var pid = plantIds[c.PlantIdx];
+            var ttlPart = c.RowTtl is not null ? $", ttl: {c.RowTtl}" : "";
+            db.Query($"upsert carts {{ customer_id: '{cid}', plant_id: '{pid}', quantity: {c.Qty}, note: '{c.Note}'{ttlPart} }}");
+        }
     }
 }

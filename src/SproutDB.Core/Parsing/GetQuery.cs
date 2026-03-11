@@ -87,6 +87,17 @@ internal sealed class GetQuery : IQuery
     /// Optional follow (join) clauses. Null means no joins.
     /// </summary>
     public List<FollowClause>? Follow { get; init; }
+
+    /// <summary>
+    /// Post-follow select projection applied to the flat joined result.
+    /// Column names may include alias prefixes (e.g. "customer.name").
+    /// </summary>
+    public List<SelectColumn>? PostFollowSelect { get; init; }
+
+    /// <summary>
+    /// When true, <see cref="PostFollowSelect"/> lists columns to exclude.
+    /// </summary>
+    public bool PostFollowExclude { get; init; }
 }
 
 internal enum AggregateFunction

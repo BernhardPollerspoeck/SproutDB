@@ -3,13 +3,13 @@
 
 var SproutAutocomplete = (function () {
     var COMMANDS = ['get','upsert','delete','describe','create','purge','add','alter','rename','backup','restore'];
-    var CLAUSES = ['where','select','order','limit','page','count','distinct','group','follow','on','as'];
+    var CLAUSES = ['where','select','-select','order','limit','page','count','distinct','group','follow','on','as'];
     var OPERATORS = ['=','!=','>','>=','<','<=','between','in','is','contains','starts','ends'];
     var DIRECTIONS = ['asc','desc'];
     var BOOLEANS = ['true','false','null'];
     var TYPES = ['string','bool','sbyte','ubyte','sshort','ushort','sint','uint','slong','ulong','float','double','date','time','datetime'];
     var CREATE_SUB = ['database','table','index','apikey'];
-    var PURGE_SUB = ['database','table','column','index','apikey'];
+    var PURGE_SUB = ['database','table','column','index','apikey','ttl'];
 
     function getContext(text, pos) {
         var before = text.substring(0, pos);
@@ -64,100 +64,123 @@ var SproutAutocomplete = (function () {
         var tokens = line.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
         var prefix = '';
 
-        if (tokens.length === 0) return { type: 'command', prefix: '', table: null };
+        // For multiline queries, also tokenize the full text to find cmd and table
+        var allTokens = before.trim().split(/\s+/).filter(function(t) { return t.length > 0; });
+
+        if (tokens.length === 0 && allTokens.length === 0) return { type: 'command', prefix: '', table: null };
 
         // Determine if we're mid-word or starting a new token
-        var endsWithSpace = line.length > 0 && line[line.length - 1] === ' ';
+        var endsWithSpace = before.length > 0 && before[before.length - 1] === ' ';
         if (!endsWithSpace && tokens.length > 0) {
             prefix = tokens[tokens.length - 1];
             tokens = tokens.slice(0, -1);
         }
+        // Also adjust allTokens for prefix
+        var allPrefix = '';
+        if (!endsWithSpace && allTokens.length > 0) {
+            allPrefix = allTokens[allTokens.length - 1];
+            allTokens = allTokens.slice(0, -1);
+        }
 
-        var cmd = tokens.length > 0 ? tokens[0].toLowerCase() : prefix.toLowerCase();
+        // Use allTokens for cmd and table detection (works across lines)
+        var cmd = allTokens.length > 0 ? allTokens[0].toLowerCase() : (prefix || allPrefix).toLowerCase();
 
-        if (tokens.length === 0) return { type: 'command', prefix: prefix, table: null };
+        if (allTokens.length === 0) return { type: 'command', prefix: prefix || allPrefix, table: null };
 
-        // Detect table from tokens
+        // Detect table from all tokens (full query, not just current line)
         var table = null;
-        for (var i = 0; i < tokens.length; i++) {
-            var tl = tokens[i].toLowerCase();
-            if ((tl === 'get' || tl === 'upsert' || tl === 'delete' || tl === 'from' || tl === 'describe' || tl === 'purge') && i + 1 < tokens.length) {
-                var next = tokens[i + 1].toLowerCase();
+        for (var i = 0; i < allTokens.length; i++) {
+            var tl = allTokens[i].toLowerCase();
+            if ((tl === 'get' || tl === 'upsert' || tl === 'delete' || tl === 'from' || tl === 'describe' || tl === 'purge') && i + 1 < allTokens.length) {
+                var next = allTokens[i + 1].toLowerCase();
                 if (next !== 'from' && next !== 'database' && next !== 'table' && next !== 'column' && next !== 'index' && next !== 'apikey') {
-                    table = tokens[i + 1];
+                    table = allTokens[i + 1];
                 }
             }
         }
 
         // Check for table.col pattern in prefix
-        if (prefix.indexOf('.') > 0) {
-            var parts = prefix.split('.');
+        var p = prefix || allPrefix;
+        if (p.indexOf('.') > 0) {
+            var parts = p.split('.');
             return { type: 'column', prefix: parts[1] || '', table: parts[0] };
         }
 
-        var lastToken = tokens[tokens.length - 1].toLowerCase();
+        var lastToken = allTokens.length > 0 ? allTokens[allTokens.length - 1].toLowerCase() : '';
 
         // After create -> create-sub
-        if (cmd === 'create' && tokens.length === 1) return { type: 'create-sub', prefix: prefix, table: null };
+        if (cmd === 'create' && allTokens.length === 1) return { type: 'create-sub', prefix: p, table: null };
 
         // After purge -> purge-sub
-        if (cmd === 'purge' && tokens.length === 1) return { type: 'purge-sub', prefix: prefix, table: null };
+        if (cmd === 'purge' && allTokens.length === 1) return { type: 'purge-sub', prefix: p, table: null };
 
         // After command keyword -> table
-        if (tokens.length === 1 && (cmd === 'get' || cmd === 'upsert' || cmd === 'delete' || cmd === 'describe'))
-            return { type: 'table', prefix: prefix, table: null };
+        if (allTokens.length === 1 && (cmd === 'get' || cmd === 'upsert' || cmd === 'delete' || cmd === 'describe'))
+            return { type: 'table', prefix: p, table: null };
 
         // After from/table keyword -> table
         if (lastToken === 'from' || lastToken === 'table')
-            return { type: 'table', prefix: prefix, table: null };
+            return { type: 'table', prefix: p, table: null };
 
         // After purge subcommand -> table
-        if (cmd === 'purge' && tokens.length === 2)
-            return { type: 'table', prefix: prefix, table: null };
+        if (cmd === 'purge' && allTokens.length === 2)
+            return { type: 'table', prefix: p, table: null };
 
         // After 'order by' -> column
-        if (tokens.length >= 2 && tokens[tokens.length - 2].toLowerCase() === 'order' && lastToken === 'by')
-            return { type: 'column', prefix: prefix, table: table };
+        if (allTokens.length >= 2 && allTokens[allTokens.length - 2].toLowerCase() === 'order' && lastToken === 'by')
+            return { type: 'column', prefix: p, table: table };
 
-        // After where/select/by -> column
-        if (lastToken === 'where' || lastToken === 'select' || lastToken === 'by')
-            return { type: 'column', prefix: prefix, table: table };
+        // After where/select/-select/by -> column
+        if (lastToken === 'where' || lastToken === 'select' || lastToken === '-select' || lastToken === 'by')
+            return { type: 'column', prefix: p, table: table };
+
+        // After comma in select/where list -> column (e.g. "select name," or "select name, ")
+        if (lastToken.endsWith(',') || (allTokens.length >= 2 && allTokens[allTokens.length - 1] === ',')) {
+            // Walk back to find if we're in a select/where context
+            for (var si = allTokens.length - 1; si >= 0; si--) {
+                var st = allTokens[si].toLowerCase();
+                if (st === 'select' || st === '-select' || st === 'where' || st === 'by')
+                    return { type: 'column', prefix: p, table: table };
+                if (st === 'get' || st === 'follow' || st === 'order' || st === 'limit' || st === 'page')
+                    break;
+            }
+        }
 
         // After 'order by <col>' -> direction
-        if (tokens.length >= 3) {
-            var ob1 = tokens[tokens.length - 3] ? tokens[tokens.length - 3].toLowerCase() : '';
-            var ob2 = tokens[tokens.length - 2] ? tokens[tokens.length - 2].toLowerCase() : '';
+        if (allTokens.length >= 3) {
+            var ob1 = allTokens[allTokens.length - 3] ? allTokens[allTokens.length - 3].toLowerCase() : '';
+            var ob2 = allTokens[allTokens.length - 2] ? allTokens[allTokens.length - 2].toLowerCase() : '';
             if (ob1 === 'order' && ob2 === 'by')
-                return { type: 'direction', prefix: prefix, table: table };
+                return { type: 'direction', prefix: p, table: table };
         }
 
         // After 'where <col>' -> operator
-        if (tokens.length >= 2 && tokens[tokens.length - 2].toLowerCase() === 'where')
-            return { type: 'operator', prefix: prefix, table: table };
+        if (allTokens.length >= 2 && allTokens[allTokens.length - 2].toLowerCase() === 'where')
+            return { type: 'operator', prefix: p, table: table };
 
         // After 'and/or <col>' -> operator
-        if (tokens.length >= 2 && (tokens[tokens.length - 2].toLowerCase() === 'and' || tokens[tokens.length - 2].toLowerCase() === 'or'))
-            return { type: 'operator', prefix: prefix, table: table };
+        if (allTokens.length >= 2 && (allTokens[allTokens.length - 2].toLowerCase() === 'and' || allTokens[allTokens.length - 2].toLowerCase() === 'or'))
+            return { type: 'operator', prefix: p, table: table };
 
         // After operator -> boolean
         var ops = ['=','!=','>','>=','<','<=','contains','starts','ends','between','in','is'];
         if (ops.indexOf(lastToken) >= 0)
-            return { type: 'boolean', prefix: prefix, table: table };
+            return { type: 'boolean', prefix: p, table: table };
 
         // After 'add column tbl.col' or inside type context
-        if (cmd === 'add' && tokens.length >= 3)
-            return { type: 'type', prefix: prefix, table: table };
+        if (cmd === 'add' && allTokens.length >= 3)
+            return { type: 'type', prefix: p, table: table };
 
         // After 'upsert <table>' -> suggest body openers
-        if (cmd === 'upsert' && tokens.length === 2)
-            return { type: 'upsert-body', prefix: prefix, table: table };
+        if (cmd === 'upsert' && allTokens.length === 2)
+            return { type: 'upsert-body', prefix: p, table: table };
 
         // After table name -> clause
         if (table) {
-            return { type: 'clause', prefix: prefix, table: table };
+            return { type: 'clause', prefix: p, table: table };
         }
 
-        return { type: 'command', prefix: prefix, table: null };
+        return { type: 'command', prefix: p, table: null };
     }
 
     function getSuggestions(ctx, schema) {
