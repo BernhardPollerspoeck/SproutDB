@@ -12,6 +12,19 @@ internal static class UpsertExecutor
             return ResponseHelper.Error(query, ErrorCodes.BULK_LIMIT,
                 $"bulk upsert exceeds limit of {bulkLimit} records ({q.Records.Count} given)");
 
+        // ── TTL validation: row TTL requires table to have TTL enabled ──
+        bool hasTtl = table.HasTtl;
+        for (int i = 0; i < q.RowTtlSeconds.Count; i++)
+        {
+            if (q.RowTtlSeconds[i] > 0 && !hasTtl)
+            {
+                // Auto-enable TTL file if row has TTL but table doesn't have _ttl file yet
+                table.EnableTtl();
+                hasTtl = true;
+                break;
+            }
+        }
+
         // ── Validate all records upfront ─────────────────────────────────
         var parsed = new ParsedRecord[q.Records.Count];
         for (int i = 0; i < q.Records.Count; i++)
@@ -45,20 +58,34 @@ internal static class UpsertExecutor
         }
 
         // ── Execute all records ──────────────────────────────────────────
+        var nowMs = hasTtl ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : 0L;
+        var tableTtlSeconds = table.Schema.TtlSeconds;
+
         var data = new List<Dictionary<string, object?>>(parsed.Length);
-        foreach (var rec in parsed)
+        for (int i = 0; i < parsed.Length; i++)
         {
+            var rec = parsed[i];
             var resolvedId = rec.ExplicitId ?? rec.ResolvedOnId;
             Dictionary<string, object?> record;
             ulong id;
+            long place;
 
             if (resolvedId.HasValue)
             {
-                (record, id) = WriteWithId(table, rec.FieldsByName, resolvedId.Value);
+                (record, id, place) = WriteWithId(table, rec.FieldsByName, resolvedId.Value);
             }
             else
             {
-                (record, id) = WriteInsert(table, rec.FieldsByName);
+                (record, id, place) = WriteInsert(table, rec.FieldsByName);
+            }
+
+            // Write TTL data
+            if (hasTtl)
+            {
+                var rowTtl = q.RowTtlSeconds[i];
+                var effectiveTtl = rowTtl > 0 ? rowTtl : tableTtlSeconds;
+                var expiresAt = effectiveTtl > 0 ? nowMs + effectiveTtl * 1000 : 0L;
+                table.Ttl?.Write(place, expiresAt, rowTtl);
             }
 
             record["_id"] = id;
@@ -211,7 +238,7 @@ internal static class UpsertExecutor
 
     // ── Write helpers ────────────────────────────────────────────────
 
-    private static (Dictionary<string, object?> record, ulong id) WriteInsert(
+    private static (Dictionary<string, object?> record, ulong id, long place) WriteInsert(
         TableHandle table,
         Dictionary<string, UpsertField> fieldsByName)
     {
@@ -222,10 +249,10 @@ internal static class UpsertExecutor
         table.Index.WritePlace(id, place);
 
         var record = WriteRecord(table, place, fieldsByName, isNew: true);
-        return (record, id);
+        return (record, id, place);
     }
 
-    private static (Dictionary<string, object?> record, ulong id) WriteWithId(
+    private static (Dictionary<string, object?> record, ulong id, long place) WriteWithId(
         TableHandle table,
         Dictionary<string, UpsertField> fieldsByName,
         ulong id)
@@ -251,7 +278,7 @@ internal static class UpsertExecutor
             table.Index.WriteNextId(id + 1);
 
         var record = WriteRecord(table, place, fieldsByName, isNew);
-        return (record, id);
+        return (record, id, place);
     }
 
     private static Dictionary<string, object?> WriteRecord(

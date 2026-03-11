@@ -104,6 +104,18 @@ internal sealed class TableCache : IDisposable
         }
     }
 
+    /// <summary>
+    /// Returns all currently opened table handles (only tables that have been loaded into memory).
+    /// </summary>
+    public IEnumerable<(string Path, TableHandle Table)> GetAllOpened()
+    {
+        foreach (var (path, lazy) in _tables)
+        {
+            if (lazy.IsValueCreated)
+                yield return (path, lazy.Value);
+        }
+    }
+
     public void Dispose()
     {
         foreach (var lazy in _tables.Values)

@@ -225,6 +225,7 @@ internal static class GetParser
         else if (ctx.IsKeyword(token, "avg")) fn = AggregateFunction.Avg;
         else if (ctx.IsKeyword(token, "min")) fn = AggregateFunction.Min;
         else if (ctx.IsKeyword(token, "max")) fn = AggregateFunction.Max;
+        else if (ctx.IsKeyword(token, "count")) fn = AggregateFunction.Count;
 
         if (fn.HasValue)
         {

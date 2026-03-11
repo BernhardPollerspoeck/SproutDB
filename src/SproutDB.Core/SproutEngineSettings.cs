@@ -59,4 +59,17 @@ public sealed class SproutEngineSettings
     /// Null means auth is disabled (all queries allowed without key).
     /// </summary>
     public string? MasterKey { get; init; }
+
+    /// <summary>
+    /// Interval between TTL cleanup passes.
+    /// Each pass cleans one table (round-robin).
+    /// Default: 5 minutes. Set to <see cref="Timeout.InfiniteTimeSpan"/> to disable.
+    /// </summary>
+    public TimeSpan TtlCleanupInterval { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Maximum number of expired rows to delete per TTL cleanup pass.
+    /// Default: 1000.
+    /// </summary>
+    public int TtlCleanupBatchSize { get; set; } = 1000;
 }

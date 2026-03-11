@@ -14,20 +14,22 @@ internal static class UpsertParser
 
         // Single {…} or bulk [{…}, {…}]
         List<List<UpsertField>> records;
+        List<long> rowTtlSeconds;
         var next = ctx.Peek();
 
         if (next.Type == TokenType.LeftBracket)
         {
             ctx.Advance();
-            records = ParseBulkRecords(ctx);
+            (records, rowTtlSeconds) = ParseBulkRecordsWithTtl(ctx);
             if (ctx.HasErrors) return ctx.Fail();
         }
         else if (next.Type == TokenType.LeftBrace)
         {
             ctx.Advance();
-            var fields = ParseFields(ctx);
+            var (fields, ttl) = ParseFieldsWithTtl(ctx);
             if (ctx.HasErrors) return ctx.Fail();
             records = [fields];
+            rowTtlSeconds = [ttl];
         }
         else
         {
@@ -54,12 +56,14 @@ internal static class UpsertParser
             Table = tableName,
             Records = records,
             OnColumn = onColumn,
+            RowTtlSeconds = rowTtlSeconds,
         });
     }
 
-    private static List<List<UpsertField>> ParseBulkRecords(ParserContext ctx)
+    private static (List<List<UpsertField>>, List<long>) ParseBulkRecordsWithTtl(ParserContext ctx)
     {
         var records = new List<List<UpsertField>>();
+        var ttls = new List<long>();
 
         while (true)
         {
@@ -67,13 +71,14 @@ internal static class UpsertParser
             if (token.Type != TokenType.LeftBrace)
             {
                 ctx.AddError(token, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_OPEN_BRACE);
-                return records;
+                return (records, ttls);
             }
             ctx.Advance();
 
-            var fields = ParseFields(ctx);
-            if (ctx.HasErrors) return records;
+            var (fields, ttl) = ParseFieldsWithTtl(ctx);
+            if (ctx.HasErrors) return (records, ttls);
             records.Add(fields);
+            ttls.Add(ttl);
 
             if (ctx.Peek().Type == TokenType.Comma)
             {
@@ -88,28 +93,71 @@ internal static class UpsertParser
             }
 
             ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected ',' or ']'");
-            return records;
+            return (records, ttls);
         }
 
-        return records;
+        return (records, ttls);
     }
 
-    private static List<UpsertField> ParseFields(ParserContext ctx)
+    private static (List<UpsertField>, long) ParseFieldsWithTtl(ParserContext ctx)
     {
         var fields = new List<UpsertField>();
+        long ttlSeconds = 0;
 
         // Empty object {}
         if (ctx.Peek().Type == TokenType.RightBrace)
         {
             ctx.Advance();
-            return fields;
+            return (fields, 0);
         }
 
         while (true)
         {
-            var field = ParseField(ctx);
-            if (ctx.HasErrors) return fields;
-            fields.Add(field);
+            // Check if this field is 'ttl' — special handling
+            var peekToken = ctx.Peek();
+            if (peekToken.Type == TokenType.Identifier && ctx.IsKeyword(peekToken, "ttl"))
+            {
+                ctx.Advance(); // consume 'ttl'
+
+                // Colon
+                var colonToken = ctx.Peek();
+                if (colonToken.Type != TokenType.Colon)
+                {
+                    ctx.AddError(colonToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLON);
+                    return (fields, 0);
+                }
+                ctx.Advance();
+
+                // ttl: 0 means no row TTL
+                var valToken = ctx.Peek();
+                if (valToken.Type == TokenType.IntegerLiteral)
+                {
+                    var nextAfterNum = ctx.PeekAt(1);
+                    if (nextAfterNum.Type == TokenType.Identifier)
+                    {
+                        // Duration like 7d, 24h, 30m
+                        ttlSeconds = TtlDuration.ParseFromTokens(ctx);
+                        if (ctx.HasErrors) return (fields, 0);
+                    }
+                    else
+                    {
+                        // Plain integer (ttl: 0)
+                        ttlSeconds = long.Parse(ctx.GetText(valToken));
+                        ctx.Advance();
+                    }
+                }
+                else
+                {
+                    ctx.AddError(valToken, ErrorCodes.SYNTAX_ERROR, "expected TTL duration (e.g. 7d, 24h, 30m) or 0");
+                    return (fields, 0);
+                }
+            }
+            else
+            {
+                var field = ParseField(ctx);
+                if (ctx.HasErrors) return (fields, 0);
+                fields.Add(field);
+            }
 
             if (ctx.Peek().Type == TokenType.Comma)
             {
@@ -124,10 +172,10 @@ internal static class UpsertParser
             }
 
             ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COMMA_OR_CLOSE_BRACE);
-            return fields;
+            return (fields, 0);
         }
 
-        return fields;
+        return (fields, ttlSeconds);
     }
 
     private static UpsertField ParseField(ParserContext ctx)

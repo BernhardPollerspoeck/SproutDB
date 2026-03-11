@@ -18,6 +18,7 @@ internal static class DescribeExecutor
             {
                 Table = tableName,
                 Columns = columns,
+                TtlSeconds = table.Schema.TtlSeconds,
             },
         };
     }

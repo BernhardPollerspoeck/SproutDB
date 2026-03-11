@@ -95,6 +95,7 @@ internal enum AggregateFunction
     Avg,
     Min,
     Max,
+    Count,
 }
 
 internal readonly struct SelectColumn(string name, int position, int length, string? alias = null)

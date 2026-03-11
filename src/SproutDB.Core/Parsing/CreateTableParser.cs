@@ -24,6 +24,14 @@ internal static class CreateTableParser
             if (ctx.HasErrors) return ctx.Fail();
         }
 
+        // Optional TTL: ttl 24h
+        long ttlSeconds = 0;
+        if (ctx.MatchKeyword("ttl"))
+        {
+            ttlSeconds = TtlDuration.ParseFromTokens(ctx);
+            if (ctx.HasErrors) return ctx.Fail();
+        }
+
         ctx.ExpectEof();
         if (ctx.HasErrors) return ctx.Fail();
 
@@ -31,6 +39,7 @@ internal static class CreateTableParser
         {
             Table = tableName,
             Columns = columns,
+            TtlSeconds = ttlSeconds,
         });
     }
 

@@ -3,6 +3,7 @@ namespace SproutDB.Core.Storage;
 internal sealed class TableSchema
 {
     public long CreatedTicks { get; set; }
+    public long TtlSeconds { get; set; } // 0 = no table TTL
     public List<ColumnSchemaEntry> Columns { get; set; } = [];
 }
 

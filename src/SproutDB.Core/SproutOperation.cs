@@ -29,4 +29,5 @@ public enum SproutOperation : byte
     Revoke = 21,
     Restrict = 22,
     Unrestrict = 23,
+    PurgeTtl = 24,
 }

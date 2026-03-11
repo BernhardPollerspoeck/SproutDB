@@ -6,6 +6,7 @@ internal sealed class UpsertQuery : IQuery
     public required string Table { get; init; }
     public required List<List<UpsertField>> Records { get; init; }
     public string? OnColumn { get; init; }
+    public required List<long> RowTtlSeconds { get; init; } // per record, 0 = no row TTL
 }
 
 internal sealed class UpsertField
@@ -29,6 +30,7 @@ internal enum UpsertValueKind : byte
     Integer,
     Float,
     Boolean,
+    Duration,
 }
 
 internal static class UpsertValueKindNames
@@ -40,6 +42,7 @@ internal static class UpsertValueKindNames
         UpsertValueKind.Integer => "integer",
         UpsertValueKind.Float => "float",
         UpsertValueKind.Boolean => "boolean",
+        UpsertValueKind.Duration => "duration",
         _ => "unknown",
     };
 }

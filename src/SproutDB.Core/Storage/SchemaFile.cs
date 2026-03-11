@@ -7,6 +7,7 @@ namespace SproutDB.Core.Storage;
 ///
 /// Layout:
 ///   [8 bytes] created_ticks (long, UTC)
+///   [8 bytes] ttl_seconds (long, 0 = no TTL)
 ///   [2 bytes] column_count (ushort)
 ///   per column:
 ///     [1 byte]  name_length
@@ -30,6 +31,7 @@ internal static class SchemaFile
 
         // Header
         bw.Write(schema.CreatedTicks);
+        bw.Write(schema.TtlSeconds);
         bw.Write((ushort)schema.Columns.Count);
 
         // Columns
@@ -68,6 +70,7 @@ internal static class SchemaFile
         using var br = new BinaryReader(fs, Encoding.UTF8);
 
         var createdTicks = br.ReadInt64();
+        var ttlSeconds = br.ReadInt64();
         var columnCount = br.ReadUInt16();
 
         var columns = new List<ColumnSchemaEntry>(columnCount);
@@ -102,6 +105,7 @@ internal static class SchemaFile
         return new TableSchema
         {
             CreatedTicks = createdTicks,
+            TtlSeconds = ttlSeconds,
             Columns = columns,
         };
     }

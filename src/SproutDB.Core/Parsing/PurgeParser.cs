@@ -24,6 +24,9 @@ internal static class PurgeParser
         if (ctx.MatchKeyword("apikey"))
             return PurgeApiKeyParser.Parse(ctx);
 
+        if (ctx.MatchKeyword("ttl"))
+            return ParseTtl(ctx);
+
         return ctx.Error(current, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_PURGE_TARGET);
     }
 
@@ -114,6 +117,21 @@ internal static class PurgeParser
             Table = tableName,
             Column = colName,
         });
+    }
+
+    private static ParseResult ParseTtl(ParserContext ctx)
+    {
+        var tableToken = ctx.Peek();
+        if (tableToken.Type != TokenType.Identifier)
+            return ctx.Error(tableToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_TABLE_NAME);
+
+        var tableName = ctx.GetLowercaseText(tableToken);
+        ctx.Advance();
+
+        ctx.ExpectEof();
+        if (ctx.HasErrors) return ctx.Fail();
+
+        return ParseResult.Ok(new PurgeTtlQuery { Table = tableName });
     }
 
     private static ParseResult ParseDatabase(ParserContext ctx)

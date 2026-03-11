@@ -48,6 +48,9 @@ internal static class DeleteExecutor
             // Free slot (marks as deleted, decrements count)
             table.Index.FreeSlot(place);
 
+            // Clear TTL entry
+            table.Ttl?.Clear(place);
+
             // Write null flag for each column
             foreach (var col in table.Schema.Columns)
                 table.GetColumn(col.Name).WriteNull(place);

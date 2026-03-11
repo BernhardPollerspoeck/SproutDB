@@ -11,14 +11,19 @@ internal sealed class TableHandle : IDisposable
     public string TablePath => _tablePath;
     public TableSchema Schema { get; private set; }
     public IndexHandle Index { get; }
+    public TtlHandle? Ttl { get; private set; }
 
-    private TableHandle(string tablePath, TableSchema schema, IndexHandle index, int chunkSize)
+    /// <summary>Whether this table has any TTL configured (table-level or row-level possible).</summary>
+    public bool HasTtl => Ttl is not null;
+
+    private TableHandle(string tablePath, TableSchema schema, IndexHandle index, TtlHandle? ttl, int chunkSize)
     {
         _tablePath = tablePath;
         _schemaPath = Path.Combine(tablePath, "_schema.bin");
         _chunkSize = chunkSize;
         Schema = schema;
         Index = index;
+        Ttl = ttl;
     }
 
     public static TableHandle Open(string tablePath, int chunkSize = StorageConstants.CHUNK_SIZE)
@@ -29,7 +34,13 @@ internal sealed class TableHandle : IDisposable
         var indexPath = Path.Combine(tablePath, "_index");
         var index = new IndexHandle(indexPath, chunkSize);
 
-        var handle = new TableHandle(tablePath, schema, index, chunkSize);
+        // Open TTL handle if _ttl file exists
+        TtlHandle? ttl = null;
+        var ttlPath = Path.Combine(tablePath, "_ttl");
+        if (File.Exists(ttlPath))
+            ttl = new TtlHandle(ttlPath, chunkSize);
+
+        var handle = new TableHandle(tablePath, schema, index, ttl, chunkSize);
 
         // Open all column handles + B-Trees
         foreach (var col in schema.Columns)
@@ -257,9 +268,21 @@ internal sealed class TableHandle : IDisposable
         return total;
     }
 
+    /// <summary>
+    /// Creates and opens the _ttl file for this table.
+    /// </summary>
+    public void EnableTtl()
+    {
+        if (Ttl is not null) return;
+        var ttlPath = Path.Combine(_tablePath, "_ttl");
+        TtlHandle.CreateNew(ttlPath, _chunkSize);
+        Ttl = new TtlHandle(ttlPath, _chunkSize);
+    }
+
     public void Flush()
     {
         Index.Flush();
+        Ttl?.Flush();
         foreach (var col in _columns.Values)
             col.Flush();
         foreach (var btree in _btrees.Values)
@@ -274,6 +297,7 @@ internal sealed class TableHandle : IDisposable
     public void Dispose()
     {
         Index.Dispose();
+        Ttl?.Dispose();
         foreach (var col in _columns.Values)
             col.Dispose();
         _columns.Clear();

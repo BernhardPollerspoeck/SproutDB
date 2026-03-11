@@ -38,6 +38,7 @@ internal static class CreateTableExecutor
         var schema = new TableSchema
         {
             CreatedTicks = DateTime.UtcNow.Ticks,
+            TtlSeconds = q.TtlSeconds,
             Columns = schemaColumns,
         };
 
@@ -46,6 +47,10 @@ internal static class CreateTableExecutor
         // Create _index file (slot-based format with header)
         var indexPath = Path.Combine(tablePath, "_index");
         IndexHandle.CreateNew(indexPath, chunkSize);
+
+        // Create _ttl file if table has TTL
+        if (q.TtlSeconds > 0)
+            TtlHandle.CreateNew(Path.Combine(tablePath, "_ttl"), chunkSize);
 
         // Create .col files for each column
         foreach (var col in q.Columns)

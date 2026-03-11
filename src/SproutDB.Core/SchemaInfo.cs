@@ -12,4 +12,5 @@ public sealed class SchemaInfo
     public List<ColumnInfo>? Columns { get; init; }
     public string? Column { get; init; }
     public string? Index { get; init; }
+    public long TtlSeconds { get; init; }
 }

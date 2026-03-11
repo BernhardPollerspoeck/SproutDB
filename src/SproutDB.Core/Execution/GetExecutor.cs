@@ -161,11 +161,14 @@ internal static class GetExecutor
         extraColumns = MergeExtras(extraColumns, followExtras);
         var effectiveSelect = MergeSelectWithExtra(q.Select, extraColumns);
 
+        // Snapshot now for TTL filtering (once per query, not per row)
+        var nowMs = table.HasTtl ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : 0L;
+
         // Try B-Tree shortcut for simple WHERE conditions
         var btreeResult = TryBTreeLookup(table, q.Where, filter);
         var data = btreeResult is not null
-            ? ReadRowsByPlaces(table, effectiveSelect, q.ExcludeSelect, btreeResult, filter)
-            : ReadRows(table, effectiveSelect, q.ExcludeSelect, filter);
+            ? ReadRowsByPlaces(table, effectiveSelect, q.ExcludeSelect, btreeResult, filter, nowMs)
+            : ReadRows(table, effectiveSelect, q.ExcludeSelect, filter, nowMs);
 
         // Compute and add computed field values
         if (q.ComputedSelect is not null)
@@ -364,12 +367,13 @@ internal static class GetExecutor
     private static SproutResponse ExecuteAggregate(TableHandle table, GetQuery q)
     {
         var filter = WhereEngine.PrepareFilter(table, q.Where);
+        var nowMs = table.HasTtl ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : 0L;
         var colName = q.AggregateColumn!; // validated non-null before call
         var fn = q.Aggregate!.Value;
         var alias = q.AggregateAlias ?? AggregateName(fn);
 
         // Read values for the aggregate column, applying where filter
-        var values = ReadAggregateValues(table, colName, filter);
+        var values = ReadAggregateValues(table, colName, filter, nowMs);
 
         object? result = fn switch
         {
@@ -377,6 +381,7 @@ internal static class GetExecutor
             AggregateFunction.Avg => ComputeAvg(values),
             AggregateFunction.Min => ComputeMinMax(values, min: true),
             AggregateFunction.Max => ComputeMinMax(values, min: false),
+            AggregateFunction.Count => (long)values.Count,
             _ => null,
         };
 
@@ -395,10 +400,11 @@ internal static class GetExecutor
     private static SproutResponse ExecuteGrouped(TableHandle table, GetQuery q)
     {
         var filter = WhereEngine.PrepareFilter(table, q.Where);
+        var nowMs = table.HasTtl ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : 0L;
         var groupByCols = q.GroupBy!; // validated non-null before call
 
         // Build groups: key = composite of group-by values, value = list of (id, place)
-        var groups = BuildGroups(table, groupByCols, filter);
+        var groups = BuildGroups(table, groupByCols, filter, nowMs);
 
         // Build result rows
         var data = new List<Dictionary<string, object?>>(groups.Count);
@@ -440,6 +446,7 @@ internal static class GetExecutor
                     AggregateFunction.Avg => ComputeAvg(values),
                     AggregateFunction.Min => ComputeMinMax(values, min: true),
                     AggregateFunction.Max => ComputeMinMax(values, min: false),
+                    AggregateFunction.Count => (long)values.Count,
                     _ => null,
                 };
 
@@ -520,9 +527,10 @@ internal static class GetExecutor
     }
 
     private static Dictionary<string, List<(ulong Id, long Place)>> BuildGroups(
-        TableHandle table, List<SelectColumn> groupByCols, WhereEngine.FilterNode? filter)
+        TableHandle table, List<SelectColumn> groupByCols, WhereEngine.FilterNode? filter, long nowMs = 0)
     {
         var groups = new Dictionary<string, List<(ulong, long)>>();
+        var ttl = table.Ttl;
 
         // Resolve group-by column handles
         var handles = new (string Name, ColumnHandle? Handle)[groupByCols.Count];
@@ -534,6 +542,7 @@ internal static class GetExecutor
 
         table.Index.ForEachUsed((id, place) =>
         {
+            if (ttl is not null && nowMs > 0) { var ea = ttl.ReadExpiresAt(place); if (ea > 0 && nowMs > ea) return; }
             if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place)) return;
 
             // Build group key from column values
@@ -676,9 +685,12 @@ internal static class GetExecutor
     {
         var index = new Dictionary<string, List<(ulong, long)>>();
         ColumnHandle? colHandle = joinColumn == "_id" ? null : table.GetColumn(joinColumn);
+        var ttl = table.Ttl;
+        var nowMs = ttl is not null ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : 0L;
 
         table.Index.ForEachUsed((id, place) =>
         {
+            if (ttl is not null && nowMs > 0) { var ea = ttl.ReadExpiresAt(place); if (ea > 0 && nowMs > ea) return; }
             if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place)) return;
 
             object? val = colHandle is null ? (object)id : colHandle.ReadValue(place);
@@ -696,14 +708,16 @@ internal static class GetExecutor
         return index;
     }
 
-    private static List<object> ReadAggregateValues(TableHandle table, string colName, WhereEngine.FilterNode? filter)
+    private static List<object> ReadAggregateValues(TableHandle table, string colName, WhereEngine.FilterNode? filter, long nowMs = 0)
     {
         var values = new List<object>();
+        var ttl = table.Ttl;
 
         if (colName == "_id")
         {
             table.Index.ForEachUsed((id, place) =>
             {
+                if (ttl is not null && nowMs > 0) { var ea = ttl.ReadExpiresAt(place); if (ea > 0 && nowMs > ea) return; }
                 if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place)) return;
                 values.Add(id);
             });
@@ -713,6 +727,7 @@ internal static class GetExecutor
         var handle = table.GetColumn(colName);
         table.Index.ForEachUsed((id, place) =>
         {
+            if (ttl is not null && nowMs > 0) { var ea = ttl.ReadExpiresAt(place); if (ea > 0 && nowMs > ea) return; }
             if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place)) return;
 
             var val = handle.ReadValue(place);
@@ -769,6 +784,7 @@ internal static class GetExecutor
         AggregateFunction.Avg => "avg",
         AggregateFunction.Min => "min",
         AggregateFunction.Max => "max",
+        AggregateFunction.Count => "count",
         _ => fn.ToString().ToLowerInvariant(),
     };
 
@@ -799,13 +815,21 @@ internal static class GetExecutor
     // ── Read rows ─────────────────────────────────────────────
 
     private static List<Dictionary<string, object?>> ReadRows(
-        TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect, WhereEngine.FilterNode? filter)
+        TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect, WhereEngine.FilterNode? filter, long nowMs = 0)
     {
         var projection = ResolveProjection(table, selectColumns, excludeSelect);
         var data = new List<Dictionary<string, object?>>();
+        var ttl = table.Ttl;
 
         table.Index.ForEachUsed((id, place) =>
         {
+            // TTL filter: skip expired rows
+            if (ttl is not null && nowMs > 0)
+            {
+                var expiresAt = ttl.ReadExpiresAt(place);
+                if (expiresAt > 0 && nowMs > expiresAt) return;
+            }
+
             if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place))
                 return;
             data.Add(ProjectRow(projection, id, place));
@@ -1114,16 +1138,24 @@ internal static class GetExecutor
     /// </summary>
     private static List<Dictionary<string, object?>> ReadRowsByPlaces(
         TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect,
-        List<long> places, WhereEngine.FilterNode? filter)
+        List<long> places, WhereEngine.FilterNode? filter, long nowMs = 0)
     {
         var projection = ResolveProjection(table, selectColumns, excludeSelect);
         var data = new List<Dictionary<string, object?>>(places.Count);
+        var ttl = table.Ttl;
 
         foreach (var place in places)
         {
             // Resolve ID for this place
             var id = table.Index.FindIdForPlace(place);
             if (id == 0) continue; // place no longer valid (deleted)
+
+            // TTL filter: skip expired rows
+            if (ttl is not null && nowMs > 0)
+            {
+                var expiresAt = ttl.ReadExpiresAt(place);
+                if (expiresAt > 0 && nowMs > expiresAt) continue;
+            }
 
             // Apply the full filter to handle GT vs GTE, etc.
             if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place))

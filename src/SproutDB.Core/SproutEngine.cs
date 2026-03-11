@@ -32,6 +32,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     // Background cycles
     private readonly Task _flushTask;
     private readonly Task _walSyncTask;
+    private readonly Task _ttlCleanupTask;
     private readonly TimeSpan _walSyncInterval;
     private readonly CancellationTokenSource _disposeCts = new();
     private volatile bool _disposed;
@@ -76,6 +77,8 @@ public sealed class SproutEngine : ISproutServer, IDisposable
                 ChunkSize = settings.ChunkSize,
                 AutoIndex = settings.AutoIndex,
                 MasterKey = authOptions.MasterKey,
+                TtlCleanupInterval = settings.TtlCleanupInterval,
+                TtlCleanupBatchSize = settings.TtlCleanupBatchSize,
             };
         }
 
@@ -114,6 +117,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         // ── Start background cycles ──────────────────────────────
         _flushTask = RunFlushCycle(settings.FlushInterval);
         _walSyncTask = RunWalSyncCycle(_walSyncInterval);
+        _ttlCleanupTask = RunTtlCleanupCycle(settings.TtlCleanupInterval);
     }
 
     /// <summary>
@@ -533,6 +537,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             PurgeTableQuery => "purge_table",
             CreateIndexQuery => "create_index",
             PurgeIndexQuery => "purge_index",
+            PurgeTtlQuery => "purge_ttl",
             _ => null,
         };
     }
@@ -549,6 +554,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         AlterColumnQuery q => q.Table,
         CreateIndexQuery q => q.Table,
         PurgeIndexQuery q => q.Table,
+        PurgeTtlQuery q => q.Table,
         _ => null,
     };
 
@@ -827,6 +833,108 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         _writeChannel.Writer.TryWrite(action);
     }
 
+    // ── TTL cleanup ────────────────────────────────────────
+
+    private int _ttlCleanupRoundRobinIndex;
+
+    private async Task RunTtlCleanupCycle(TimeSpan interval)
+    {
+        if (interval == Timeout.InfiniteTimeSpan)
+            return;
+
+        using var timer = new PeriodicTimer(interval);
+
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_disposeCts.Token))
+            {
+                PostTtlCleanup();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on dispose
+        }
+    }
+
+    private void PostTtlCleanup()
+    {
+        var tcs = new TaskCompletionSource<SproutResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var action = new Action(tcs, () =>
+        {
+            ExecuteTtlCleanup();
+            return new SproutResponse { Operation = SproutOperation.Get }; // dummy
+        });
+        _writeChannel.Writer.TryWrite(action);
+    }
+
+    private void ExecuteTtlCleanup()
+    {
+        // Collect all tables that have TTL enabled
+        var ttlTables = new List<(string Path, Storage.TableHandle Table)>();
+        foreach (var (path, table) in _tableCache.GetAllOpened())
+        {
+            if (table.HasTtl)
+                ttlTables.Add((path, table));
+        }
+
+        if (ttlTables.Count == 0) return;
+
+        // Round-robin: pick one table per pass
+        var idx = _ttlCleanupRoundRobinIndex % ttlTables.Count;
+        _ttlCleanupRoundRobinIndex = idx + 1;
+        var (_, target) = ttlTables[idx];
+
+        var ttl = target.Ttl;
+        if (ttl is null) return;
+
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var maxBatch = _settings.TtlCleanupBatchSize;
+
+        // Collect expired rows
+        var expired = new List<long>(); // places
+        target.Index.ForEachUsed((id, place) =>
+        {
+            if (expired.Count >= maxBatch) return;
+
+            var expiresAt = ttl.ReadExpiresAt(place);
+            if (expiresAt > 0 && nowMs > expiresAt)
+                expired.Add(place);
+        });
+
+        // Delete expired rows
+        foreach (var place in expired)
+        {
+            // Remove from B-Trees
+            foreach (var col in target.Schema.Columns)
+            {
+                if (target.HasBTree(col.Name))
+                {
+                    var colHandle = target.GetColumn(col.Name);
+                    if (!colHandle.IsNullAtPlace(place))
+                    {
+                        var val = colHandle.ReadValue(place);
+                        if (val is not null)
+                        {
+                            var encoded = colHandle.EncodeValueToBytes(val.ToString() ?? "");
+                            target.GetBTree(col.Name).Remove(encoded, place);
+                        }
+                    }
+                }
+            }
+
+            // Free slot
+            target.Index.FreeSlot(place);
+
+            // Clear TTL
+            ttl.Clear(place);
+
+            // Null out columns
+            foreach (var col in target.Schema.Columns)
+                target.GetColumn(col.Name).WriteNull(place);
+        }
+    }
+
     // ── WAL ID resolution ────────────────────────────────────
 
     private static bool IsMutatingQuery(IQuery query)
@@ -834,7 +942,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         return query is CreateTableQuery or UpsertQuery or AddColumnQuery
             or PurgeColumnQuery or PurgeTableQuery or PurgeDatabaseQuery
             or RenameColumnQuery or AlterColumnQuery or DeleteQuery
-            or CreateIndexQuery or PurgeIndexQuery;
+            or CreateIndexQuery or PurgeIndexQuery or PurgeTtlQuery;
     }
 
     /// <summary>
@@ -964,6 +1072,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             DeleteQuery q => ExecuteWithTable(query, dbPath, q.Table, table => DeleteExecutor.Execute(query, table, q)),
             CreateIndexQuery q => ExecuteWithTable(query, dbPath, q.Table, table => CreateIndexExecutor.Execute(query, table, q)),
             PurgeIndexQuery q => ExecuteWithTable(query, dbPath, q.Table, table => PurgeIndexExecutor.Execute(query, table, q)),
+            PurgeTtlQuery q => ExecuteWithTable(query, dbPath, q.Table, table => ExecutePurgeTtl(query, table, q)),
             _ => ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, "operation not supported"),
         };
     }
@@ -1033,6 +1142,19 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         _tableCache.EvictTable(tablePath);
 
         return PurgeTableExecutor.Execute(query, q, dbPath);
+    }
+
+    private static SproutResponse ExecutePurgeTtl(string query, TableHandle table, PurgeTtlQuery q)
+    {
+        // Set table TTL to 0 (no TTL). Row-TTLs remain in _ttl file but table-level is cleared.
+        table.Schema.TtlSeconds = 0;
+        table.SaveSchema();
+
+        return new SproutResponse
+        {
+            Operation = SproutOperation.PurgeTtl,
+            Schema = new SchemaInfo { Table = q.Table },
+        };
     }
 
     // ── Table-scoped execution ──────────────────────────────
@@ -1248,6 +1370,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         // 2. Wait for timer loops to exit
         _flushTask.GetAwaiter().GetResult();
         _walSyncTask.GetAwaiter().GetResult();
+        _ttlCleanupTask.GetAwaiter().GetResult();
 
         // 3. Complete the writer channel → writer loop drains and exits
         _writeChannel.Writer.Complete();
