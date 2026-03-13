@@ -21,6 +21,11 @@ internal static class CreateIndexExecutor
         var schema = colHandle.Schema;
         ColumnTypes.TryParse(schema.Type, out var colType);
 
+        // Blob columns cannot be indexed
+        if (colType == ColumnType.Blob)
+            return ResponseHelper.Error(query, ErrorCodes.TYPE_MISMATCH,
+                "cannot create index on blob column");
+
         // Unique: check existing data for duplicates before building the index
         if (q.Unique)
         {

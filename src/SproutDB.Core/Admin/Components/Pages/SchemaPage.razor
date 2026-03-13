@@ -208,7 +208,7 @@
                                             <span class="schema-idx-badge @(col.IsAutoIndex ? "auto" : "") @(col.IsUnique ? "unique" : "")">@(col.IsAutoIndex ? "AUTO" : col.IsUnique ? "UNQ" : "IDX")</span>
                                             <button class="idx-btn idx-remove" title="Purge index" @onclick="() => PurgeIndex(table, col.Name)" @onclick:stopPropagation="true">&#10005;</button>
                                         }
-                                        else
+                                        else if (col.Type != "blob")
                                         {
                                             <button class="idx-btn idx-create" title="Create index" @onclick="() => CreateIndex(table, col.Name)" @onclick:stopPropagation="true">+ IDX</button>
                                             <button class="idx-btn idx-unique" title="Create unique index" @onclick="() => CreateUniqueIndex(table, col.Name)" @onclick:stopPropagation="true">+ UNQ</button>
@@ -327,7 +327,7 @@
     private bool _shouldFocusAlter;
 
     private static readonly string[] ColumnTypes =
-        ["string", "bool", "sbyte", "ubyte", "sshort", "ushort", "sint", "uint", "slong", "ulong", "float", "double", "date", "time", "datetime"];
+        ["string", "bool", "sbyte", "ubyte", "sshort", "ushort", "sint", "uint", "slong", "ulong", "float", "double", "date", "time", "datetime", "blob"];
 
     protected override void OnInitialized()
     {

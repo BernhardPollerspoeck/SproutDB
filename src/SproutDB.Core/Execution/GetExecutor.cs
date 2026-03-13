@@ -672,7 +672,7 @@ internal static class GetExecutor
                     var flat = new Dictionary<string, object?>(row);
                     flat[$"{alias}._id"] = id;
                     foreach (var (name, hasAlias, handle) in targetColumns)
-                        flat[hasAlias ? name : $"{alias}.{name}"] = handle.ReadValue(place);
+                        flat[hasAlias ? name : $"{alias}.{name}"] = ReadColumnValue(handle, place, id, name, targetTable);
                     result.Add(flat);
                 }
             }
@@ -700,13 +700,30 @@ internal static class GetExecutor
                         flat[col] = null;
                     flat[$"{alias}._id"] = id;
                     foreach (var (name, hasAlias, handle) in targetColumns)
-                        flat[hasAlias ? name : $"{alias}.{name}"] = handle.ReadValue(place);
+                        flat[hasAlias ? name : $"{alias}.{name}"] = ReadColumnValue(handle, place, id, name, targetTable);
                     result.Add(flat);
                 }
             }
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Reads a column value, handling blob columns by reading the .blob file and returning base64.
+    /// </summary>
+    private static object? ReadColumnValue(ColumnHandle handle, long place, ulong id, string colName, TableHandle table)
+    {
+        if (handle.Type == ColumnType.Blob)
+        {
+            var byteCount = handle.ReadValue(place);
+            if (byteCount is null) return null;
+            var blobPath = table.GetBlobPath(colName, (long)id);
+            if (File.Exists(blobPath))
+                return Convert.ToBase64String(table.ReadBlobFile(colName, (long)id));
+            return null;
+        }
+        return handle.ReadValue(place);
     }
 
     private static Dictionary<string, object?> BuildNullTargetRow(
@@ -872,7 +889,7 @@ internal static class GetExecutor
 
             if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place))
                 return;
-            data.Add(ProjectRow(projection, id, place, ttl));
+            data.Add(ProjectRow(projection, id, place, ttl, table));
         });
 
         return data;
@@ -948,14 +965,34 @@ internal static class GetExecutor
     }
 
     private static Dictionary<string, object?> ProjectRow(
-        List<ProjectionEntry> projection, ulong id, long place, TtlHandle? ttl = null)
+        List<ProjectionEntry> projection, ulong id, long place, TtlHandle? ttl = null, TableHandle? table = null)
     {
         var record = new Dictionary<string, object?>(projection.Count);
         foreach (var entry in projection)
         {
             if (entry.Handle is not null)
             {
-                record[entry.Name] = entry.Handle.ReadValue(place);
+                if (entry.Handle.Type == ColumnType.Blob && table is not null)
+                {
+                    // Read blob: if .col has a value, read the .blob file and return base64
+                    var byteCount = entry.Handle.ReadValue(place);
+                    if (byteCount is not null)
+                    {
+                        var blobPath = table.GetBlobPath(entry.Name, (long)id);
+                        if (File.Exists(blobPath))
+                            record[entry.Name] = Convert.ToBase64String(table.ReadBlobFile(entry.Name, (long)id));
+                        else
+                            record[entry.Name] = null;
+                    }
+                    else
+                    {
+                        record[entry.Name] = null;
+                    }
+                }
+                else
+                {
+                    record[entry.Name] = entry.Handle.ReadValue(place);
+                }
                 continue;
             }
 
@@ -1223,7 +1260,7 @@ internal static class GetExecutor
             if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place))
                 continue;
 
-            data.Add(ProjectRow(projection, id, place, ttl));
+            data.Add(ProjectRow(projection, id, place, ttl, table));
         }
 
         return data;

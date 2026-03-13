@@ -253,7 +253,7 @@ internal static class UpsertExecutor
         var place = table.Index.FindNextPlace();
         table.Index.WritePlace(id, place);
 
-        var record = WriteRecord(table, place, fieldsByName, isNew: true);
+        var record = WriteRecord(table, place, id, fieldsByName, isNew: true);
         return (record, id, place);
     }
 
@@ -282,13 +282,14 @@ internal static class UpsertExecutor
         if (id >= currentNextId)
             table.Index.WriteNextId(id + 1);
 
-        var record = WriteRecord(table, place, fieldsByName, isNew);
+        var record = WriteRecord(table, place, id, fieldsByName, isNew);
         return (record, id, place);
     }
 
     private static Dictionary<string, object?> WriteRecord(
         TableHandle table,
         long place,
+        ulong id,
         Dictionary<string, UpsertField> fieldsByName,
         bool isNew)
     {
@@ -297,11 +298,12 @@ internal static class UpsertExecutor
         foreach (var colSchema in table.Schema.Columns)
         {
             var colHandle = table.GetColumn(colSchema.Name);
+            var isBlob = colHandle.Type == ColumnType.Blob;
             colHandle.EnsureCapacity(place + 1);
 
             // Read old encoded value for B-Tree removal (only on update when B-Tree exists)
             byte[]? oldEncoded = null;
-            if (!isNew && table.HasBTree(colSchema.Name) && !colHandle.IsNullAtPlace(place))
+            if (!isNew && !isBlob && table.HasBTree(colSchema.Name) && !colHandle.IsNullAtPlace(place))
             {
                 var oldVal = colHandle.ReadValue(place);
                 if (oldVal is not null)
@@ -315,9 +317,21 @@ internal static class UpsertExecutor
                     colHandle.WriteNull(place);
                     record[colSchema.Name] = null;
 
+                    // Delete blob file if exists
+                    if (isBlob)
+                        table.DeleteBlobFile(colSchema.Name, (long)id);
+
                     // Remove old value from B-Tree
                     if (oldEncoded is not null)
                         table.GetBTree(colSchema.Name).Remove(oldEncoded, place);
+                }
+                else if (isBlob)
+                {
+                    // Decode base64 → write .blob file → store byte count in .col
+                    var blobBytes = Convert.FromBase64String(field.Value.Raw!);
+                    table.WriteBlobFile(colSchema.Name, (long)id, blobBytes);
+                    colHandle.WriteValue(place, blobBytes.Length.ToString());
+                    record[colSchema.Name] = (long)blobBytes.Length;
                 }
                 else
                 {
@@ -336,7 +350,7 @@ internal static class UpsertExecutor
             }
             else if (isNew)
             {
-                if (colSchema.Default is not null)
+                if (colSchema.Default is not null && !isBlob)
                 {
                     record[colSchema.Name] = colHandle.WriteValue(place, colSchema.Default);
 
@@ -355,7 +369,16 @@ internal static class UpsertExecutor
             }
             else
             {
-                record[colSchema.Name] = colHandle.ReadValue(place);
+                // Existing row, field not in update — read current value
+                if (isBlob)
+                {
+                    // Return byte count from .col (not the blob data itself)
+                    record[colSchema.Name] = colHandle.ReadValue(place);
+                }
+                else
+                {
+                    record[colSchema.Name] = colHandle.ReadValue(place);
+                }
             }
         }
 
@@ -446,6 +469,9 @@ internal static class UpsertExecutor
             ColumnType.Date or ColumnType.Time or ColumnType.DateTime
                 when kind != UpsertValueKind.String =>
                 $"type mismatch on '{field.Name}': expected {colSchema.Type} (as string), got {UpsertValueKindNames.GetName(kind)}",
+
+            ColumnType.Blob when kind != UpsertValueKind.String =>
+                $"type mismatch on '{field.Name}': expected blob (base64 string), got {UpsertValueKindNames.GetName(kind)}",
 
             _ => null,
         };

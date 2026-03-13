@@ -115,6 +115,8 @@
     <div class="query-actions">
         <button class="btn btn-primary" @onclick="RunQuery">&#9654; Run</button>
         <button class="btn btn-ghost" @onclick="FormatQuery">Format</button>
+        <button class="btn btn-ghost" @onclick="TriggerBlobPicker" title="Attach file as base64">&#128206; Blob</button>
+        <InputFile @ref="_blobFileInput" OnChange="OnBlobFileSelected" style="display: none;" />
         @if (_showSaveDialog)
         {
             <div class="save-dialog">
@@ -241,7 +243,19 @@
                             @foreach (var col in Tab.Columns)
                             {
                                 row.TryGetValue(col.Name, out var cellValue);
-                                @if (_editingRowId is not null && _editingRowId == rowId && _editingColumn == col.Name)
+                                @if (_editingRowId is not null && _editingRowId == rowId && _editingColumn == col.Name && _editingBlob)
+                                {
+                                    <td class="cell-blob cell-editing">
+                                        <button class="btn btn-primary" style="font-size: 11px; padding: 3px 10px;" @onclick="TriggerInlineBlobPicker">&#128206; Choose file</button>
+                                        <InputFile @ref="_inlineBlobInput" OnChange="OnInlineBlobSelected" style="display: none;" />
+                                        <button class="blob-btn" @onclick="CancelEdit" title="Cancel">&#10005;</button>
+                                        @if (_editError is not null)
+                                        {
+                                            <div class="cell-edit-error">@_editError</div>
+                                        }
+                                    </td>
+                                }
+                                else if (_editingRowId is not null && _editingRowId == rowId && _editingColumn == col.Name)
                                 {
                                     <td class="@GetCellClass(col, cellValue) cell-editing">
                                         <input @ref="_editInputRef"
@@ -255,6 +269,25 @@
                                         {
                                             <div class="cell-edit-error">@_editError</div>
                                         }
+                                    </td>
+                                }
+                                else if (col.Type == "blob" && cellValue is string blobBase64 && blobBase64.Length > 0)
+                                {
+                                    <td class="cell-blob">
+                                        <span class="blob-badge">BLOB @FormatBlobSize(blobBase64)</span>
+                                        <button class="blob-btn" title="Open in new tab" @onclick="() => OpenBlobInTab(blobBase64)" @onclick:stopPropagation="true">Open</button>
+                                        <button class="blob-btn" title="Download" @onclick="() => DownloadBlob(blobBase64, col.Name, rowId)" @onclick:stopPropagation="true">Save</button>
+                                        @if (Tab.CanEdit && Tab.HasIdColumn)
+                                        {
+                                            <button class="blob-btn" title="Replace" @onclick="() => StartEdit(rowId, col.Name, cellValue)" @onclick:stopPropagation="true">&#128206;</button>
+                                        }
+                                    </td>
+                                }
+                                else if (col.Type == "blob" && Tab.CanEdit && Tab.HasIdColumn)
+                                {
+                                    <td class="cell-blob cell-editable" @ondblclick="() => StartEdit(rowId, col.Name, cellValue)">
+                                        <span class="cell-null">null</span>
+                                        <button class="blob-btn" title="Upload" @onclick="() => StartEdit(rowId, col.Name, cellValue)" @onclick:stopPropagation="true">&#128206;</button>
                                     </td>
                                 }
                                 else
@@ -419,6 +452,11 @@
     private bool _showSaveDialog;
     private string _saveName = string.Empty;
     private List<SavedQueryEntry>? _savedQueries;
+
+    // Blob file picker
+    private InputFile? _blobFileInput;
+    private InputFile? _inlineBlobInput;
+    private bool _editingBlob;
 
     // JSON display
     private MarkupString _jsonDisplay;
@@ -785,9 +823,20 @@
 
         _editingRowId = rowId;
         _editingColumn = columnName;
-        _editValue = FormatCell(currentValue);
         _editError = null;
-        _shouldFocusEdit = true;
+
+        // Check if this is a blob column
+        _editingBlob = Tab.Columns.Any(c => c.Name == columnName && c.Type == "blob");
+
+        if (_editingBlob)
+        {
+            _editValue = string.Empty;
+        }
+        else
+        {
+            _editValue = FormatCell(currentValue);
+            _shouldFocusEdit = true;
+        }
     }
 
     private void CancelEdit()
@@ -796,6 +845,7 @@
         _editingColumn = null;
         _editValue = string.Empty;
         _editError = null;
+        _editingBlob = false;
     }
 
     private void HandleEditKeyUp(KeyboardEventArgs e)
@@ -1408,6 +1458,124 @@
             DateTime dt => dt.ToString("yyyy-MM-dd HH:mm:ss"),
             _ => value.ToString() ?? ""
         };
+    }
+
+    private async Task TriggerBlobPicker()
+    {
+        if (_blobFileInput?.Element is not null)
+            await JS.InvokeVoidAsync("eval", "document.querySelector('input[type=file]').click()");
+    }
+
+    private async Task OnBlobFileSelected(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        const long maxSize = 10 * 1024 * 1024; // 10 MB
+        if (file.Size > maxSize)
+        {
+            _runError = $"File too large ({file.Size / 1024.0 / 1024.0:F1} MB). Max 10 MB.";
+            return;
+        }
+
+        using var ms = new MemoryStream();
+        await file.OpenReadStream(maxSize).CopyToAsync(ms);
+        var base64 = Convert.ToBase64String(ms.ToArray());
+
+        // Insert base64 string at cursor position in textarea
+        var newValue = await JS.InvokeAsync<string>("sproutAdmin.insertAtCursor", _editorWrapRef, $"'{base64}'");
+        if (newValue is not null)
+        {
+            Tab.QueryText = newValue;
+            _highlightedQuery = SyntaxHighlighter.Highlight(newValue);
+        }
+    }
+
+    private async Task TriggerInlineBlobPicker()
+    {
+        // Click the hidden inline blob file input
+        await JS.InvokeVoidAsync("eval", "document.querySelectorAll('input[type=file]')[1]?.click()");
+    }
+
+    private async Task OnInlineBlobSelected(InputFileChangeEventArgs e)
+    {
+        if (_editingRowId is null || _editingColumn is null || _subscribedTable is null)
+        {
+            CancelEdit();
+            return;
+        }
+
+        var file = e.File;
+        const long maxSize = 10 * 1024 * 1024; // 10 MB
+        if (file.Size > maxSize)
+        {
+            _editError = $"File too large ({file.Size / 1024.0 / 1024.0:F1} MB). Max 10 MB.";
+            return;
+        }
+
+        using var ms = new MemoryStream();
+        await file.OpenReadStream(maxSize).CopyToAsync(ms);
+        var base64 = Convert.ToBase64String(ms.ToArray());
+
+        var rowId = _editingRowId.Value;
+        var colName = _editingColumn;
+        var table = _subscribedTable;
+
+        var query = $"upsert {table} {{_id: {rowId}, {colName}: '{base64}'}}";
+        var response = Engine.Execute(query, selectedDatabase);
+        if (response.Operation == SproutOperation.Error)
+        {
+            _editError = response.Errors?.FirstOrDefault()?.Message ?? "Unknown error";
+            return;
+        }
+
+        CancelEdit();
+
+        // Refresh data
+        var collapsed = CollapseQuery(QueryText);
+        var freshResponse = Engine.Execute(collapsed, selectedDatabase);
+        if (freshResponse.Data is not null)
+        {
+            Tab.DisplayData = freshResponse.Data;
+            Tab.RowCount = freshResponse.Data.Count;
+        }
+    }
+
+    private static string FormatBlobSize(string base64)
+    {
+        var bytes = base64.Length * 3 / 4;
+        if (base64.EndsWith("==")) bytes -= 2;
+        else if (base64.EndsWith("=")) bytes -= 1;
+
+        return bytes switch
+        {
+            < 1024 => $"{bytes} B",
+            < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",
+            _ => $"{bytes / (1024.0 * 1024.0):F1} MB",
+        };
+    }
+
+    private static (string Mime, string Ext) DetectBlobType(string base64)
+    {
+        if (base64.StartsWith("/9j/")) return ("image/jpeg", ".jpg");
+        if (base64.StartsWith("iVBOR")) return ("image/png", ".png");
+        if (base64.StartsWith("R0lGO")) return ("image/gif", ".gif");
+        if (base64.StartsWith("UklGR")) return ("image/webp", ".webp");
+        if (base64.StartsWith("JVBER")) return ("application/pdf", ".pdf");
+        if (base64.StartsWith("PD94b") || base64.StartsWith("PHN2Z")) return ("image/svg+xml", ".svg");
+        return ("application/octet-stream", ".bin");
+    }
+
+    private async Task OpenBlobInTab(string base64)
+    {
+        var (mime, _) = DetectBlobType(base64);
+        await JS.InvokeVoidAsync("sproutAdmin.openBlob", base64, mime);
+    }
+
+    private async Task DownloadBlob(string base64, string colName, object? rowId)
+    {
+        var (mime, ext) = DetectBlobType(base64);
+        var filename = $"{colName}_{rowId}{ext}";
+        await JS.InvokeVoidAsync("eval",
+            $"(function(){{var a=document.createElement('a');a.href='data:{mime};base64,{base64}';a.download='{filename}';a.click();}})()");
     }
 
     private static string FormatElapsed(double ms)

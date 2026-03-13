@@ -25,7 +25,7 @@ internal static class DeleteExecutor
                 toDelete.Add((id, place));
         });
 
-        foreach (var (_, place) in toDelete)
+        foreach (var (id, place) in toDelete)
         {
             // Remove from B-Trees before clearing data
             foreach (var col in table.Schema.Columns)
@@ -43,6 +43,14 @@ internal static class DeleteExecutor
                         }
                     }
                 }
+            }
+
+            // Delete blob files
+            foreach (var col in table.Schema.Columns)
+            {
+                ColumnTypes.TryParse(col.Type, out var colType);
+                if (colType == ColumnType.Blob)
+                    table.DeleteBlobFile(col.Name, (long)id);
             }
 
             // Free slot (marks as deleted, decrements count)

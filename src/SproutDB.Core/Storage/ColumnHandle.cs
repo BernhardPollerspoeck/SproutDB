@@ -287,6 +287,9 @@ internal sealed class ColumnHandle : IDisposable
                 var len = Math.Min(bytes.Length, Schema.Size - 1);
                 Array.Copy(bytes, buf, len);
                 break;
+            case ColumnType.Blob:
+                BinaryPrimitives.WriteInt64LittleEndian(buf, long.Parse(raw, CultureInfo.InvariantCulture));
+                break;
         }
     }
 
@@ -326,6 +329,7 @@ internal sealed class ColumnHandle : IDisposable
             ColumnType.Time => WriteTime(offset, raw),
             ColumnType.DateTime => WriteDateTime(offset, raw),
             ColumnType.String => WriteString(offset, raw),
+            ColumnType.Blob => WriteBlob(offset, raw),
             _ => throw new ArgumentOutOfRangeException(),
         };
     }
@@ -440,6 +444,17 @@ internal sealed class ColumnHandle : IDisposable
         return raw;
     }
 
+    /// <summary>
+    /// Writes the blob byte count into the .col file.
+    /// The raw value is the byte count as a string (set by the executor after writing the .blob file).
+    /// </summary>
+    private object WriteBlob(long offset, string raw)
+    {
+        var byteCount = long.Parse(raw, CultureInfo.InvariantCulture);
+        _view.Write(offset, byteCount);
+        return byteCount;
+    }
+
     // ── Decode (read typed value at offset) ─────────────────
 
     private object ReadAndDecode(long offset)
@@ -461,6 +476,7 @@ internal sealed class ColumnHandle : IDisposable
             ColumnType.Time => ReadTime(offset),
             ColumnType.DateTime => ReadDateTime(offset),
             ColumnType.String => ReadString(offset),
+            ColumnType.Blob => _view.ReadInt64(offset),
             _ => throw new ArgumentOutOfRangeException(),
         };
     }

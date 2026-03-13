@@ -260,6 +260,30 @@ internal sealed class TableHandle : IDisposable
         _columns[name] = new ColumnHandle(colPath, entry);
     }
 
+    // ── Blob file helpers ────────────────────────────────────
+
+    public string GetBlobPath(string columnName, long id)
+        => Path.Combine(_tablePath, $"{columnName}_{id}.blob");
+
+    public void WriteBlobFile(string columnName, long id, byte[] data)
+    {
+        var path = GetBlobPath(columnName, id);
+        File.WriteAllBytes(path, data);
+    }
+
+    public byte[] ReadBlobFile(string columnName, long id)
+    {
+        var path = GetBlobPath(columnName, id);
+        return File.ReadAllBytes(path);
+    }
+
+    public void DeleteBlobFile(string columnName, long id)
+    {
+        var path = GetBlobPath(columnName, id);
+        if (File.Exists(path))
+            File.Delete(path);
+    }
+
     public long GetStorageSizeBytes()
     {
         long total = 0;
