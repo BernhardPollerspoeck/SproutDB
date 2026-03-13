@@ -1570,12 +1570,9 @@
         if (base64.EndsWith("==")) bytes -= 2;
         else if (base64.EndsWith("=")) bytes -= 1;
 
-        return bytes switch
-        {
-            < 1024 => $"{bytes} B",
-            < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",
-            _ => $"{bytes / (1024.0 * 1024.0):F1} MB",
-        };
+        if (bytes >= 1024 * 1024) return $"{bytes / (1024.0 * 1024.0):F1} MB";
+        if (bytes >= 1024) return $"{bytes / 1024.0:F1} KB";
+        return $"{bytes} B";
     }
 
     private static (string Mime, string Ext) DetectBlobType(string base64)
