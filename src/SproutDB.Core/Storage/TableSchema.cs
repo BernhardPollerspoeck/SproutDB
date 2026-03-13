@@ -16,4 +16,5 @@ internal sealed class ColumnSchemaEntry
     public bool Nullable { get; set; }
     public string? Default { get; set; }
     public bool Strict { get; set; }
+    public bool IsUnique { get; set; }
 }

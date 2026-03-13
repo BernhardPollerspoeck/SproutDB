@@ -14,4 +14,5 @@ public sealed class ColumnInfo
     public bool Auto { get; init; }
     public bool Indexed { get; init; }
     public bool IsAutoIndex { get; init; }
+    public bool IsUnique { get; init; }
 }

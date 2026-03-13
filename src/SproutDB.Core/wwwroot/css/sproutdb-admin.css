@@ -1378,6 +1378,12 @@ body {
     border-color: rgba(251, 146, 60, 0.2);
 }
 
+.schema-idx-badge.unique {
+    color: var(--purple, #a78bfa);
+    background: var(--purple-bg, rgba(167, 139, 250, 0.1));
+    border-color: rgba(167, 139, 250, 0.2);
+}
+
 .schema-index-cell {
     white-space: nowrap;
     text-align: center;
@@ -1403,12 +1409,25 @@ body {
 }
 
 .idx-btn.idx-create {
-    color: var(--blue);
-    border-color: var(--blue);
+    color: var(--text-3);
+    border-color: var(--border);
 }
 
 .idx-btn.idx-create:hover {
-    background: var(--blue-bg);
+    color: var(--sprout, #22c55e);
+    border-color: var(--sprout, #22c55e);
+    background: var(--sprout-bg, rgba(34, 197, 94, 0.1));
+}
+
+.idx-btn.idx-unique {
+    color: var(--text-3);
+    border-color: var(--border);
+}
+
+.idx-btn.idx-unique:hover {
+    color: var(--purple, #a78bfa);
+    border-color: var(--purple, #a78bfa);
+    background: var(--purple-bg, rgba(167, 139, 250, 0.1));
 }
 
 .idx-btn.idx-remove {

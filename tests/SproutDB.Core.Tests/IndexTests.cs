@@ -237,6 +237,146 @@ public class IndexTests : IDisposable
         Assert.Equal("User2", result.Data[0]["name"]);
     }
 
+    // ── Unique Constraint ────────────────────────────────
+
+    [Fact]
+    public void UniqueIndex_CreateSucceeds_WhenNoDuplicates()
+    {
+        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.Execute("upsert users {name: 'Bob', email: 'bob@test.com', age: 35}", "testdb");
+
+        var result = _engine.Execute("create index unique users.email", "testdb");
+
+        Assert.Equal(SproutOperation.CreateIndex, result.Operation);
+        Assert.Null(result.Errors);
+    }
+
+    [Fact]
+    public void UniqueIndex_CreateFails_WhenDuplicatesExist()
+    {
+        _engine.Execute("upsert users {name: 'Alice', email: 'same@test.com', age: 28}", "testdb");
+        _engine.Execute("upsert users {name: 'Bob', email: 'same@test.com', age: 35}", "testdb");
+
+        var result = _engine.Execute("create index unique users.email", "testdb");
+
+        Assert.NotNull(result.Errors);
+        Assert.Contains("duplicate values", result.Errors[0].Message);
+    }
+
+    [Fact]
+    public void UniqueIndex_InsertDuplicate_Error()
+    {
+        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.Execute("create index unique users.email", "testdb");
+
+        var result = _engine.Execute("upsert users {name: 'Bob', email: 'alice@test.com', age: 35}", "testdb");
+
+        Assert.NotNull(result.Errors);
+        Assert.Equal("UNIQUE_VIOLATION", result.Errors[0].Code);
+        Assert.Contains("alice@test.com", result.Errors[0].Message);
+    }
+
+    [Fact]
+    public void UniqueIndex_InsertUniqueValue_Succeeds()
+    {
+        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.Execute("create index unique users.email", "testdb");
+
+        var result = _engine.Execute("upsert users {name: 'Bob', email: 'bob@test.com', age: 35}", "testdb");
+
+        Assert.Null(result.Errors);
+        Assert.Equal(SproutOperation.Upsert, result.Operation);
+    }
+
+    [Fact]
+    public void UniqueIndex_UpdateSameRow_Allowed()
+    {
+        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.Execute("create index unique users.email", "testdb");
+
+        // Update the same row — same email value, should be allowed
+        var result = _engine.Execute("upsert users {_id: 1, name: 'Alice Updated', email: 'alice@test.com', age: 29}", "testdb");
+
+        Assert.Null(result.Errors);
+        Assert.Equal(SproutOperation.Upsert, result.Operation);
+    }
+
+    [Fact]
+    public void UniqueIndex_NullValues_AllowedMultiple()
+    {
+        // name column has no default → nullable
+        _engine.Execute("create index unique users.name", "testdb");
+
+        var r1 = _engine.Execute("upsert users {email: 'a@test.com', age: 20}", "testdb");
+        Assert.Null(r1.Errors);
+
+        var r2 = _engine.Execute("upsert users {email: 'b@test.com', age: 25}", "testdb");
+        Assert.Null(r2.Errors);
+    }
+
+    [Fact]
+    public void UniqueIndex_BatchDuplicate_Error()
+    {
+        _engine.Execute("create index unique users.email", "testdb");
+
+        var result = _engine.Execute(
+            "upsert users [{name: 'Alice', email: 'same@test.com', age: 28}, {name: 'Bob', email: 'same@test.com', age: 35}]",
+            "testdb");
+
+        Assert.NotNull(result.Errors);
+        Assert.Equal("UNIQUE_VIOLATION", result.Errors[0].Code);
+        Assert.Contains("duplicate value in batch", result.Errors[0].Message);
+    }
+
+    [Fact]
+    public void UniqueIndex_PurgeIndex_RemovesConstraint()
+    {
+        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.Execute("create index unique users.email", "testdb");
+
+        _engine.Execute("purge index users.email", "testdb");
+
+        // Now duplicates should be allowed (no index, no constraint)
+        _engine.Execute("upsert users {name: 'Bob', email: 'alice@test.com', age: 35}", "testdb");
+        var result = _engine.Execute("get users", "testdb");
+
+        Assert.NotNull(result.Data);
+        Assert.Equal(2, result.Data.Count);
+    }
+
+    [Fact]
+    public void UniqueIndex_DescribeShowsUnique()
+    {
+        _engine.Execute("create index unique users.email", "testdb");
+
+        var result = _engine.Execute("describe users", "testdb");
+
+        Assert.NotNull(result.Schema);
+        var emailCol = result.Schema.Columns.Find(c => c.Name == "email");
+        Assert.NotNull(emailCol);
+        Assert.True(emailCol.IsUnique);
+        Assert.True(emailCol.Indexed);
+    }
+
+    [Fact]
+    public void UniqueIndex_PersistsAfterReload()
+    {
+        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.Execute("create index unique users.email", "testdb");
+
+        // Reload engine
+        _engine.Dispose();
+        _disposed = true;
+        _engine = new SproutEngine(_tempDir);
+        _disposed = false;
+
+        // Unique constraint should still be enforced
+        var result = _engine.Execute("upsert users {name: 'Bob', email: 'alice@test.com', age: 35}", "testdb");
+
+        Assert.NotNull(result.Errors);
+        Assert.Equal("UNIQUE_VIOLATION", result.Errors[0].Code);
+    }
+
     // ── Helpers ───────────────────────────────────────────
 
     private void SeedUsers(int count)

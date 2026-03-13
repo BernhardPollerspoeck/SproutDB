@@ -17,6 +17,14 @@ internal static class PurgeIndexExecutor
             return ResponseHelper.Error(query, ErrorCodes.INDEX_NOT_FOUND,
                 $"index on '{q.Column}' does not exist");
 
+        // Clear unique flag if set
+        var colSchema = table.Schema.Columns.Find(c => c.Name == q.Column);
+        if (colSchema is not null && colSchema.IsUnique)
+        {
+            colSchema.IsUnique = false;
+            table.SaveSchema();
+        }
+
         table.RemoveBTree(q.Column);
 
         return new SproutResponse

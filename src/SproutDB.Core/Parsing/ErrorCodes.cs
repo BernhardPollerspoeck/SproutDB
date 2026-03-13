@@ -22,4 +22,5 @@ internal static class ErrorCodes
     public const string PERMISSION_DENIED = "PERMISSION_DENIED";
     public const string KEY_EXISTS = "KEY_EXISTS";
     public const string KEY_NOT_FOUND = "KEY_NOT_FOUND";
+    public const string UNIQUE_VIOLATION = "UNIQUE_VIOLATION";
 }

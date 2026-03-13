@@ -57,6 +57,11 @@ internal static class UpsertExecutor
             ResolveOnColumnIds(table, q.OnColumn, parsed);
         }
 
+        // ── Unique constraint validation ───────────────────────────────────
+        var uniqueError = ValidateUniqueConstraints(query, table, parsed, q.OnColumn);
+        if (uniqueError is not null)
+            return uniqueError;
+
         // ── Execute all records ──────────────────────────────────────────
         var nowMs = hasTtl ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : 0L;
         var tableTtlSeconds = table.Schema.TtlSeconds;
@@ -357,6 +362,65 @@ internal static class UpsertExecutor
         return record;
     }
 
+    // ── Unique constraint validation ──────────────────────────────
+
+    private static SproutResponse? ValidateUniqueConstraints(
+        string query, TableHandle table, ParsedRecord[] parsed, string? onColumn)
+    {
+        // Collect unique columns that have B-Trees
+        var uniqueColumns = new List<string>();
+        foreach (var col in table.Schema.Columns)
+        {
+            if (col.IsUnique && table.HasBTree(col.Name))
+                uniqueColumns.Add(col.Name);
+        }
+
+        if (uniqueColumns.Count == 0) return null;
+
+        foreach (var colName in uniqueColumns)
+        {
+            var colHandle = table.GetColumn(colName);
+            var btree = table.GetBTree(colName);
+            var seenInBatch = new Dictionary<ByteKey, int>();
+
+            for (int i = 0; i < parsed.Length; i++)
+            {
+                var rec = parsed[i];
+                if (!rec.FieldsByName.TryGetValue(colName, out var field)) continue;
+                if (field.Value.Kind == UpsertValueKind.Null) continue; // nulls are allowed
+
+                var encoded = colHandle.EncodeValueToBytes(field.Value.Raw!);
+                var key = new ByteKey(encoded);
+
+                // Check within batch
+                if (seenInBatch.TryGetValue(key, out var prevIdx))
+                    return ResponseHelper.Error(query, ErrorCodes.UNIQUE_VIOLATION,
+                        $"unique constraint violation on '{colName}': duplicate value in batch (records {prevIdx + 1} and {i + 1})");
+
+                seenInBatch[key] = i;
+
+                // Check against existing data via B-Tree
+                var existing = btree.Lookup(encoded);
+                if (existing.Count > 0)
+                {
+                    // If updating the same row, allow it
+                    var resolvedId = rec.ExplicitId ?? rec.ResolvedOnId;
+                    if (resolvedId.HasValue)
+                    {
+                        var existingPlace = table.Index.ReadPlace(resolvedId.Value);
+                        if (existing.Count == 1 && existing[0] == existingPlace)
+                            continue; // same row, no violation
+                    }
+
+                    return ResponseHelper.Error(query, ErrorCodes.UNIQUE_VIOLATION,
+                        $"unique constraint violation on '{colName}': value '{field.Value.Raw}' already exists");
+                }
+            }
+        }
+
+        return null;
+    }
+
     private static string? ValidateValueType(UpsertField field, ColumnSchemaEntry colSchema)
     {
         ColumnTypes.TryParse(colSchema.Type, out var colType);
@@ -399,24 +463,4 @@ internal static class UpsertExecutor
         public static ParsedRecord WithError(SproutResponse error) => new() { Error = error };
     }
 
-    /// <summary>
-    /// Wrapper for byte[] that implements value equality for use as dictionary key.
-    /// </summary>
-    private readonly struct ByteKey : IEquatable<ByteKey>
-    {
-        public readonly byte[] Bytes;
-
-        public ByteKey(byte[] bytes) => Bytes = bytes;
-
-        public bool Equals(ByteKey other) => Bytes.AsSpan().SequenceEqual(other.Bytes);
-        public override bool Equals(object? obj) => obj is ByteKey other && Equals(other);
-
-        public override int GetHashCode()
-        {
-            var hash = new HashCode();
-            foreach (var b in Bytes)
-                hash.Add(b);
-            return hash.ToHashCode();
-        }
-    }
 }

@@ -15,7 +15,7 @@ namespace SproutDB.Core.Storage;
 ///     [1 byte]  column_type (ColumnType enum value)
 ///     [4 bytes] size (int)
 ///     [4 bytes] entry_size (int)
-///     [1 byte]  flags (bit 0 = nullable, bit 1 = strict)
+///     [1 byte]  flags (bit 0 = nullable, bit 1 = strict, bit 2 = unique)
 ///     [2 bytes] default_length (ushort, 0 = no default)
 ///     [N bytes] default (UTF-8, only if default_length > 0)
 /// </summary>
@@ -23,6 +23,7 @@ internal static class SchemaFile
 {
     private const byte FLAG_NULLABLE = 0x01;
     private const byte FLAG_STRICT = 0x02;
+    private const byte FLAG_UNIQUE = 0x04;
 
     public static void Write(string path, TableSchema schema)
     {
@@ -49,6 +50,7 @@ internal static class SchemaFile
             byte flags = 0;
             if (col.Nullable) flags |= FLAG_NULLABLE;
             if (col.Strict) flags |= FLAG_STRICT;
+            if (col.IsUnique) flags |= FLAG_UNIQUE;
             bw.Write(flags);
 
             if (col.Default is not null)
@@ -98,6 +100,7 @@ internal static class SchemaFile
                 EntrySize = entrySize,
                 Nullable = (flags & FLAG_NULLABLE) != 0,
                 Strict = (flags & FLAG_STRICT) != 0,
+                IsUnique = (flags & FLAG_UNIQUE) != 0,
                 Default = defaultValue,
             });
         }

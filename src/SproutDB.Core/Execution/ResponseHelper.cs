@@ -132,6 +132,7 @@ internal static class ResponseHelper
                 Strict = col.Strict,
                 Indexed = indexed,
                 IsAutoIndex = indexed && (isAutoIndex?.Invoke(col.Name) ?? false),
+                IsUnique = col.IsUnique,
             });
         }
 

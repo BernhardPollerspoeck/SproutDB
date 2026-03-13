@@ -4,6 +4,9 @@ internal static class CreateIndexParser
 {
     public static ParseResult Parse(ParserContext ctx)
     {
+        // Optional: unique keyword
+        var isUnique = ctx.MatchKeyword("unique");
+
         // table.column (dot-separated)
         var tableToken = ctx.Peek();
         if (tableToken.Type != TokenType.Identifier)
@@ -36,6 +39,7 @@ internal static class CreateIndexParser
         {
             Table = tableName,
             Column = colName,
+            Unique = isUnique,
         });
     }
 }

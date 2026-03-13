@@ -21,12 +21,43 @@ internal static class CreateIndexExecutor
         var schema = colHandle.Schema;
         ColumnTypes.TryParse(schema.Type, out var colType);
 
+        // Unique: check existing data for duplicates before building the index
+        if (q.Unique)
+        {
+            var seen = new HashSet<ByteKey>();
+            bool hasDuplicate = false;
+
+            table.Index.ForEachUsed((_, place) =>
+            {
+                if (hasDuplicate) return;
+                if (colHandle.IsNullAtPlace(place)) return; // nulls are always allowed
+
+                var val = colHandle.ReadValue(place);
+                if (val is null) return;
+
+                var encoded = colHandle.EncodeValueToBytes(val.ToString() ?? "");
+                if (!seen.Add(new ByteKey(encoded)))
+                    hasDuplicate = true;
+            });
+
+            if (hasDuplicate)
+                return ResponseHelper.Error(query, ErrorCodes.UNIQUE_VIOLATION,
+                    $"cannot create unique index on '{q.Column}': column contains duplicate values");
+        }
+
         var btreePath = Path.Combine(table.TablePath, $"{q.Column}.btree");
 
         var btree = BTreeHandle.BuildFromColumn(btreePath, colHandle, table.Index,
             colType, schema.Size);
 
         table.AddBTree(q.Column, btree);
+
+        // Persist unique flag in schema
+        if (q.Unique)
+        {
+            schema.IsUnique = true;
+            table.SaveSchema();
+        }
 
         return new SproutResponse
         {

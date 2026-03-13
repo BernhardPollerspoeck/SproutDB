@@ -205,12 +205,13 @@
                                         }
                                         else if (col.Indexed)
                                         {
-                                            <span class="schema-idx-badge @(col.IsAutoIndex ? "auto" : "")">@(col.IsAutoIndex ? "AUTO" : "IDX")</span>
+                                            <span class="schema-idx-badge @(col.IsAutoIndex ? "auto" : "") @(col.IsUnique ? "unique" : "")">@(col.IsAutoIndex ? "AUTO" : col.IsUnique ? "UNQ" : "IDX")</span>
                                             <button class="idx-btn idx-remove" title="Purge index" @onclick="() => PurgeIndex(table, col.Name)" @onclick:stopPropagation="true">&#10005;</button>
                                         }
                                         else
                                         {
                                             <button class="idx-btn idx-create" title="Create index" @onclick="() => CreateIndex(table, col.Name)" @onclick:stopPropagation="true">+ IDX</button>
+                                            <button class="idx-btn idx-unique" title="Create unique index" @onclick="() => CreateUniqueIndex(table, col.Name)" @onclick:stopPropagation="true">+ UNQ</button>
                                         }
                                     </td>
                                 </tr>
@@ -792,6 +793,19 @@
             return;
         }
         // Refresh columns
+        columnCache.Remove(table);
+        ExpandTable(table);
+    }
+
+    private void CreateUniqueIndex(string table, string colName)
+    {
+        _indexError = null;
+        var response = Engine.Execute($"create index unique {table}.{colName}", selectedDatabase);
+        if (response.Operation == SproutOperation.Error)
+        {
+            _indexError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to create unique index";
+            return;
+        }
         columnCache.Remove(table);
         ExpandTable(table);
     }

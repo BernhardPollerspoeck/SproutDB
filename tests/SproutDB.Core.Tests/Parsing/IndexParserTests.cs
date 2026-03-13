@@ -63,6 +63,40 @@ public class IndexParserTests
         Assert.Contains("expected end of query", result.Errors![0].Message);
     }
 
+    // ── create index unique ────────────────────────────────
+
+    [Fact]
+    public void CreateIndexUnique_ParsesCorrectly()
+    {
+        var result = QueryParser.Parse("create index unique users.email");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<CreateIndexQuery>(result.Query);
+        Assert.Equal("users", q.Table);
+        Assert.Equal("email", q.Column);
+        Assert.True(q.Unique);
+    }
+
+    [Fact]
+    public void CreateIndexUnique_CaseInsensitive()
+    {
+        var result = QueryParser.Parse("CREATE INDEX UNIQUE Users.Email");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<CreateIndexQuery>(result.Query);
+        Assert.True(q.Unique);
+    }
+
+    [Fact]
+    public void CreateIndex_WithoutUnique_FlagIsFalse()
+    {
+        var result = QueryParser.Parse("create index users.email");
+
+        Assert.True(result.Success);
+        var q = Assert.IsType<CreateIndexQuery>(result.Query);
+        Assert.False(q.Unique);
+    }
+
     // ── purge index ───────────────────────────────────────
 
     [Fact]
