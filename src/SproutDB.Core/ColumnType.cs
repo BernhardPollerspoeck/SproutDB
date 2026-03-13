@@ -18,6 +18,7 @@ internal enum ColumnType : byte
     Time,
     DateTime,
     Blob,
+    Array,
 }
 
 internal static class ColumnTypes
@@ -43,6 +44,7 @@ internal static class ColumnTypes
         ColumnType.Time => 8,
         ColumnType.DateTime => 8,
         ColumnType.Blob => 8, // stores byte count as long
+        ColumnType.Array => 8, // stores element count as long
         _ => throw new ArgumentOutOfRangeException(nameof(type)),
     };
 
@@ -64,6 +66,7 @@ internal static class ColumnTypes
         ColumnType.Time => "time",
         ColumnType.DateTime => "datetime",
         ColumnType.Blob => "blob",
+        ColumnType.Array => "array",
         _ => throw new ArgumentOutOfRangeException(nameof(type)),
     };
 
@@ -83,7 +86,8 @@ internal static class ColumnTypes
               || Try(text, "ubyte", ColumnType.UByte, ref type)
               || Try(text, "sbyte", ColumnType.SByte, ref type)
               || Try(text, "ulong", ColumnType.ULong, ref type)
-              || Try(text, "slong", ColumnType.SLong, ref type),
+              || Try(text, "slong", ColumnType.SLong, ref type)
+              || Try(text, "array", ColumnType.Array, ref type),
 
             6 => Try(text, "string", ColumnType.String, ref type)
               || Try(text, "double", ColumnType.Double, ref type)

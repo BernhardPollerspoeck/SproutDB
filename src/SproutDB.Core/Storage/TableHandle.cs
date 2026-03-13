@@ -260,6 +260,74 @@ internal sealed class TableHandle : IDisposable
         _columns[name] = new ColumnHandle(colPath, entry);
     }
 
+    /// <summary>
+    /// Rebuilds a column file for type expansion (e.g. ubyte → ushort).
+    /// Writes new .tmp file, migrates data, then safely swaps.
+    /// </summary>
+    public void RebuildColumnForTypeExpansion(
+        ColumnSchemaEntry entry, ColumnType newType, int newSize, int newEntrySize,
+        List<(long place, string raw)> values)
+    {
+        var colPath = Path.Combine(_tablePath, $"{entry.Name}.col");
+        var tmpPath = colPath + ".tmp";
+
+        // Dispose old handle so file is released
+        if (_columns.TryGetValue(entry.Name, out var oldHandle))
+        {
+            oldHandle.Flush();
+            oldHandle.Dispose();
+            _columns.Remove(entry.Name);
+        }
+
+        // Determine entry count from old file
+        var oldEntrySize = entry.EntrySize;
+        var oldFileLength = new FileInfo(colPath).Length;
+        var entryCount = oldFileLength / oldEntrySize;
+
+        // Create temporary schema entry for new handle
+        var tmpEntry = new ColumnSchemaEntry
+        {
+            Name = entry.Name,
+            Type = ColumnTypes.GetName(newType),
+            Size = newSize,
+            EntrySize = newEntrySize,
+            Nullable = entry.Nullable,
+            Default = entry.Default,
+            Strict = entry.Strict,
+            IsUnique = entry.IsUnique,
+        };
+
+        // Create new .tmp file with correct capacity
+        using (var fs = File.Create(tmpPath))
+        {
+            fs.SetLength(entryCount * newEntrySize);
+        }
+
+        // Open handle on .tmp with new type, write all values
+        var tmpHandle = new ColumnHandle(tmpPath, tmpEntry, _chunkSize);
+        foreach (var (place, raw) in values)
+        {
+            tmpHandle.WriteValue(place, raw);
+        }
+        tmpHandle.Flush();
+        tmpHandle.Dispose();
+
+        // Safe swap: delete old, rename tmp
+        File.Delete(colPath);
+        File.Move(tmpPath, colPath);
+
+        // Update schema entry in-place
+        entry.Type = tmpEntry.Type;
+        entry.Size = newSize;
+        entry.EntrySize = newEntrySize;
+
+        // Remove B-Tree if exists (encoded values changed size)
+        RemoveBTree(entry.Name);
+
+        // Reopen handle on final file
+        _columns[entry.Name] = new ColumnHandle(colPath, entry, _chunkSize);
+    }
+
     // ── Blob file helpers ────────────────────────────────────
 
     public string GetBlobPath(string columnName, long id)
@@ -280,6 +348,30 @@ internal sealed class TableHandle : IDisposable
     public void DeleteBlobFile(string columnName, long id)
     {
         var path = GetBlobPath(columnName, id);
+        if (File.Exists(path))
+            File.Delete(path);
+    }
+
+    // ── Array file helpers ───────────────────────────────────
+
+    public string GetArrayPath(string columnName, long id)
+        => Path.Combine(_tablePath, $"{columnName}_{id}.array");
+
+    public void WriteArrayFile(string columnName, long id, byte[] data)
+    {
+        var path = GetArrayPath(columnName, id);
+        File.WriteAllBytes(path, data);
+    }
+
+    public byte[] ReadArrayFile(string columnName, long id)
+    {
+        var path = GetArrayPath(columnName, id);
+        return File.ReadAllBytes(path);
+    }
+
+    public void DeleteArrayFile(string columnName, long id)
+    {
+        var path = GetArrayPath(columnName, id);
         if (File.Exists(path))
             File.Delete(path);
     }

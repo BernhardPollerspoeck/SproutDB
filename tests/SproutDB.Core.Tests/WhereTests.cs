@@ -344,7 +344,7 @@ public class WhereTests : IDisposable
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("TYPE_MISMATCH", r.Errors![0].Code);
-        Assert.Contains("string columns", r.Errors[0].Message);
+        Assert.Contains("string or array columns", r.Errors[0].Message);
     }
 
     [Fact]

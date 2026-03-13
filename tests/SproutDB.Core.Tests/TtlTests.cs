@@ -175,10 +175,12 @@ public class TtlTests : IDisposable
     public void Update_ResetsTtl()
     {
         _engine.Execute("create table sessions (token string 64) ttl 24h", "shop");
-        _engine.Execute("upsert sessions {_id: 1, token: 'abc'}", "shop");
+        var insert = _engine.Execute("upsert sessions {token: 'abc'}", "shop");
+        var id = insert.Data?[0]["_id"];
+        Assert.NotNull(id);
 
         // Update the same row — TTL should be refreshed
-        _engine.Execute("upsert sessions {_id: 1, token: 'def'}", "shop");
+        _engine.Execute($"upsert sessions {{_id: {id}, token: 'def'}}", "shop");
 
         var result = _engine.Execute("get sessions", "shop");
         Assert.NotNull(result.Data);

@@ -32,6 +32,8 @@ internal static class CreateTableExecutor
                 Nullable = col.IsNullable,
                 Default = col.Default,
                 Strict = col.Strict,
+                ElementType = col.ElementType.HasValue ? ColumnTypes.GetName(col.ElementType.Value) : null,
+                ElementSize = col.ElementSize,
             });
         }
 

@@ -63,6 +63,14 @@ internal static class SchemaFile
             {
                 bw.Write((ushort)0);
             }
+
+            // Array element type info (only for array columns)
+            if (colType == ColumnType.Array)
+            {
+                ColumnTypes.TryParse(col.ElementType ?? "string", out var elemType);
+                bw.Write((byte)elemType);
+                bw.Write(col.ElementSize);
+            }
         }
     }
 
@@ -92,6 +100,16 @@ internal static class SchemaFile
                 ? Encoding.UTF8.GetString(br.ReadBytes(defaultLen))
                 : null;
 
+            // Array element type info (only for array columns)
+            string? elementType = null;
+            int elementSize = 0;
+            if (colType == ColumnType.Array)
+            {
+                var elemTypeByte = br.ReadByte();
+                elementType = ColumnTypes.GetName((ColumnType)elemTypeByte);
+                elementSize = br.ReadInt32();
+            }
+
             columns.Add(new ColumnSchemaEntry
             {
                 Name = name,
@@ -102,6 +120,8 @@ internal static class SchemaFile
                 Strict = (flags & FLAG_STRICT) != 0,
                 IsUnique = (flags & FLAG_UNIQUE) != 0,
                 Default = defaultValue,
+                ElementType = elementType,
+                ElementSize = elementSize,
             });
         }
 

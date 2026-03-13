@@ -31,6 +31,7 @@ internal enum UpsertValueKind : byte
     Float,
     Boolean,
     Duration,
+    Array,
 }
 
 internal static class UpsertValueKindNames
@@ -43,6 +44,7 @@ internal static class UpsertValueKindNames
         UpsertValueKind.Float => "float",
         UpsertValueKind.Boolean => "boolean",
         UpsertValueKind.Duration => "duration",
+        UpsertValueKind.Array => "array",
         _ => "unknown",
     };
 }

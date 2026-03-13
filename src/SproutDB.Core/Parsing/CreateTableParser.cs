@@ -102,10 +102,34 @@ internal static class CreateTableParser
 
         // Optional string size
         var size = ColumnTypes.GetDefaultSize(colType);
+        ColumnType? elementType = null;
+        int elementSize = 0;
+
         if (colType == ColumnType.String && ctx.Peek().Type == TokenType.IntegerLiteral)
         {
             size = int.Parse(ctx.GetText(ctx.Peek()));
             ctx.Advance();
+        }
+        else if (colType == ColumnType.Array)
+        {
+            // Array element type: array string 30, array sint, etc.
+            var elemTypeToken = ctx.Peek();
+            if (!ctx.TryMatchColumnType(elemTypeToken))
+            {
+                ctx.AddError(elemTypeToken, ErrorCodes.SYNTAX_ERROR, "expected element type after 'array' (e.g. 'array string 30')");
+                return null!;
+            }
+            ColumnTypes.TryParse(ctx.Input.AsSpan(elemTypeToken.Start, elemTypeToken.Length), out var et);
+            elementType = et;
+            elementSize = ColumnTypes.GetDefaultSize(et);
+            ctx.Advance();
+
+            // Optional element size (for string arrays)
+            if (et == ColumnType.String && ctx.Peek().Type == TokenType.IntegerLiteral)
+            {
+                elementSize = int.Parse(ctx.GetText(ctx.Peek()));
+                ctx.Advance();
+            }
         }
 
         // Optional modifiers: strict / default (any order)
@@ -136,6 +160,8 @@ internal static class CreateTableParser
             Size = size,
             Strict = strict,
             Default = defaultValue,
+            ElementType = elementType,
+            ElementSize = elementSize,
         };
     }
 

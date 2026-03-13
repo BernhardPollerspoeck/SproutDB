@@ -1,3 +1,4 @@
+using System.Globalization;
 using SproutDB.Core.Parsing;
 using SproutDB.Core.Storage;
 
@@ -22,6 +23,8 @@ internal static class AddColumnExecutor
             Nullable = q.Column.IsNullable,
             Default = q.Column.Default,
             Strict = q.Column.Strict,
+            ElementType = q.Column.ElementType.HasValue ? ColumnTypes.GetName(q.Column.ElementType.Value) : null,
+            ElementSize = q.Column.ElementSize,
         };
 
         table.AddColumn(entry);
@@ -60,11 +63,17 @@ internal static class AddColumnExecutor
             return ResponseHelper.Error(query, ErrorCodes.TYPE_NARROWING,
                 $"cannot narrow type from '{existing.Type}' to '{ColumnTypes.GetName(newType)}'");
 
-        // Type expansion: update schema
-        existing.Type = ColumnTypes.GetName(newType);
-        existing.Size = q.Column.Size;
-        existing.EntrySize = q.Column.EntrySize;
+        // Type expansion: read existing values, rebuild .col file, update schema
+        var oldHandle = table.GetColumn(q.Column.Name);
+        var values = new List<(long place, string raw)>();
+        table.Index.ForEachUsed((_, place) =>
+        {
+            var val = oldHandle.ReadValue(place);
+            if (val is not null)
+                values.Add((place, Convert.ToString(val, CultureInfo.InvariantCulture) ?? ""));
+        });
 
+        table.RebuildColumnForTypeExpansion(existing, newType, q.Column.Size, q.Column.EntrySize, values);
         table.SaveSchema();
         return SuccessResponse(q.Table, table.Schema);
     }

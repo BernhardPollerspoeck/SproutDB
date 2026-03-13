@@ -269,15 +269,17 @@ public class WalTests : IDisposable
     }
 
     [Fact]
-    public void Replay_ExplicitIdUpsertIsIdempotent()
+    public void Replay_UpsertIsIdempotent()
     {
         var dataDir = Path.Combine(_tempDir, "data");
 
+        ulong insertedId;
         using (var engine = new SproutEngine(dataDir))
         {
             engine.Execute("create database", "testdb");
             engine.Execute("create table users (name string 100)", "testdb");
-            engine.Execute("upsert users {_id: 42, name: 'Alice'}", "testdb");
+            var r = engine.Execute("upsert users {name: 'Alice'}", "testdb");
+            insertedId = (ulong)(r.Data?[0]["_id"] ?? 0UL);
         }
 
         using (var engine = new SproutEngine(dataDir))
@@ -285,7 +287,7 @@ public class WalTests : IDisposable
             var r = engine.Execute("get users select _id, name", "testdb");
 
             Assert.Single(r.Data ?? []);
-            Assert.Equal((ulong)42, r.Data?[0]["_id"]);
+            Assert.Equal(insertedId, r.Data?[0]["_id"]);
             Assert.Equal("Alice", r.Data?[0]["name"]);
         }
     }

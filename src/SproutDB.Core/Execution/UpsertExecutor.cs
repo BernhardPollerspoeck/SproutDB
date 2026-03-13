@@ -35,6 +35,19 @@ internal static class UpsertExecutor
             parsed[i] = result;
         }
 
+        // ── Explicit _id existence check ─────────────────────────────────
+        for (int i = 0; i < parsed.Length; i++)
+        {
+            var explicitId = parsed[i].ExplicitId;
+            if (explicitId.HasValue)
+            {
+                var existingPlace = table.Index.ReadPlace(explicitId.Value);
+                if (existingPlace < 0)
+                    return ResponseHelper.Error(query, ErrorCodes.ID_NOT_FOUND,
+                        $"row with _id {explicitId.Value} does not exist");
+            }
+        }
+
         // ── ON clause validation ─────────────────────────────────────────
         if (q.OnColumn is not null)
         {
@@ -299,11 +312,12 @@ internal static class UpsertExecutor
         {
             var colHandle = table.GetColumn(colSchema.Name);
             var isBlob = colHandle.Type == ColumnType.Blob;
+            var isArray = colHandle.Type == ColumnType.Array;
             colHandle.EnsureCapacity(place + 1);
 
             // Read old encoded value for B-Tree removal (only on update when B-Tree exists)
             byte[]? oldEncoded = null;
-            if (!isNew && !isBlob && table.HasBTree(colSchema.Name) && !colHandle.IsNullAtPlace(place))
+            if (!isNew && !isBlob && !isArray && table.HasBTree(colSchema.Name) && !colHandle.IsNullAtPlace(place))
             {
                 var oldVal = colHandle.ReadValue(place);
                 if (oldVal is not null)
@@ -317,9 +331,11 @@ internal static class UpsertExecutor
                     colHandle.WriteNull(place);
                     record[colSchema.Name] = null;
 
-                    // Delete blob file if exists
+                    // Delete blob/array file if exists
                     if (isBlob)
                         table.DeleteBlobFile(colSchema.Name, (long)id);
+                    if (isArray)
+                        table.DeleteArrayFile(colSchema.Name, (long)id);
 
                     // Remove old value from B-Tree
                     if (oldEncoded is not null)
@@ -332,6 +348,18 @@ internal static class UpsertExecutor
                     table.WriteBlobFile(colSchema.Name, (long)id, blobBytes);
                     colHandle.WriteValue(place, blobBytes.Length.ToString());
                     record[colSchema.Name] = (long)blobBytes.Length;
+                }
+                else if (isArray)
+                {
+                    // Write JSON array to .array file → store element count in .col
+                    var json = field.Value.Raw ?? "[]";
+                    var arrayBytes = System.Text.Encoding.UTF8.GetBytes(json);
+                    table.WriteArrayFile(colSchema.Name, (long)id, arrayBytes);
+                    var doc = System.Text.Json.JsonDocument.Parse(json);
+                    var elementCount = doc.RootElement.GetArrayLength();
+                    doc.Dispose();
+                    colHandle.WriteValue(place, elementCount.ToString());
+                    record[colSchema.Name] = System.Text.Json.JsonSerializer.Deserialize<List<object?>>(json);
                 }
                 else
                 {
@@ -350,7 +378,7 @@ internal static class UpsertExecutor
             }
             else if (isNew)
             {
-                if (colSchema.Default is not null && !isBlob)
+                if (colSchema.Default is not null && !isBlob && !isArray)
                 {
                     record[colSchema.Name] = colHandle.WriteValue(place, colSchema.Default);
 
@@ -370,9 +398,9 @@ internal static class UpsertExecutor
             else
             {
                 // Existing row, field not in update — read current value
-                if (isBlob)
+                if (isBlob || isArray)
                 {
-                    // Return byte count from .col (not the blob data itself)
+                    // Return byte/element count from .col (not the actual data)
                     record[colSchema.Name] = colHandle.ReadValue(place);
                 }
                 else
@@ -472,6 +500,9 @@ internal static class UpsertExecutor
 
             ColumnType.Blob when kind != UpsertValueKind.String =>
                 $"type mismatch on '{field.Name}': expected blob (base64 string), got {UpsertValueKindNames.GetName(kind)}",
+
+            ColumnType.Array when kind != UpsertValueKind.Array =>
+                $"type mismatch on '{field.Name}': expected array, got {UpsertValueKindNames.GetName(kind)}",
 
             _ => null,
         };

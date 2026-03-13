@@ -44,12 +44,32 @@ internal static class AddColumnParser
         ColumnTypes.TryParse(ctx.Input.AsSpan(typeToken.Start, typeToken.Length), out var colType);
         ctx.Advance();
 
-        // Optional string size
+        // Optional string size / array element type
         var size = ColumnTypes.GetDefaultSize(colType);
+        ColumnType? elementType = null;
+        int elementSize = 0;
+
         if (colType == ColumnType.String && ctx.Peek().Type == TokenType.IntegerLiteral)
         {
             size = int.Parse(ctx.GetText(ctx.Peek()));
             ctx.Advance();
+        }
+        else if (colType == ColumnType.Array)
+        {
+            var elemTypeToken = ctx.Peek();
+            if (!ctx.TryMatchColumnType(elemTypeToken))
+                return ctx.Error(elemTypeToken, ErrorCodes.SYNTAX_ERROR, "expected element type after 'array' (e.g. 'array string 30')");
+
+            ColumnTypes.TryParse(ctx.Input.AsSpan(elemTypeToken.Start, elemTypeToken.Length), out var et);
+            elementType = et;
+            elementSize = ColumnTypes.GetDefaultSize(et);
+            ctx.Advance();
+
+            if (et == ColumnType.String && ctx.Peek().Type == TokenType.IntegerLiteral)
+            {
+                elementSize = int.Parse(ctx.GetText(ctx.Peek()));
+                ctx.Advance();
+            }
         }
 
         // Optional modifiers: strict / default (any order)
@@ -86,6 +106,8 @@ internal static class AddColumnParser
                 Size = size,
                 Strict = strict,
                 Default = defaultValue,
+                ElementType = elementType,
+                ElementSize = elementSize,
             },
         });
     }

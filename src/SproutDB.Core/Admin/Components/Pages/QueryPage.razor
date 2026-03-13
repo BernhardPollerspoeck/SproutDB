@@ -273,22 +273,46 @@
                                 }
                                 else if (col.Type == "blob" && cellValue is string blobBase64 && blobBase64.Length > 0)
                                 {
-                                    <td class="cell-blob">
-                                        <span class="blob-badge">BLOB @FormatBlobSize(blobBase64)</span>
-                                        <button class="blob-btn" title="Open in new tab" @onclick="() => OpenBlobInTab(blobBase64)" @onclick:stopPropagation="true">Open</button>
-                                        <button class="blob-btn" title="Download" @onclick="() => DownloadBlob(blobBase64, col.Name, rowId)" @onclick:stopPropagation="true">Save</button>
-                                        @if (Tab.CanEdit && Tab.HasIdColumn)
-                                        {
-                                            <button class="blob-btn" title="Replace" @onclick="() => StartEdit(rowId, col.Name, cellValue)" @onclick:stopPropagation="true">&#128206;</button>
-                                        }
+                                    <td>
+                                        <div class="cell-blob">
+                                            <span class="blob-badge">BLOB @FormatBlobSize(blobBase64)</span>
+                                            <button class="blob-btn" title="Open in new tab" @onclick="() => OpenBlobInTab(blobBase64)" @onclick:stopPropagation="true">Open</button>
+                                            <button class="blob-btn" title="Download" @onclick="() => DownloadBlob(blobBase64, col.Name, rowId)" @onclick:stopPropagation="true">Save</button>
+                                            @if (Tab.CanEdit && Tab.HasIdColumn)
+                                            {
+                                                <button class="blob-btn" title="Replace" @onclick="() => StartEdit(rowId, col.Name, cellValue)" @onclick:stopPropagation="true">&#128206;</button>
+                                            }
+                                        </div>
                                     </td>
                                 }
                                 else if (col.Type == "blob" && Tab.CanEdit && Tab.HasIdColumn)
                                 {
-                                    <td class="cell-blob cell-editable" @ondblclick="() => StartEdit(rowId, col.Name, cellValue)">
-                                        <span class="cell-null">null</span>
-                                        <button class="blob-btn" title="Upload" @onclick="() => StartEdit(rowId, col.Name, cellValue)" @onclick:stopPropagation="true">&#128206;</button>
+                                    <td class="cell-editable" @ondblclick="() => StartEdit(rowId, col.Name, cellValue)">
+                                        <div class="cell-blob">
+                                            <span class="cell-null">null</span>
+                                            <button class="blob-btn" title="Upload" @onclick="() => StartEdit(rowId, col.Name, cellValue)" @onclick:stopPropagation="true">&#128206;</button>
+                                        </div>
                                     </td>
+                                }
+                                else if (col.Type == "blob")
+                                {
+                                    <td class="cell-null">null</td>
+                                }
+                                else if (col.Type == "array" && cellValue is List<object?> arr)
+                                {
+                                    <td>
+                                        <div class="cell-array">
+                                            <span class="array-badge">[@arr.Count]</span>
+                                            @foreach (var elem in arr)
+                                            {
+                                                <span class="array-elem">@(elem?.ToString() ?? "null")</span>
+                                            }
+                                        </div>
+                                    </td>
+                                }
+                                else if (col.Type == "array")
+                                {
+                                    <td class="cell-null">null</td>
                                 }
                                 else
                                 {
@@ -1456,6 +1480,7 @@
             null => "null",
             bool b => b ? "true" : "false",
             DateTime dt => dt.ToString("yyyy-MM-dd HH:mm:ss"),
+            List<object?> arr => "[" + string.Join(", ", arr.Select(e => e?.ToString() ?? "null")) + "]",
             _ => value.ToString() ?? ""
         };
     }

@@ -17,6 +17,11 @@ internal static class WhereEngine
         public required ulong IdValue { get; init; }
         public byte[]? Encoded2 { get; init; }
         public ulong IdValue2 { get; init; }
+
+        // For array contains
+        public TableHandle? Table { get; init; }
+        public string? ColumnName { get; init; }
+        public string? SearchValue { get; init; }
     }
 
     internal sealed class NullFilter : FilterNode
@@ -114,6 +119,16 @@ internal static class WhereEngine
 
         var handle = table.GetColumn(c.Column);
 
+        // Array contains: read .array file and check element membership
+        if (c.Operator == CompareOp.Contains && handle.Type == ColumnType.Array)
+        {
+            return new CompareFilter
+            {
+                Handle = handle, Encoded = null, Op = c.Operator, IdValue = 0,
+                Table = table, ColumnName = c.Column, SearchValue = c.Value,
+            };
+        }
+
         if (IsStringOp(c.Operator))
         {
             var needle = handle.EncodeStringBytes(c.Value);
@@ -194,6 +209,26 @@ internal static class WhereEngine
 
     private static bool MatchesCompare(CompareFilter filter, ulong id, long place)
     {
+        // Array contains: read .array file and check element membership
+        if (filter.Handle is not null && filter.Handle.Type == ColumnType.Array
+            && filter.Op == CompareOp.Contains && filter.Table is not null)
+        {
+            if (filter.Handle.IsNullAtPlace(place)) return false;
+            var arrayPath = filter.Table.GetArrayPath(filter.ColumnName ?? "", (long)id);
+            if (!File.Exists(arrayPath)) return false;
+            var json = System.Text.Encoding.UTF8.GetString(filter.Table.ReadArrayFile(filter.ColumnName ?? "", (long)id));
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            foreach (var elem in doc.RootElement.EnumerateArray())
+            {
+                var elemStr = elem.ValueKind == System.Text.Json.JsonValueKind.String
+                    ? elem.GetString()
+                    : elem.GetRawText();
+                if (string.Equals(elemStr, filter.SearchValue, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
+        }
+
         if (filter.Handle is not null && IsStringOp(filter.Op))
         {
             if (filter.Encoded is null) return false;
@@ -318,11 +353,16 @@ internal static class WhereEngine
                 }];
 
             var colHandle = table.GetColumn(c.Column);
-            if (colHandle.Type != ColumnType.String)
+            // contains is also valid on array columns
+            if (c.Operator == CompareOp.Contains && colHandle.Type == ColumnType.Array)
+            {
+                // OK — array contains
+            }
+            else if (colHandle.Type != ColumnType.String)
                 return [new SproutError
                 {
                     Code = ErrorCodes.TYPE_MISMATCH,
-                    Message = $"'{OpName(c.Operator)}' can only be used on string columns",
+                    Message = $"'{OpName(c.Operator)}' can only be used on string or array columns",
                     Position = c.ColumnPosition, Length = c.ColumnLength,
                 }];
         }

@@ -710,7 +710,7 @@ internal static class GetExecutor
     }
 
     /// <summary>
-    /// Reads a column value, handling blob columns by reading the .blob file and returning base64.
+    /// Reads a column value, handling blob/array columns by reading external files.
     /// </summary>
     private static object? ReadColumnValue(ColumnHandle handle, long place, ulong id, string colName, TableHandle table)
     {
@@ -721,6 +721,18 @@ internal static class GetExecutor
             var blobPath = table.GetBlobPath(colName, (long)id);
             if (File.Exists(blobPath))
                 return Convert.ToBase64String(table.ReadBlobFile(colName, (long)id));
+            return null;
+        }
+        if (handle.Type == ColumnType.Array)
+        {
+            var elementCount = handle.ReadValue(place);
+            if (elementCount is null) return null;
+            var arrayPath = table.GetArrayPath(colName, (long)id);
+            if (File.Exists(arrayPath))
+            {
+                var json = System.Text.Encoding.UTF8.GetString(table.ReadArrayFile(colName, (long)id));
+                return System.Text.Json.JsonSerializer.Deserialize<List<object?>>(json);
+            }
             return null;
         }
         return handle.ReadValue(place);
@@ -983,6 +995,27 @@ internal static class GetExecutor
                             record[entry.Name] = Convert.ToBase64String(table.ReadBlobFile(entry.Name, (long)id));
                         else
                             record[entry.Name] = null;
+                    }
+                    else
+                    {
+                        record[entry.Name] = null;
+                    }
+                }
+                else if (entry.Handle.Type == ColumnType.Array && table is not null)
+                {
+                    var elementCount = entry.Handle.ReadValue(place);
+                    if (elementCount is not null)
+                    {
+                        var arrayPath = table.GetArrayPath(entry.Name, (long)id);
+                        if (File.Exists(arrayPath))
+                        {
+                            var json = System.Text.Encoding.UTF8.GetString(table.ReadArrayFile(entry.Name, (long)id));
+                            record[entry.Name] = System.Text.Json.JsonSerializer.Deserialize<List<object?>>(json);
+                        }
+                        else
+                        {
+                            record[entry.Name] = null;
+                        }
                     }
                     else
                     {

@@ -295,6 +295,57 @@ internal static class UpsertParser
             };
         }
 
+        // Array literal: ['a', 'b', ...]
+        if (token.Type == TokenType.LeftBracket)
+        {
+            ctx.Advance();
+            var elements = new List<string>();
+            var elementKind = UpsertValueKind.Null; // track element type
+
+            if (ctx.Peek().Type != TokenType.RightBracket)
+            {
+                while (true)
+                {
+                    var elemValue = ParseValue(ctx);
+                    if (ctx.HasErrors) return null!;
+
+                    if (elemValue.Kind == UpsertValueKind.Null)
+                    {
+                        elements.Add("null");
+                    }
+                    else
+                    {
+                        if (elementKind == UpsertValueKind.Null)
+                            elementKind = elemValue.Kind;
+                        elements.Add(elemValue.Kind == UpsertValueKind.String
+                            ? System.Text.Json.JsonSerializer.Serialize(elemValue.Raw)
+                            : elemValue.Raw ?? "null");
+                    }
+
+                    if (ctx.Peek().Type == TokenType.Comma)
+                    {
+                        ctx.Advance();
+                        continue;
+                    }
+                    break;
+                }
+            }
+
+            if (ctx.Peek().Type != TokenType.RightBracket)
+            {
+                ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected ']' to close array");
+                return null!;
+            }
+            ctx.Advance();
+
+            var json = "[" + string.Join(",", elements) + "]";
+            return new UpsertValue
+            {
+                Kind = UpsertValueKind.Array,
+                Raw = json,
+            };
+        }
+
         ctx.AddError(token, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_VALUE);
         return null!;
     }

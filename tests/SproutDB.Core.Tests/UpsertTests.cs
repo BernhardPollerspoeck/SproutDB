@@ -124,23 +124,25 @@ public class UpsertTests : IDisposable
     }
 
     [Fact]
-    public void Upsert_NewIdCreatesRecord()
+    public void Upsert_NewId_NonExistent_ReturnsError()
     {
         var r = _engine.Execute("upsert users {_id: 42, name: 'John'}", "testdb");
 
-        Assert.Equal(SproutOperation.Upsert, r.Operation);
-        Assert.Equal((ulong)42, r.Data![0]["_id"]);
-        Assert.Equal("John", r.Data[0]["name"]);
+        Assert.Equal(SproutOperation.Error, r.Operation);
+        Assert.Equal("ID_NOT_FOUND", r.Errors?[0].Code);
     }
 
     [Fact]
-    public void Upsert_NewId_NextIdAdvances()
+    public void Upsert_ExplicitId_UpdatesExistingRow()
     {
-        _engine.Execute("upsert users {_id: 42, name: 'John'}", "testdb");
-        var r = _engine.Execute("upsert users {name: 'Jane'}", "testdb");
+        var insert = _engine.Execute("upsert users {name: 'John'}", "testdb");
+        var id = insert.Data?[0]["_id"];
+        Assert.NotNull(id);
 
-        // next_id should have advanced past 42
-        Assert.Equal((ulong)43, r.Data![0]["_id"]);
+        var r = _engine.Execute($"upsert users {{_id: {id}, name: 'Jane'}}", "testdb");
+
+        Assert.Equal(SproutOperation.Upsert, r.Operation);
+        Assert.Equal("Jane", r.Data?[0]["name"]);
     }
 
     // ── Type handling ───────────────────────────────────────
@@ -330,8 +332,8 @@ public class UpsertTests : IDisposable
         var r = _engine.Execute("upsert users {_id: 1, email: 'john@test.com'} on email", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
-        Assert.Equal("SYNTAX_ERROR", r.Errors![0].Code);
-        Assert.Contains("_id", r.Errors[0].Message);
+        // Explicit _id check runs first — ID 1 doesn't exist
+        Assert.Equal("ID_NOT_FOUND", r.Errors?[0].Code);
     }
 
     // ── Bulk upsert ─────────────────────────────────────────

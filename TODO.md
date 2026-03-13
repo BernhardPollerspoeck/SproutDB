@@ -1,3 +1,13 @@
+# SproutDB — Offene Punkte
+
+## JSON Column Type
+
+**Status:** Feature-Wunsch
+
+Für semi-strukturierte Daten (Konfiguration, Metadaten). Querybar wäre nice-to-have.
+
+---
+
 # SproutDB Admin UI — Offene Punkte
 
 Aufwand: `░` = 1 Punkt, 10 = max

@@ -45,12 +45,14 @@ internal static class DeleteExecutor
                 }
             }
 
-            // Delete blob files
+            // Delete blob/array files
             foreach (var col in table.Schema.Columns)
             {
                 ColumnTypes.TryParse(col.Type, out var colType);
                 if (colType == ColumnType.Blob)
                     table.DeleteBlobFile(col.Name, (long)id);
+                else if (colType == ColumnType.Array)
+                    table.DeleteArrayFile(col.Name, (long)id);
             }
 
             // Free slot (marks as deleted, decrements count)

@@ -70,56 +70,6 @@ commit
 
 Kein Ersatz für Application-Level Transaction-Logik bei externen API Calls – das ist nicht Job der DB.
 
-### Distinct ~1-2h
-
-Eigenes Keyword, kein Teil von select. Wirkt als Post-Filter nach Where, vor Project.
-
-```
-get users distinct name
-get users distinct name, email
-get users where age > 25 distinct city select name, city
-```
-
-Pipeline-Reihenfolge: Filter → Distinct → Project → Auto-Page.
-
-### Unique Constraint ~2-3h
-
-Über Index gelöst. `create index unique` erzeugt Index + Constraint in einem.
-
-```
-create index unique users.email
-create index unique users.email, users.tenant_id
-```
-
-**Regeln:**
-- Single-Column und Composite Unique
-- Prüfung bei jedem Insert/Upsert via B-Tree Lookup (O(log n)). Kein Table Scan.
-- Null-Werte: Mehrere Nulls erlaubt (null = unbekannt, kein Unique-Verstoß)
-- Unique-Violation → eigener Error-Typ
-- `create index unique` auf Spalte mit bestehenden Duplikaten → Fehler
-
-### Blob/File Storage ~4-5h
-
-Eigener Spaltentyp `blob`. Storage als File per Row: `columnname_rowid.blob` im Table-Verzeichnis. Die Daten liegen als Rohbytes im jeweiligen File.
-
-```
-add column mytable avatar blob
-```
-
-**Datentyp:** Wird bei `add column` mit `blob` deklariert. Engine weiß dann: Wert als eigenes File speichern statt in die Column-File.
-
-**Encoding:** Base64 rein und raus. Wert im Query-String ist Base64, Wert im JSON-Response ist Base64. Kein separater Binary-Endpoint.
-
-**Operationen:**
-- **Write/Insert**: Base64-String → Raw-Bytes → File schreiben
-- **Read**: Raw-Bytes → Base64 → im JSON-Response
-- **Update**: Rename old File → Write new File → Delete renamed (Crash-Safe)
-- **Delete Row**: File direkt löschen
-- **Where**: Erlaubt (vergleicht Base64-Strings, kein Sonderverhalten)
-- **Select**: Blob-Spalten werden wie normale Spalten behandelt, kein Sonderverhalten
-
-**Storage:** Passt zum Column-per-File Prinzip. Jede Row ein eigenes File – keine Größenbeschränkung, kein Chunking. Backup (ZIP) packt Blob-Files implizit mit ein (ist im DB-Folder).
-
 ---
 
 ## Geplant – Design ausstehend
