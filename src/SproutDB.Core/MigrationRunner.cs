@@ -29,6 +29,10 @@ internal static class MigrationRunner
         // Load already-applied Once migrations (reads are not blocked)
         var applied = LoadAppliedMigrations(db);
 
+        // Wrap db in a throwing proxy so query errors inside migrations
+        // surface as exceptions instead of being silently swallowed
+        var throwingDb = new ThrowingMigrationDatabase(db);
+
         // Execute in order
         foreach (var migration in migrations)
         {
@@ -37,8 +41,9 @@ internal static class MigrationRunner
             if (migration.Mode == MigrationMode.Once && applied.Contains(name))
                 continue;
 
-            // Run the migration
-            migration.Up(db);
+            // Run the migration — errors throw SproutMigrationException
+            throwingDb.CurrentMigrationName = name;
+            migration.Up(throwingDb);
 
             // Track Once migrations (bypasses _ prefix protection)
             if (migration.Mode == MigrationMode.Once)
@@ -48,8 +53,9 @@ internal static class MigrationRunner
                 var trackResult = internalDb.QueryInternal(trackQuery);
                 if (trackResult.Operation == SproutOperation.Error)
                 {
-                    throw new InvalidOperationException(
-                        $"Failed to track migration '{name}': {trackResult.Errors?[0].Message}");
+                    throw new SproutMigrationException(
+                        name, trackQuery, trackResult.Errors?[0].Code ?? "UNKNOWN",
+                        trackResult.Errors?[0].Message ?? "Failed to track migration");
                 }
             }
         }
@@ -96,5 +102,38 @@ internal static class MigrationRunner
     private static string EscapeString(string value)
     {
         return value.Replace("'", "\\'");
+    }
+
+    /// <summary>
+    /// Proxy that wraps an ISproutDatabase and throws on any query error,
+    /// so migration failures are never silently swallowed.
+    /// </summary>
+    private sealed class ThrowingMigrationDatabase : ISproutDatabase
+    {
+        private readonly ISproutDatabase _inner;
+
+        public string Name => _inner.Name;
+        public string CurrentMigrationName { get; set; } = "";
+
+        public ThrowingMigrationDatabase(ISproutDatabase inner)
+        {
+            _inner = inner;
+        }
+
+        public SproutResponse Query(string query)
+        {
+            var result = _inner.Query(query);
+
+            if (result.Operation == SproutOperation.Error && result.Errors is { Count: > 0 })
+            {
+                var error = result.Errors[0];
+                throw new SproutMigrationException(CurrentMigrationName, query, error.Code, error.Message);
+            }
+
+            return result;
+        }
+
+        public IDisposable OnChange(string table, Action<SproutResponse> callback)
+            => _inner.OnChange(table, callback);
     }
 }

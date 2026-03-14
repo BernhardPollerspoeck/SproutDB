@@ -121,6 +121,38 @@ public class MigrationTests : IDisposable
     }
 
     [Fact]
+    public void Migrate_ThrowsSproutMigrationException_OnQueryError()
+    {
+        var db = _engine.GetOrCreateDatabase("testdb");
+
+        var ex = Assert.Throws<SproutMigrationException>(() =>
+            _engine.Migrate(typeof(TestMigrations.SilentFailing.SilentlyFailingMigration).Assembly, db));
+
+        Assert.Contains("SilentlyFailingMigration", ex.MigrationName);
+        Assert.Equal("UNKNOWN_TABLE", ex.ErrorCode);
+        Assert.Contains("nonexistent_table", ex.Query);
+    }
+
+    [Fact]
+    public void Migrate_SilentFailure_DoesNotTrackMigration()
+    {
+        var db = _engine.GetOrCreateDatabase("testdb");
+
+        Assert.Throws<SproutMigrationException>(() =>
+            _engine.Migrate(typeof(TestMigrations.SilentFailing.SilentlyFailingMigration).Assembly, db));
+
+        var r = db.Query("get _migrations select name");
+        if (r.Data is not null)
+        {
+            Assert.DoesNotContain(r.Data, row =>
+            {
+                var name = (string)row["name"];
+                return name.Contains("SilentlyFailingMigration");
+            });
+        }
+    }
+
+    [Fact]
     public void GetOrCreateDatabase_CreatesIfNotExists()
     {
         var db = _engine.GetOrCreateDatabase("newdb");

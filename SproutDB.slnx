@@ -8,6 +8,7 @@
     <Project Path="tests/TestMigrations.Failing/TestMigrations.Failing.csproj" />
     <Project Path="tests/TestMigrations.Schema/TestMigrations.Schema.csproj" />
     <Project Path="tests/TestMigrations.Startup/TestMigrations.Startup.csproj" />
+    <Project Path="tests/TestMigrations.SilentFailing/TestMigrations.SilentFailing.csproj" />
   </Folder>
   <Folder Name="/01_Files/">
     <File Path="sproutdb-api-reference.md" />

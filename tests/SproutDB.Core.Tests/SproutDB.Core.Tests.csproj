@@ -24,6 +24,7 @@
     <ProjectReference Include="..\TestMigrations.Schema\TestMigrations.Schema.csproj" />
     <ProjectReference Include="..\TestMigrations.Startup\TestMigrations.Startup.csproj" />
     <ProjectReference Include="..\TestMigrations.Failing\TestMigrations.Failing.csproj" />
+    <ProjectReference Include="..\TestMigrations.SilentFailing\TestMigrations.SilentFailing.csproj" />
   </ItemGroup>
 
   <ItemGroup>

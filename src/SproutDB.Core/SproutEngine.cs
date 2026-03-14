@@ -417,14 +417,16 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     private void EnsureSystemTable(string dbPath, string tableName, List<ColumnSchemaEntry> columns)
     {
         var tablePath = Path.Combine(dbPath, tableName);
+        var schemaPath = Path.Combine(tablePath, "_schema.bin");
 
-        if (Directory.Exists(tablePath))
+        if (Directory.Exists(tablePath) && File.Exists(schemaPath))
         {
             // Already exists — just ensure it's in the cache
             _tableCache.GetOrOpen(tablePath);
             return;
         }
 
+        // Directory may exist without schema (partial/failed creation) — recreate all files
         Directory.CreateDirectory(tablePath);
 
         var schema = new TableSchema
