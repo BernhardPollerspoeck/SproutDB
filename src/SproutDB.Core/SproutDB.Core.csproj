@@ -23,7 +23,22 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.*" />
+    <ProjectReference Include="../SproutDB.Analyzers/SproutDB.Analyzers.csproj"
+                      ReferenceOutputAssembly="false"
+                      PrivateAssets="all" />
   </ItemGroup>
+
+  <Target Name="_PackAnalyzer" AfterTargets="ResolveProjectReferences">
+    <MSBuild Projects="../SproutDB.Analyzers/SproutDB.Analyzers.csproj" Targets="GetTargetPath">
+      <Output TaskParameter="TargetOutputs" ItemName="_AnalyzerOutput" />
+    </MSBuild>
+    <ItemGroup>
+      <None Include="@(_AnalyzerOutput)"
+            Pack="true"
+            PackagePath="analyzers/dotnet/cs"
+            Visible="false" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <InternalsVisibleTo Include="SproutDB.Core.Tests" />

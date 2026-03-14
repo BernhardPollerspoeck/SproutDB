@@ -1,7 +1,11 @@
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using SproutDB.Core.Admin;
 using SproutDB.Core.Admin.Components;
 
@@ -18,6 +22,34 @@ public static class SproutAdminExtensions
     /// </summary>
     public static IEndpointRouteBuilder MapSproutDBAdmin(this IEndpointRouteBuilder endpoints)
     {
+        if (endpoints.ServiceProvider.GetService<QueryWorkspaceState>() is null)
+        {
+            throw new InvalidOperationException(
+                "MapSproutDBAdmin() requires AddSproutDBAdmin() to be called on the service collection.");
+        }
+
+        if (endpoints is IApplicationBuilder app)
+        {
+            app.UseStaticFiles();
+            app.UseAntiforgery();
+        }
+
+        var lifetime = endpoints.ServiceProvider.GetRequiredService<IHostApplicationLifetime>();
+        var logger = endpoints.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("SproutDB.Admin");
+
+        lifetime.ApplicationStarted.Register(() =>
+        {
+            var addresses = endpoints.ServiceProvider.GetService<IServer>()
+                ?.Features.Get<IServerAddressesFeature>();
+            if (addresses is not null)
+            {
+                foreach (var addr in addresses.Addresses)
+                {
+                    logger.LogInformation("SproutDB Admin UI: {Url}/sproutdb/admin", addr);
+                }
+            }
+        });
+
         endpoints.MapRazorComponents<AdminApp>()
             .AddInteractiveServerRenderMode();
 
@@ -36,6 +68,7 @@ public static class SproutAdminExtensions
     {
         services.AddRazorComponents()
             .AddInteractiveServerComponents();
+        services.AddAntiforgery();
         services.AddSingleton<QueryWorkspaceState>();
         return services;
     }

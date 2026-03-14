@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/SproutDB.Core/SproutDB.Core.csproj" />
+    <Project Path="src/SproutDB.Analyzers/SproutDB.Analyzers.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SproutDB.Core.Tests/SproutDB.Core.Tests.csproj" />
