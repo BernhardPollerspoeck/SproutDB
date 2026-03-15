@@ -284,7 +284,7 @@ internal sealed class ColumnHandle : IDisposable
                 break;
             case ColumnType.String:
                 var bytes = Encoding.UTF8.GetBytes(raw);
-                var len = Math.Min(bytes.Length, Schema.Size - 1);
+                var len = Math.Min(bytes.Length, Schema.Size);
                 Array.Copy(bytes, buf, len);
                 break;
             case ColumnType.Blob:
@@ -439,7 +439,7 @@ internal sealed class ColumnHandle : IDisposable
     private object WriteString(long offset, string raw)
     {
         var bytes = Encoding.UTF8.GetBytes(raw);
-        var len = Math.Min(bytes.Length, Schema.Size - 1); // room for null terminator
+        var len = Math.Min(bytes.Length, Schema.Size);
         // Zero the entire value area first
         var zeroBuf = new byte[Schema.Size];
         _view.WriteArray(offset, zeroBuf, 0, zeroBuf.Length);

@@ -535,6 +535,36 @@ public class UpsertTests : IDisposable
             r.AnnotatedQuery);
     }
 
+    // ── String length boundary ────────────────────────────
+
+    [Fact]
+    public void String_ExactColumnLength_NotTruncated()
+    {
+        using var tempDir = new TempDir();
+        using var engine = new SproutEngine(tempDir.Path);
+        engine.Execute("create database", "testdb");
+        engine.Execute("create table products (color string 7)", "testdb");
+
+        engine.Execute("upsert products {color: '#818cf4'}", "testdb");
+
+        var r = engine.Execute("get products", "testdb");
+        Assert.Equal("#818cf4", r.Data![0]["color"]); // all 7 chars preserved
+    }
+
+    [Fact]
+    public void String_LongerThanColumn_Truncated()
+    {
+        using var tempDir = new TempDir();
+        using var engine = new SproutEngine(tempDir.Path);
+        engine.Execute("create database", "testdb");
+        engine.Execute("create table products (color string 7)", "testdb");
+
+        engine.Execute("upsert products {color: '#818cf4X'}", "testdb"); // 8 chars
+
+        var r = engine.Execute("get products", "testdb");
+        Assert.Equal("#818cf4", r.Data![0]["color"]); // truncated to 7
+    }
+
     // Helper for tests that need custom settings
     private sealed class TempDir : IDisposable
     {
