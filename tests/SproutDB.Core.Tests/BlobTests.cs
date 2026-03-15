@@ -156,6 +156,28 @@ public class BlobTests : IDisposable
         Assert.Contains("type mismatch", result.Errors![0].Message);
     }
 
+    [Fact]
+    public void Upsert_BlobColumn_InvalidBase64_ReturnsTypeMismatch()
+    {
+        var result = _engine.Execute("upsert files { name: 'bad.txt', data: 'this is plain text, not base64' }", "testdb");
+        Assert.Equal(SproutOperation.Error, result.Operation);
+        Assert.Contains("not valid base64", result.Errors![0].Message);
+    }
+
+    [Fact]
+    public void Upsert_BlobColumn_InvalidBase64_DoesNotCrashWalReplay()
+    {
+        _engine.Execute("upsert files { name: 'bad.txt', data: 'not base64!!!' }", "testdb");
+
+        // Reload engine — WAL replay must not crash
+        _engine.Dispose();
+        _engine = new SproutEngine(_tempDir);
+
+        // Engine should be functional
+        var result = _engine.Execute("get files", "testdb");
+        Assert.Empty(result.Data!);
+    }
+
     // ── Index restriction ──────────────────────────────────
 
     [Fact]

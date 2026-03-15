@@ -501,11 +501,23 @@ internal static class UpsertExecutor
             ColumnType.Blob when kind != UpsertValueKind.String =>
                 $"type mismatch on '{field.Name}': expected blob (base64 string), got {UpsertValueKindNames.GetName(kind)}",
 
+            ColumnType.Blob when kind == UpsertValueKind.String && !IsValidBase64(field.Value.Raw) =>
+                $"type mismatch on '{field.Name}': value is not valid base64",
+
             ColumnType.Array when kind != UpsertValueKind.Array =>
                 $"type mismatch on '{field.Name}': expected array, got {UpsertValueKindNames.GetName(kind)}",
 
             _ => null,
         };
+    }
+
+    private static bool IsValidBase64(string? value)
+    {
+        if (value is null) return false;
+        Span<byte> buffer = stackalloc byte[256];
+        if (value.Length > 170) // 170 chars base64 ≈ 128 bytes output
+            buffer = new byte[((value.Length + 3) / 4) * 3];
+        return Convert.TryFromBase64String(value, buffer, out _);
     }
 
     // ── Internal types ───────────────────────────────────────────────
