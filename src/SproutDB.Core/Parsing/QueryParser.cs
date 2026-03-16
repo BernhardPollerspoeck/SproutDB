@@ -69,6 +69,9 @@ internal static class QueryParser
         if (ctx.MatchKeyword("rotate"))
             return ParseRotate(ctx);
 
+        if (ctx.MatchKeyword("shrink"))
+            return ShrinkParser.Parse(ctx);
+
         return ctx.Error(current, ErrorCodes.SYNTAX_ERROR, ErrorMessages.UNKNOWN_COMMAND);
     }
 

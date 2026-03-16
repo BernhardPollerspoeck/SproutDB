@@ -30,4 +30,6 @@ public enum SproutOperation : byte
     Restrict = 22,
     Unrestrict = 23,
     PurgeTtl = 24,
+    ShrinkTable = 25,
+    ShrinkDatabase = 26,
 }

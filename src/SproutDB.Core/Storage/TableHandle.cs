@@ -31,6 +31,10 @@ internal sealed class TableHandle : IDisposable
         var schemaPath = Path.Combine(tablePath, "_schema.bin");
         var schema = SchemaFile.Read(schemaPath);
 
+        // Schema-level ChunkSize overrides caller default
+        if (schema.ChunkSize > 0)
+            chunkSize = schema.ChunkSize;
+
         var indexPath = Path.Combine(tablePath, "_index");
         var index = new IndexHandle(indexPath, chunkSize);
 

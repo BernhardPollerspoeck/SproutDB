@@ -13,6 +13,10 @@
     {
         <div class="query-toolbar-sep"></div>
         <span class="schema-table-count">@tables.Count table@(tables.Count != 1 ? "s" : "")</span>
+        @if (_dbChunkSize > 0)
+        {
+            <span class="tree-badge" style="background: var(--accent-bg, #2a2a3a); color: var(--accent, #7c9cff);" title="Database Chunk Size: @_dbChunkSize">DB Chunk @_dbChunkSize</span>
+        }
     }
 </div>
 
@@ -83,6 +87,10 @@
                     <option value="d">days</option>
                 </select>
             </label>
+            <label style="font-size: 11.5px; color: var(--text-2); display: flex; align-items: center; gap: 6px;">
+                Chunk Size
+                <input type="number" placeholder="default" @bind="_newTableChunkSize" @bind:event="oninput" style="width: 70px; font-size: 11px;" />
+            </label>
         </div>
     </div>
 }
@@ -121,6 +129,10 @@
                 @if (ttlCache.TryGetValue(table, out var ttlSec) && ttlSec > 0)
                 {
                     <span class="tree-badge" style="background: var(--accent-bg, #2a2a3a); color: var(--accent, #7c9cff);" title="TTL: @FormatTtl(ttlSec)">TTL @FormatTtl(ttlSec)</span>
+                }
+                @if (chunkSizeCache.TryGetValue(table, out var cs) && cs > 0)
+                {
+                    <span class="tree-badge" style="background: var(--accent-bg, #2a2a3a); color: var(--accent, #7c9cff);" title="Chunk Size: @cs">Chunk @cs</span>
                 }
                 <button class="schema-action-btn" @onclick="() => StartAddColumn(table)" @onclick:stopPropagation="true" title="Add column">+</button>
             </div>
@@ -265,6 +277,24 @@
                     {
                         <div class="schema-edit-error">@_ttlError</div>
                     }
+                    @if (effectiveChunkSizeCache.TryGetValue(table, out var ecs) && ecs > 0)
+                    {
+                        <div style="padding: 6px 12px; font-size: 11.5px; color: var(--text-2);">
+                            Effective Chunk Size: <strong>@ecs</strong>
+                            @if (chunkSizeCache.TryGetValue(table, out var tcs) && tcs > 0)
+                            {
+                                <span> (table-level: @tcs)</span>
+                            }
+                            else if (_dbChunkSize > 0)
+                            {
+                                <span> (from database: @_dbChunkSize)</span>
+                            }
+                            else
+                            {
+                                <span> (engine default)</span>
+                            }
+                        </div>
+                    }
                 </div>
             }
         }
@@ -293,6 +323,9 @@
     private string? expandedTable;
     private Dictionary<string, List<ColumnInfo>> columnCache = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, long> ttlCache = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, int> chunkSizeCache = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, int> effectiveChunkSizeCache = new(StringComparer.OrdinalIgnoreCase);
+    private int _dbChunkSize;
 
     private bool initialized;
 
@@ -302,6 +335,7 @@
     private string? _createTableError;
     private string _newTableTtlValue = string.Empty;
     private string _newTableTtlUnit = "h";
+    private string _newTableChunkSize = string.Empty;
 
     // ── Add Column ──
     private string? _addColumnForTable;
@@ -393,6 +427,9 @@
         expandedTable = null;
         columnCache.Clear();
         ttlCache.Clear();
+        chunkSizeCache.Clear();
+        effectiveChunkSizeCache.Clear();
+        _dbChunkSize = 0;
         _newTableName = null;
         _addColumnForTable = null;
         CancelRename();
@@ -408,6 +445,7 @@
     {
         var response = Engine.Execute("describe", selectedDatabase);
         tables = response.Schema?.Tables?.Where(t => !t.StartsWith("_")).ToList() ?? [];
+        _dbChunkSize = response.Schema?.ChunkSize ?? 0;
     }
 
     private void ToggleTable(string table)
@@ -429,6 +467,8 @@
         var response = Engine.Execute($"describe {table}", selectedDatabase);
         columnCache[table] = response.Schema?.Columns ?? [];
         ttlCache[table] = response.Schema?.TtlSeconds ?? 0;
+        chunkSizeCache[table] = response.Schema?.ChunkSize ?? 0;
+        effectiveChunkSizeCache[table] = response.Schema?.EffectiveChunkSize ?? 0;
     }
 
     // ── A) Create Table Wizard ──
@@ -445,6 +485,7 @@
         _createTableError = null;
         _newTableTtlValue = string.Empty;
         _newTableTtlUnit = "h";
+        _newTableChunkSize = string.Empty;
         // Remove newTable from URL without reload
         NavigationManager.NavigateTo(
             $"/sproutdb/admin/schema?db={Uri.EscapeDataString(selectedDatabase)}",
@@ -468,6 +509,9 @@
         if (int.TryParse(_newTableTtlValue, out var ttlVal) && ttlVal > 0)
             query += $" ttl {ttlVal}{_newTableTtlUnit}";
 
+        if (int.TryParse(_newTableChunkSize, out var csVal) && csVal > 0)
+            query += $" with chunk_size {csVal}";
+
         var response = Engine.Execute(query, selectedDatabase);
         if (response.Operation == SproutOperation.Error)
         {
@@ -481,6 +525,7 @@
         _createTableError = null;
         _newTableTtlValue = string.Empty;
         _newTableTtlUnit = "h";
+        _newTableChunkSize = string.Empty;
 
         LoadTables();
         ExpandTable(tableName);

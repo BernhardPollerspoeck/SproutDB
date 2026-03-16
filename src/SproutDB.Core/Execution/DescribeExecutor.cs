@@ -7,7 +7,7 @@ internal static class DescribeExecutor
     /// <summary>
     /// DESCRIBE TABLE — returns all columns with type info.
     /// </summary>
-    public static SproutResponse ExecuteTable(string query, TableHandle table, string tableName, Func<string, bool>? isAutoIndex = null)
+    public static SproutResponse ExecuteTable(string query, TableHandle table, string tableName, int effectiveChunkSize, Func<string, bool>? isAutoIndex = null)
     {
         var columns = ResponseHelper.BuildColumnInfoList(table.Schema, table.HasBTree, isAutoIndex);
 
@@ -19,6 +19,8 @@ internal static class DescribeExecutor
                 Table = tableName,
                 Columns = columns,
                 TtlSeconds = table.Schema.TtlSeconds,
+                ChunkSize = table.Schema.ChunkSize,
+                EffectiveChunkSize = effectiveChunkSize,
             },
         };
     }
@@ -42,12 +44,22 @@ internal static class DescribeExecutor
             tables.Sort(StringComparer.Ordinal);
         }
 
+        // Read DB-level ChunkSize
+        int dbChunkSize = 0;
+        var metaPath = Path.Combine(dbPath, "_meta.bin");
+        if (File.Exists(metaPath))
+        {
+            var (_, cs) = MetaFile.Read(metaPath);
+            dbChunkSize = cs;
+        }
+
         return new SproutResponse
         {
             Operation = SproutOperation.Describe,
             Schema = new SchemaInfo
             {
                 Tables = tables,
+                ChunkSize = dbChunkSize,
             },
         };
     }

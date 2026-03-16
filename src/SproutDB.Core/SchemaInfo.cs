@@ -13,4 +13,6 @@ public sealed class SchemaInfo
     public string? Column { get; init; }
     public string? Index { get; init; }
     public long TtlSeconds { get; init; }
+    public int ChunkSize { get; init; }
+    public int EffectiveChunkSize { get; init; }
 }

@@ -5,6 +5,7 @@ internal sealed class TableSchema
     public long CreatedTicks { get; set; }
     public long TtlSeconds { get; set; } // 0 = no table TTL
     public List<ColumnSchemaEntry> Columns { get; set; } = [];
+    public int ChunkSize { get; set; } // 0 = use database/engine default
 }
 
 internal sealed class ColumnSchemaEntry

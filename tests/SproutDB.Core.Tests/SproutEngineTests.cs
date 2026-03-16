@@ -47,7 +47,7 @@ public class SproutEngineTests : IDisposable
 
         var metaPath = Path.Combine(_tempDir, "shop", "_meta.bin");
         Assert.True(File.Exists(metaPath));
-        Assert.Equal(8, new FileInfo(metaPath).Length); // 8 bytes = created_ticks (long)
+        Assert.Equal(12, new FileInfo(metaPath).Length); // 8 bytes created_ticks + 4 bytes chunk_size
 
         using var fs = new FileStream(metaPath, FileMode.Open, FileAccess.Read);
         using var br = new BinaryReader(fs);

@@ -18,6 +18,8 @@ namespace SproutDB.Core.Storage;
 ///     [1 byte]  flags (bit 0 = nullable, bit 1 = strict, bit 2 = unique)
 ///     [2 bytes] default_length (ushort, 0 = no default)
 ///     [N bytes] default (UTF-8, only if default_length > 0)
+///   after all columns:
+///   [4 bytes] chunk_size (int, 0 = use database/engine default) — optional, backward-compat
 /// </summary>
 internal static class SchemaFile
 {
@@ -72,6 +74,9 @@ internal static class SchemaFile
                 bw.Write(col.ElementSize);
             }
         }
+
+        // ChunkSize (after all columns)
+        bw.Write(schema.ChunkSize);
     }
 
     public static TableSchema Read(string path)
@@ -125,11 +130,15 @@ internal static class SchemaFile
             });
         }
 
+        // ChunkSize (backward-compat: only present if bytes remain)
+        var chunkSize = fs.Position < fs.Length ? br.ReadInt32() : 0;
+
         return new TableSchema
         {
             CreatedTicks = createdTicks,
             TtlSeconds = ttlSeconds,
             Columns = columns,
+            ChunkSize = chunkSize,
         };
     }
 }

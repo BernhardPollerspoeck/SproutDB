@@ -21,4 +21,10 @@ public interface ISproutDatabase
     /// Dispose the returned handle to unsubscribe.
     /// </summary>
     IDisposable OnChange(string table, Action<SproutResponse> callback);
+
+    /// <summary>
+    /// Saves a query to the _saved_queries system table (for Admin UI).
+    /// Creates the table automatically if it doesn't exist.
+    /// </summary>
+    void SaveQuery(string name, string query, bool pinned = false);
 }

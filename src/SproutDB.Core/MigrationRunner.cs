@@ -135,5 +135,8 @@ internal static class MigrationRunner
 
         public IDisposable OnChange(string table, Action<SproutResponse> callback)
             => _inner.OnChange(table, callback);
+
+        public void SaveQuery(string name, string query, bool pinned = false)
+            => _inner.SaveQuery(name, query, pinned);
     }
 }

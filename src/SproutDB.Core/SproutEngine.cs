@@ -243,9 +243,9 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     /// </summary>
     private SproutResponse ExecuteWrite(string query, string dbName, string dbPath, IQuery parsedQuery)
     {
-        if (parsedQuery is CreateDatabaseQuery)
+        if (parsedQuery is CreateDatabaseQuery cdbq)
         {
-            var r = ExecuteCreateDatabase(query, dbName, dbPath);
+            var r = ExecuteCreateDatabase(query, dbName, dbPath, cdbq);
             if (r.Errors is null)
             {
                 LogAudit(dbName, query, "create_database");
@@ -944,7 +944,8 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         return query is CreateTableQuery or UpsertQuery or AddColumnQuery
             or PurgeColumnQuery or PurgeTableQuery or PurgeDatabaseQuery
             or RenameColumnQuery or AlterColumnQuery or DeleteQuery
-            or CreateIndexQuery or PurgeIndexQuery or PurgeTtlQuery;
+            or CreateIndexQuery or PurgeIndexQuery or PurgeTtlQuery
+            or ShrinkTableQuery or ShrinkDatabaseQuery;
     }
 
     /// <summary>
@@ -1053,15 +1054,20 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             var m = _indexMetrics.TryGet(describeTablePath, col);
             return m is not null && !m.IsManual;
         };
+        var describeEffectiveChunkSize = ResolveChunkSize(0, dbPath);
         return ExecuteWithTable(query, dbPath, q.Table,
-            table => DescribeExecutor.ExecuteTable(query, table, q.Table, isAutoIndex));
+            table =>
+            {
+                var ecs = table.Schema.ChunkSize > 0 ? table.Schema.ChunkSize : describeEffectiveChunkSize;
+                return DescribeExecutor.ExecuteTable(query, table, q.Table, ecs, isAutoIndex);
+            });
     }
 
     private SproutResponse Dispatch(string query, string dbName, string dbPath, IQuery parsedQuery)
     {
         return parsedQuery switch
         {
-            CreateDatabaseQuery => ExecuteCreateDatabase(query, dbName, dbPath),
+            CreateDatabaseQuery q => ExecuteCreateDatabase(query, dbName, dbPath, q),
             CreateTableQuery q => ExecuteCreateTable(query, dbName, dbPath, q),
             GetQuery q => ExecuteWithTable(query, dbPath, q.Table, table => GetExecutor.Execute(query, table, q, _settings.DefaultPageSize, q.Follow is not null ? name => ResolveTable(dbPath, name) : null)),
             UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table, table => UpsertExecutor.Execute(query, table, q, _settings.BulkLimit)),
@@ -1075,15 +1081,17 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             CreateIndexQuery q => ExecuteWithTable(query, dbPath, q.Table, table => CreateIndexExecutor.Execute(query, table, q)),
             PurgeIndexQuery q => ExecuteWithTable(query, dbPath, q.Table, table => PurgeIndexExecutor.Execute(query, table, q)),
             PurgeTtlQuery q => ExecuteWithTable(query, dbPath, q.Table, table => ExecutePurgeTtl(query, table, q)),
+            ShrinkTableQuery q => ExecuteShrinkTable(query, dbPath, q),
+            ShrinkDatabaseQuery q => ExecuteShrinkDatabase(query, dbName, dbPath, q),
             _ => ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, "operation not supported"),
         };
     }
 
     // ── Database-level execution ─────────────────────────────
 
-    private SproutResponse ExecuteCreateDatabase(string query, string dbName, string dbPath)
+    private SproutResponse ExecuteCreateDatabase(string query, string dbName, string dbPath, CreateDatabaseQuery q)
     {
-        var result = CreateDatabaseExecutor.Execute(query, dbName, dbPath);
+        var result = CreateDatabaseExecutor.Execute(query, dbName, dbPath, q.ChunkSize);
         if (result.Errors is null)
             _tableCache.RegisterDatabase(dbPath);
         return result;
@@ -1095,7 +1103,22 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_DATABASE,
                 $"database '{dbName}' does not exist");
 
-        return CreateTableExecutor.Execute(query, dbName, dbPath, q, _settings.ChunkSize);
+        var effectiveChunkSize = ResolveChunkSize(q.ChunkSize, dbPath);
+        return CreateTableExecutor.Execute(query, dbName, dbPath, q, effectiveChunkSize);
+    }
+
+    private int ResolveChunkSize(int tableChunkSize, string dbPath)
+    {
+        if (tableChunkSize > 0) return tableChunkSize;
+
+        var metaPath = Path.Combine(dbPath, "_meta.bin");
+        if (File.Exists(metaPath))
+        {
+            var (_, dbChunkSize) = MetaFile.Read(metaPath);
+            if (dbChunkSize > 0) return dbChunkSize;
+        }
+
+        return _settings.ChunkSize;
     }
 
     private SproutResponse ExecuteBackup(string query, string dbName, string dbPath)
@@ -1157,6 +1180,53 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             Operation = SproutOperation.PurgeTtl,
             Schema = new SchemaInfo { Table = q.Table },
         };
+    }
+
+    private SproutResponse ExecuteShrinkTable(string query, string dbPath, ShrinkTableQuery q)
+    {
+        var tablePath = Path.Combine(dbPath, q.Table);
+        if (!_tableCache.TryGetTable(tablePath, out _))
+        {
+            if (!Directory.Exists(tablePath))
+                return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_TABLE,
+                    $"table '{q.Table}' does not exist");
+        }
+
+        var table = _tableCache.GetOrOpen(tablePath);
+        var effectiveChunkSize = q.ChunkSize > 0 ? q.ChunkSize : ResolveChunkSize(table.Schema.ChunkSize, dbPath);
+
+        // Collect slot info while handle is still open
+        var slotInfo = ShrinkTableExecutor.CollectSlotInfo(table);
+
+        // Flush and evict (releases MMFs so files can be replaced)
+        table.Flush();
+        _tableCache.EvictTable(tablePath);
+
+        return ShrinkTableExecutor.Execute(query, tablePath, q.Table, effectiveChunkSize, slotInfo);
+    }
+
+    private SproutResponse ExecuteShrinkDatabase(string query, string dbName, string dbPath, ShrinkDatabaseQuery q)
+    {
+        if (!_tableCache.DatabaseExists(dbPath))
+            return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_DATABASE,
+                $"database '{dbName}' does not exist");
+
+        // Flush all cached tables for this database
+        _tableCache.FlushTablesForDatabase(dbPath);
+
+        return ShrinkDatabaseExecutor.Execute(
+            query, dbName, dbPath, q.ChunkSize, _settings.ChunkSize,
+            tableName =>
+            {
+                var tp = Path.Combine(dbPath, tableName);
+                return _tableCache.GetOrOpen(tp);
+            },
+            tablePath =>
+            {
+                if (_tableCache.TryGetTable(tablePath, out var t) && t is not null)
+                    t.Flush();
+                _tableCache.EvictTable(tablePath);
+            });
     }
 
     // ── Table-scoped execution ──────────────────────────────

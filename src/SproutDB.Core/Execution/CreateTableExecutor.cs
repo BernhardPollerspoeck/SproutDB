@@ -42,7 +42,12 @@ internal static class CreateTableExecutor
             CreatedTicks = DateTime.UtcNow.Ticks,
             TtlSeconds = q.TtlSeconds,
             Columns = schemaColumns,
+            ChunkSize = q.ChunkSize,
         };
+
+        // Effective chunk size: table > caller (db/engine)
+        if (q.ChunkSize > 0)
+            chunkSize = q.ChunkSize;
 
         SchemaFile.Write(Path.Combine(tablePath, "_schema.bin"), schema);
 

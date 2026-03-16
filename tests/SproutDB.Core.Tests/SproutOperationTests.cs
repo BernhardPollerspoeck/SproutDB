@@ -38,6 +38,6 @@ public class SproutOperationTests
     public void Operation_HasExactly25Members()
     {
         var values = Enum.GetValues<SproutOperation>();
-        Assert.Equal(25, values.Length);
+        Assert.Equal(27, values.Length);
     }
 }
