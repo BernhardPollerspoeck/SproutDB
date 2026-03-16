@@ -2,7 +2,7 @@
 // Pure logic — no DOM dependencies. Used by AdminApp.razor and testable via Jint.
 
 var SproutAutocomplete = (function () {
-    var COMMANDS = ['get','upsert','delete','describe','create','purge','add','alter','rename','backup','restore'];
+    var COMMANDS = ['get','upsert','delete','describe','create','purge','add','alter','rename','backup','restore','shrink','grant','revoke','restrict','unrestrict','rotate'];
     var CLAUSES = ['where','select','-select','order','limit','page','count','distinct','group','follow','on','as'];
     var OPERATORS = ['=','!=','>','>=','<','<=','between','in','is','contains','starts','ends'];
     var DIRECTIONS = ['asc','desc'];
@@ -10,6 +10,7 @@ var SproutAutocomplete = (function () {
     var TYPES = ['string','bool','sbyte','ubyte','sshort','ushort','sint','uint','slong','ulong','float','double','date','time','datetime'];
     var CREATE_SUB = ['database','table','index','apikey'];
     var PURGE_SUB = ['database','table','column','index','apikey','ttl'];
+    var SHRINK_SUB = ['database','table'];
 
     function getContext(text, pos) {
         var before = text.substring(0, pos);
@@ -114,6 +115,9 @@ var SproutAutocomplete = (function () {
         // After purge -> purge-sub
         if (cmd === 'purge' && allTokens.length === 1) return { type: 'purge-sub', prefix: p, table: null };
 
+        // After shrink -> shrink-sub
+        if (cmd === 'shrink' && allTokens.length === 1) return { type: 'shrink-sub', prefix: p, table: null };
+
         // After command keyword -> table
         if (allTokens.length === 1 && (cmd === 'get' || cmd === 'upsert' || cmd === 'delete' || cmd === 'describe'))
             return { type: 'table', prefix: p, table: null };
@@ -124,6 +128,10 @@ var SproutAutocomplete = (function () {
 
         // After purge subcommand -> table
         if (cmd === 'purge' && allTokens.length === 2)
+            return { type: 'table', prefix: p, table: null };
+
+        // After shrink table -> table name
+        if (cmd === 'shrink' && allTokens.length === 2 && allTokens[1].toLowerCase() === 'table')
             return { type: 'table', prefix: p, table: null };
 
         // After 'order by' -> column

@@ -12,7 +12,7 @@ internal static class SyntaxHighlighter
     private static readonly HashSet<string> Commands = new(StringComparer.OrdinalIgnoreCase)
     {
         "get", "upsert", "delete", "describe", "create", "purge",
-        "add", "alter", "rename", "backup", "restore",
+        "add", "alter", "rename", "backup", "restore", "shrink",
         "grant", "revoke", "restrict", "unrestrict", "rotate",
     };
 
