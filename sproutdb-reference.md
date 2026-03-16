@@ -971,7 +971,7 @@ app.Run();
 | Auto-Index Monitoring UI | ~3-4h | Offen |
 | Auto-Index Suggestions UI | ~4-5h | Offen |
 | Autocomplete Lücken | ~8-10h | ~60% fertig |
-| Type Widening Fix | ~4-6h | Bug |
+| ~~Type Widening Fix~~ | ~~~4-6h~~ | ~~Bug~~ Funktioniert (10 Tests grün) |
 
 ### Designed — bereit zur Implementierung
 
@@ -1037,4 +1037,4 @@ Umfangreiche Test-Matrix mit ~70 Szenarien. Status: ~60% implementiert. Hauptsä
 
 ### Bekannte Einschränkungen
 
-- **Type Widening BROKEN** — Numerische Typ-Erweiterung (z.B. `ubyte` → `ushort`) funktioniert nicht. String-Resize via `alter column` geht.
+- **Numerische Typen großzügig wählen** — Type Widening (`ubyte` → `ushort` etc.) funktioniert via `add column table.col newtype`, aber erfordert File-Rebuild. Besser gleich den passenden Typ wählen.
