@@ -36,7 +36,7 @@ public static class SproutDatabaseExtensions
         if (defaultValue is not null)
             query += $" default {defaultValue}";
 
-        var result = db.Query(query);
+        var result = db.Query(query)[0];
 
         if (result.Errors is not null && result.Errors.Count > 0)
             throw new SproutQueryException(result.Errors[0].Message);
@@ -51,7 +51,7 @@ public static class SproutDatabaseExtensions
     public static SproutResponse AlterColumn(this ISproutDatabase db, string table, string column, int size)
     {
         var query = $"alter column {table}.{column} string {size}";
-        var result = db.Query(query);
+        var result = db.Query(query)[0];
 
         if (result.Errors is not null && result.Errors.Count > 0)
             throw new SproutQueryException(result.Errors[0].Message);

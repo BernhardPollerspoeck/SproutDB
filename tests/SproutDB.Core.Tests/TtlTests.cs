@@ -9,7 +9,7 @@ public class TtlTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-ttl-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", "shop");
+        _engine.ExecuteOne("create database", "shop");
     }
 
     public void Dispose()
@@ -24,7 +24,7 @@ public class TtlTests : IDisposable
     [Fact]
     public void CreateTable_WithTtl_Parses()
     {
-        var result = _engine.Execute("create table sessions (token string 64) ttl 24h", "shop");
+        var result = _engine.ExecuteOne("create table sessions (token string 64) ttl 24h", "shop");
         Assert.Null(result.Errors);
         Assert.Equal(SproutOperation.CreateTable, result.Operation);
     }
@@ -32,21 +32,21 @@ public class TtlTests : IDisposable
     [Fact]
     public void CreateTable_WithTtl_Days()
     {
-        var result = _engine.Execute("create table cache (key string 64) ttl 7d", "shop");
+        var result = _engine.ExecuteOne("create table cache (key string 64) ttl 7d", "shop");
         Assert.Null(result.Errors);
     }
 
     [Fact]
     public void CreateTable_WithTtl_Minutes()
     {
-        var result = _engine.Execute("create table temp (key string 64) ttl 30m", "shop");
+        var result = _engine.ExecuteOne("create table temp (key string 64) ttl 30m", "shop");
         Assert.Null(result.Errors);
     }
 
     [Fact]
     public void CreateTable_WithTtl_CreatesTtlFile()
     {
-        _engine.Execute("create table sessions (token string 64) ttl 24h", "shop");
+        _engine.ExecuteOne("create table sessions (token string 64) ttl 24h", "shop");
         var ttlPath = Path.Combine(_tempDir, "shop", "sessions", "_ttl");
         Assert.True(File.Exists(ttlPath));
     }
@@ -54,7 +54,7 @@ public class TtlTests : IDisposable
     [Fact]
     public void CreateTable_WithoutTtl_NoTtlFile()
     {
-        _engine.Execute("create table users (name string 100)", "shop");
+        _engine.ExecuteOne("create table users (name string 100)", "shop");
         var ttlPath = Path.Combine(_tempDir, "shop", "users", "_ttl");
         Assert.False(File.Exists(ttlPath));
     }
@@ -65,11 +65,11 @@ public class TtlTests : IDisposable
     public void Get_FiltersExpiredRows()
     {
         // Create table with 1-second TTL
-        _engine.Execute("create table cache (key string 64) ttl 1m", "shop");
+        _engine.ExecuteOne("create table cache (key string 64) ttl 1m", "shop");
 
         // Insert a row — it should be visible
-        _engine.Execute("upsert cache {key: 'hello'}", "shop");
-        var result = _engine.Execute("get cache", "shop");
+        _engine.ExecuteOne("upsert cache {key: 'hello'}", "shop");
+        var result = _engine.ExecuteOne("get cache", "shop");
         Assert.NotNull(result.Data);
         Assert.Single(result.Data);
 
@@ -89,7 +89,7 @@ public class TtlTests : IDisposable
         // Let's use a fresh engine against the same dir.
         _engine.Dispose();
         using var engine2 = new SproutEngine(_tempDir);
-        var result2 = engine2.Execute("get cache", "shop");
+        var result2 = engine2.ExecuteOne("get cache", "shop");
         Assert.NotNull(result2.Data);
         Assert.Empty(result2.Data);
     }
@@ -97,8 +97,8 @@ public class TtlTests : IDisposable
     [Fact]
     public void Upsert_WithRowTtl_Parses()
     {
-        _engine.Execute("create table sessions (token string 64) ttl 24h", "shop");
-        var result = _engine.Execute("upsert sessions {token: 'abc', ttl: 7d}", "shop");
+        _engine.ExecuteOne("create table sessions (token string 64) ttl 24h", "shop");
+        var result = _engine.ExecuteOne("upsert sessions {token: 'abc', ttl: 7d}", "shop");
         Assert.Null(result.Errors);
         Assert.NotNull(result.Data);
         Assert.Single(result.Data);
@@ -107,8 +107,8 @@ public class TtlTests : IDisposable
     [Fact]
     public void Upsert_WithRowTtl_Zero()
     {
-        _engine.Execute("create table sessions (token string 64) ttl 24h", "shop");
-        var result = _engine.Execute("upsert sessions {token: 'abc', ttl: 0}", "shop");
+        _engine.ExecuteOne("create table sessions (token string 64) ttl 24h", "shop");
+        var result = _engine.ExecuteOne("upsert sessions {token: 'abc', ttl: 0}", "shop");
         Assert.Null(result.Errors);
         Assert.NotNull(result.Data);
     }
@@ -116,12 +116,12 @@ public class TtlTests : IDisposable
     [Fact]
     public void Upsert_WithRowTtl_NoTableTtl_AutoEnablesTtlFile()
     {
-        _engine.Execute("create table users (name string 100)", "shop");
+        _engine.ExecuteOne("create table users (name string 100)", "shop");
         var ttlPath = Path.Combine(_tempDir, "shop", "users", "_ttl");
         Assert.False(File.Exists(ttlPath));
 
         // Upsert with row TTL should auto-create _ttl file
-        var result = _engine.Execute("upsert users {name: 'Alice', ttl: 7d}", "shop");
+        var result = _engine.ExecuteOne("upsert users {name: 'Alice', ttl: 7d}", "shop");
         Assert.Null(result.Errors);
 
         // The _ttl file should exist now (need to flush/check via engine)
@@ -133,8 +133,8 @@ public class TtlTests : IDisposable
     [Fact]
     public void Upsert_BulkWithTtl()
     {
-        _engine.Execute("create table sessions (token string 64) ttl 24h", "shop");
-        var result = _engine.Execute("upsert sessions [{token: 'a', ttl: 1h}, {token: 'b', ttl: 2h}, {token: 'c'}]", "shop");
+        _engine.ExecuteOne("create table sessions (token string 64) ttl 24h", "shop");
+        var result = _engine.ExecuteOne("upsert sessions [{token: 'a', ttl: 1h}, {token: 'b', ttl: 2h}, {token: 'c'}]", "shop");
         Assert.Null(result.Errors);
         Assert.NotNull(result.Data);
         Assert.Equal(3, result.Data.Count);
@@ -145,10 +145,10 @@ public class TtlTests : IDisposable
     [Fact]
     public void Delete_ClearsTtlEntry()
     {
-        _engine.Execute("create table sessions (token string 64) ttl 24h", "shop");
-        _engine.Execute("upsert sessions {token: 'abc'}", "shop");
+        _engine.ExecuteOne("create table sessions (token string 64) ttl 24h", "shop");
+        _engine.ExecuteOne("upsert sessions {token: 'abc'}", "shop");
 
-        var result = _engine.Execute("delete sessions where token = 'abc'", "shop");
+        var result = _engine.ExecuteOne("delete sessions where token = 'abc'", "shop");
         Assert.Equal(1, result.Affected);
     }
 
@@ -157,14 +157,14 @@ public class TtlTests : IDisposable
     [Fact]
     public void PurgeTtl_SetsTableTtlToZero()
     {
-        _engine.Execute("create table sessions (token string 64) ttl 24h", "shop");
-        var result = _engine.Execute("purge ttl sessions", "shop");
+        _engine.ExecuteOne("create table sessions (token string 64) ttl 24h", "shop");
+        var result = _engine.ExecuteOne("purge ttl sessions", "shop");
         Assert.Null(result.Errors);
         Assert.Equal(SproutOperation.PurgeTtl, result.Operation);
 
         // After purge ttl, new inserts without row TTL should not expire
-        _engine.Execute("upsert sessions {token: 'permanent'}", "shop");
-        var getResult = _engine.Execute("get sessions", "shop");
+        _engine.ExecuteOne("upsert sessions {token: 'permanent'}", "shop");
+        var getResult = _engine.ExecuteOne("get sessions", "shop");
         Assert.NotNull(getResult.Data);
         Assert.Single(getResult.Data);
     }
@@ -174,15 +174,15 @@ public class TtlTests : IDisposable
     [Fact]
     public void Update_ResetsTtl()
     {
-        _engine.Execute("create table sessions (token string 64) ttl 24h", "shop");
-        var insert = _engine.Execute("upsert sessions {token: 'abc'}", "shop");
+        _engine.ExecuteOne("create table sessions (token string 64) ttl 24h", "shop");
+        var insert = _engine.ExecuteOne("upsert sessions {token: 'abc'}", "shop");
         var id = insert.Data?[0]["_id"];
         Assert.NotNull(id);
 
         // Update the same row — TTL should be refreshed
-        _engine.Execute($"upsert sessions {{_id: {id}, token: 'def'}}", "shop");
+        _engine.ExecuteOne($"upsert sessions {{_id: {id}, token: 'def'}}", "shop");
 
-        var result = _engine.Execute("get sessions", "shop");
+        var result = _engine.ExecuteOne("get sessions", "shop");
         Assert.NotNull(result.Data);
         Assert.Single(result.Data);
         Assert.Equal("def", result.Data[0]["token"]);
@@ -193,8 +193,8 @@ public class TtlTests : IDisposable
     [Fact]
     public void Aggregate_SkipsExpiredRows()
     {
-        _engine.Execute("create table cache (key string 64, val slong) ttl 1m", "shop");
-        _engine.Execute("upsert cache [{key: 'a', val: 10}, {key: 'b', val: 20}]", "shop");
+        _engine.ExecuteOne("create table cache (key string 64, val slong) ttl 1m", "shop");
+        _engine.ExecuteOne("upsert cache [{key: 'a', val: 10}, {key: 'b', val: 20}]", "shop");
 
         // Expire the first row
         var ttlPath = Path.Combine(_tempDir, "shop", "cache", "_ttl");
@@ -206,7 +206,7 @@ public class TtlTests : IDisposable
 
         _engine.Dispose();
         using var engine2 = new SproutEngine(_tempDir);
-        var result = engine2.Execute("get cache sum val", "shop");
+        var result = engine2.ExecuteOne("get cache sum val", "shop");
         Assert.NotNull(result.Data);
         Assert.Equal(20.0, Convert.ToDouble(result.Data[0]["sum"]));
     }
@@ -225,12 +225,12 @@ public class TtlTests : IDisposable
             TtlCleanupBatchSize = 100,
         };
         using var engine = new SproutEngine(settings);
-        engine.Execute("create database", "shop");
-        engine.Execute("create table sessions (token string 64) ttl 1h", "shop");
-        engine.Execute("upsert sessions [{token: 'a'}, {token: 'b'}, {token: 'c'}]", "shop");
+        engine.ExecuteOne("create database", "shop");
+        engine.ExecuteOne("create table sessions (token string 64) ttl 1h", "shop");
+        engine.ExecuteOne("upsert sessions [{token: 'a'}, {token: 'b'}, {token: 'c'}]", "shop");
 
         // Verify 3 rows
-        var r1 = engine.Execute("get sessions", "shop");
+        var r1 = engine.ExecuteOne("get sessions", "shop");
         Assert.Equal(3, r1.Data?.Count);
 
         // Manually expire all rows
@@ -251,7 +251,7 @@ public class TtlTests : IDisposable
 
         // After cleanup, rows should be physically deleted
         // Verify index count is 0
-        var r2 = engine.Execute("get sessions", "shop");
+        var r2 = engine.ExecuteOne("get sessions", "shop");
         Assert.NotNull(r2.Data);
         Assert.Empty(r2.Data);
 
@@ -265,10 +265,10 @@ public class TtlTests : IDisposable
     [Fact]
     public void Count_Aggregate_WithTtl()
     {
-        _engine.Execute("create table items (name string 64) ttl 24h", "shop");
-        _engine.Execute("upsert items [{name: 'a'}, {name: null}, {name: 'c'}]", "shop");
+        _engine.ExecuteOne("create table items (name string 64) ttl 24h", "shop");
+        _engine.ExecuteOne("upsert items [{name: 'a'}, {name: null}, {name: 'c'}]", "shop");
 
-        var result = _engine.Execute("get items count name", "shop");
+        var result = _engine.ExecuteOne("get items count name", "shop");
         Assert.NotNull(result.Data);
         Assert.Equal(2L, Convert.ToInt64(result.Data[0]["count"])); // 2 non-null
     }
@@ -276,10 +276,10 @@ public class TtlTests : IDisposable
     [Fact]
     public void Count_Aggregate_All()
     {
-        _engine.Execute("create table items (name string 64)", "shop");
-        _engine.Execute("upsert items [{name: 'a'}, {name: 'b'}, {name: 'c'}]", "shop");
+        _engine.ExecuteOne("create table items (name string 64)", "shop");
+        _engine.ExecuteOne("upsert items [{name: 'a'}, {name: 'b'}, {name: 'c'}]", "shop");
 
-        var result = _engine.Execute("get items count _id", "shop");
+        var result = _engine.ExecuteOne("get items count _id", "shop");
         Assert.NotNull(result.Data);
         Assert.Equal(3L, Convert.ToInt64(result.Data[0]["count"]));
     }
@@ -289,10 +289,10 @@ public class TtlTests : IDisposable
     [Fact]
     public void Select_ExpiresAt_ReturnsTimestamp()
     {
-        _engine.Execute("create table cache (key string 64) ttl 1h", "shop");
-        _engine.Execute("upsert cache {key: 'hello'}", "shop");
+        _engine.ExecuteOne("create table cache (key string 64) ttl 1h", "shop");
+        _engine.ExecuteOne("upsert cache {key: 'hello'}", "shop");
 
-        var result = _engine.Execute("get cache select _id, key, _expiresat", "shop");
+        var result = _engine.ExecuteOne("get cache select _id, key, _expiresat", "shop");
         Assert.NotNull(result.Data);
         Assert.Single(result.Data);
 
@@ -305,11 +305,11 @@ public class TtlTests : IDisposable
     [Fact]
     public void Select_Ttl_ReturnsRowTtlSeconds()
     {
-        _engine.Execute("create table cache (key string 64) ttl 1h", "shop");
-        _engine.Execute("upsert cache {key: 'a', ttl: 7d}", "shop");
-        _engine.Execute("upsert cache {key: 'b'}", "shop");
+        _engine.ExecuteOne("create table cache (key string 64) ttl 1h", "shop");
+        _engine.ExecuteOne("upsert cache {key: 'a', ttl: 7d}", "shop");
+        _engine.ExecuteOne("upsert cache {key: 'b'}", "shop");
 
-        var result = _engine.Execute("get cache select key, _ttl", "shop");
+        var result = _engine.ExecuteOne("get cache select key, _ttl", "shop");
         Assert.NotNull(result.Data);
         Assert.Equal(2, result.Data.Count);
 
@@ -325,10 +325,10 @@ public class TtlTests : IDisposable
     [Fact]
     public void Select_TtlColumns_NoTtlTable_ReturnsZero()
     {
-        _engine.Execute("create table users (name string 64)", "shop");
-        _engine.Execute("upsert users {name: 'Alice'}", "shop");
+        _engine.ExecuteOne("create table users (name string 64)", "shop");
+        _engine.ExecuteOne("upsert users {name: 'Alice'}", "shop");
 
-        var result = _engine.Execute("get users select name, _expiresat, _ttl", "shop");
+        var result = _engine.ExecuteOne("get users select name, _expiresat, _ttl", "shop");
         Assert.NotNull(result.Data);
         Assert.Single(result.Data);
 
@@ -339,10 +339,10 @@ public class TtlTests : IDisposable
     [Fact]
     public void Select_TtlColumns_WithAlias()
     {
-        _engine.Execute("create table cache (key string 64) ttl 1h", "shop");
-        _engine.Execute("upsert cache {key: 'test'}", "shop");
+        _engine.ExecuteOne("create table cache (key string 64) ttl 1h", "shop");
+        _engine.ExecuteOne("upsert cache {key: 'test'}", "shop");
 
-        var result = _engine.Execute("get cache select key, _expiresat as expires, _ttl as ttl_sec", "shop");
+        var result = _engine.ExecuteOne("get cache select key, _expiresat as expires, _ttl as ttl_sec", "shop");
         Assert.NotNull(result.Data);
         Assert.Single(result.Data);
         Assert.True(result.Data[0].ContainsKey("expires"));

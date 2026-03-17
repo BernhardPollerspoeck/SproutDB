@@ -26,7 +26,7 @@ public sealed class SeedData : IMigration
         var supplierIds = new string[suppliers.Length];
         for (var i = 0; i < suppliers.Length; i++)
         {
-            var res = db.Query($"upsert suppliers {suppliers[i]}");
+            var res = db.Query($"upsert suppliers {suppliers[i]}")[0];
             if (res.Data is [{ } row])
                 supplierIds[i] = row["_id"]?.ToString() ?? "";
         }
@@ -95,7 +95,7 @@ public sealed class SeedData : IMigration
         {
             var p = plants[i];
             var sid = supplierIds[p.SupplierIdx];
-            var res = db.Query($"upsert plants {{ name: '{p.Name}', species: '{p.Species}', category: '{p.Category}', price: {p.Price}, stock: {p.Stock}, supplier_id: '{sid}', planted_at: '{p.Planted}' }}");
+            var res = db.Query($"upsert plants {{ name: '{p.Name}', species: '{p.Species}', category: '{p.Category}', price: {p.Price}, stock: {p.Stock}, supplier_id: '{sid}', planted_at: '{p.Planted}' }}")[0];
             if (res.Data is [{ } row])
                 plantIds[i] = row["_id"]?.ToString() ?? "";
         }
@@ -139,7 +139,7 @@ public sealed class SeedData : IMigration
         for (var i = 0; i < customers.Length; i++)
         {
             var c = customers[i];
-            var res = db.Query($"upsert customers {{ name: '{c.Name}', email: '{c.Email}', city: '{c.City}', joined_at: '{c.Joined}' }}");
+            var res = db.Query($"upsert customers {{ name: '{c.Name}', email: '{c.Email}', city: '{c.City}', joined_at: '{c.Joined}' }}")[0];
             if (res.Data is [{ } row])
                 customerIds[i] = row["_id"]?.ToString() ?? "";
         }
@@ -236,7 +236,7 @@ public sealed class SeedData : IMigration
         {
             var o = orders[i];
             var cid = customerIds[o.CustIdx];
-            var res = db.Query($"upsert orders {{ customer_id: '{cid}', order_date: '{o.Date}', status: '{o.Status}', total: {o.Total} }}");
+            var res = db.Query($"upsert orders {{ customer_id: '{cid}', order_date: '{o.Date}', status: '{o.Status}', total: {o.Total} }}")[0];
             if (res.Data is [{ } row])
                 orderIds[i] = row["_id"]?.ToString() ?? "";
         }

@@ -443,7 +443,7 @@
 
     private void LoadTables()
     {
-        var response = Engine.Execute("describe", selectedDatabase);
+        var response = Engine.Execute("describe", selectedDatabase)[0];
         tables = response.Schema?.Tables?.Where(t => !t.StartsWith("_")).ToList() ?? [];
         _dbChunkSize = response.Schema?.ChunkSize ?? 0;
     }
@@ -464,7 +464,7 @@
     {
         expandedTable = table;
         // Always refresh columns when expanding
-        var response = Engine.Execute($"describe {table}", selectedDatabase);
+        var response = Engine.Execute($"describe {table}", selectedDatabase)[0];
         columnCache[table] = response.Schema?.Columns ?? [];
         ttlCache[table] = response.Schema?.TtlSeconds ?? 0;
         chunkSizeCache[table] = response.Schema?.ChunkSize ?? 0;
@@ -512,7 +512,7 @@
         if (int.TryParse(_newTableChunkSize, out var csVal) && csVal > 0)
             query += $" with chunk_size {csVal}";
 
-        var response = Engine.Execute(query, selectedDatabase);
+        var response = Engine.Execute(query, selectedDatabase)[0];
         if (response.Operation == SproutOperation.Error)
         {
             _createTableError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to create table";
@@ -605,7 +605,7 @@
             query += $" default {def}";
         }
 
-        var response = Engine.Execute(query, selectedDatabase);
+        var response = Engine.Execute(query, selectedDatabase)[0];
         if (response.Operation == SproutOperation.Error)
         {
             _addColumnError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to add column";
@@ -669,7 +669,7 @@
         }
 
         var query = $"rename column {_renamingTable}.{_renamingColumn} to {newName}";
-        var response = Engine.Execute(query, selectedDatabase);
+        var response = Engine.Execute(query, selectedDatabase)[0];
         if (response.Operation == SproutOperation.Error)
         {
             _renameError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to rename column";
@@ -727,7 +727,7 @@
         }
 
         var query = $"alter column {_alteringTable}.{_alteringColumn} string {newSize}";
-        var response = Engine.Execute(query, selectedDatabase);
+        var response = Engine.Execute(query, selectedDatabase)[0];
         if (response.Operation == SproutOperation.Error)
         {
             _alterError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to alter column";
@@ -805,7 +805,7 @@
     private void PurgeTtl(string table)
     {
         _ttlError = null;
-        var response = Engine.Execute($"purge ttl {table}", selectedDatabase);
+        var response = Engine.Execute($"purge ttl {table}", selectedDatabase)[0];
         if (response.Operation == SproutOperation.Error)
         {
             _ttlError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to purge TTL";
@@ -831,7 +831,7 @@
     private void CreateIndex(string table, string colName)
     {
         _indexError = null;
-        var response = Engine.Execute($"create index {table}.{colName}", selectedDatabase);
+        var response = Engine.Execute($"create index {table}.{colName}", selectedDatabase)[0];
         if (response.Operation == SproutOperation.Error)
         {
             _indexError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to create index";
@@ -845,7 +845,7 @@
     private void CreateUniqueIndex(string table, string colName)
     {
         _indexError = null;
-        var response = Engine.Execute($"create index unique {table}.{colName}", selectedDatabase);
+        var response = Engine.Execute($"create index unique {table}.{colName}", selectedDatabase)[0];
         if (response.Operation == SproutOperation.Error)
         {
             _indexError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to create unique index";
@@ -858,7 +858,7 @@
     private void PurgeIndex(string table, string colName)
     {
         _indexError = null;
-        var response = Engine.Execute($"purge index {table}.{colName}", selectedDatabase);
+        var response = Engine.Execute($"purge index {table}.{colName}", selectedDatabase)[0];
         if (response.Operation == SproutOperation.Error)
         {
             _indexError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to purge index";

@@ -44,14 +44,14 @@ public class IndexEdgeCaseBenchmarks
     public SproutResponse Get_Fresh_20K()
     {
         ResetTable(20_000);
-        return _engine.Execute("get users", "bench");
+        return _engine.Execute("get users", "bench")[0];
     }
 
     [Benchmark(Description = "1b: GET 100K rows (fresh, no deletes)")]
     public SproutResponse Get_Fresh_100K()
     {
         ResetTable(100_000);
-        return _engine.Execute("get users", "bench");
+        return _engine.Execute("get users", "bench")[0];
     }
 
     // ── Scenario 2: GET after mass delete (fragmentation) ──────
@@ -62,7 +62,7 @@ public class IndexEdgeCaseBenchmarks
         ResetTable(20_000);
         // Delete 90% — IDs 1..18000
         _engine.Execute("delete users where _id <= 18000", "bench");
-        return _engine.Execute("get users", "bench");
+        return _engine.Execute("get users", "bench")[0];
     }
 
     [Benchmark(Description = "2b: GET 10K alive after 90K deleted (of 100K)")]
@@ -70,7 +70,7 @@ public class IndexEdgeCaseBenchmarks
     {
         ResetTable(100_000);
         _engine.Execute("delete users where _id <= 90000", "bench");
-        return _engine.Execute("get users", "bench");
+        return _engine.Execute("get users", "bench")[0];
     }
 
     // ── Scenario 3: GET after mass delete + re-insert ──────────
@@ -83,7 +83,7 @@ public class IndexEdgeCaseBenchmarks
         // Re-insert 18K rows (reuses freed places)
         for (var i = 0; i < 18_000; i++)
             _engine.Execute($"upsert users {{name: 'Refill{i}', age: {i % 100}, score: {i}}}", "bench");
-        return _engine.Execute("get users", "bench");
+        return _engine.Execute("get users", "bench")[0];
     }
 
     // ── Scenario 4: Delete by _id (ID→Place lookup) ───────────
@@ -92,14 +92,14 @@ public class IndexEdgeCaseBenchmarks
     public SproutResponse Delete_ById_20K()
     {
         ResetTable(20_000);
-        return _engine.Execute("delete users where _id = 10000", "bench");
+        return _engine.Execute("delete users where _id = 10000", "bench")[0];
     }
 
     [Benchmark(Description = "4b: delete by _id in 100K table")]
     public SproutResponse Delete_ById_100K()
     {
         ResetTable(100_000);
-        return _engine.Execute("delete users where _id = 50000", "bench");
+        return _engine.Execute("delete users where _id = 50000", "bench")[0];
     }
 
     // ── Scenario 5: Insert throughput after mass delete ────────
@@ -120,7 +120,7 @@ public class IndexEdgeCaseBenchmarks
     {
         ResetTable(20_000);
         _engine.Execute("delete users where _id <= 18000", "bench");
-        return _engine.Execute("get users where score > 19000", "bench");
+        return _engine.Execute("get users where score > 19000", "bench")[0];
     }
 
     // ── Scenario 7: Scattered deletes (non-contiguous gaps) ───
@@ -131,7 +131,7 @@ public class IndexEdgeCaseBenchmarks
         ResetTable(20_000);
         // Delete every even ID — creates maximum fragmentation
         _engine.Execute("delete users where _id % 2 = 0", "bench");
-        return _engine.Execute("get users", "bench");
+        return _engine.Execute("get users", "bench")[0];
     }
 
     [Benchmark(Description = "7b: GET after 50% scattered + 5K re-insert (backfill pattern)")]
@@ -142,7 +142,7 @@ public class IndexEdgeCaseBenchmarks
         // Re-insert — these go into freed places (FIFO now, backfill later)
         for (var i = 0; i < 5_000; i++)
             _engine.Execute($"upsert users {{name: 'Backfill{i}', age: 30, score: {i}}}", "bench");
-        return _engine.Execute("get users", "bench");
+        return _engine.Execute("get users", "bench")[0];
     }
 
     // ── Scenario 8: Multiple delete+insert cycles (churn) ─────
@@ -159,7 +159,7 @@ public class IndexEdgeCaseBenchmarks
             for (var i = 0; i < 3_000; i++)
                 _engine.Execute($"upsert users {{name: 'Churn{cycle}_{i}', age: 25, score: {50000 + cycle * 10000 + i}}}", "bench");
         }
-        return _engine.Execute("get users", "bench");
+        return _engine.Execute("get users", "bench")[0];
     }
 
     // ── Scenario 9: Full purge + rebuild (worst case backfill) ─
@@ -172,7 +172,7 @@ public class IndexEdgeCaseBenchmarks
         // All 10K places are free — inserts reuse them all
         for (var i = 0; i < 10_000; i++)
             _engine.Execute($"upsert users {{name: 'Rebuild{i}', age: {i % 100}, score: {i}}}", "bench");
-        return _engine.Execute("get users", "bench");
+        return _engine.Execute("get users", "bench")[0];
     }
 
     // ── Scenario 10: Table open time (ScanMaxPlace cost) ──────

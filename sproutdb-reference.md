@@ -54,7 +54,8 @@ var engine = new SproutEngine(new SproutEngineSettings
     DataDirectory = "/data/sproutdb"
 });
 var db = engine.GetOrCreateDatabase("mydb");
-var result = db.Query("get users");
+var results = db.Query("get users"); // returns List<SproutResponse>
+var result = results[0];
 engine.Dispose();
 ```
 
@@ -69,7 +70,7 @@ void Migrate(Assembly assembly, ISproutDatabase database);
 
 // ISproutDatabase
 string Name { get; }
-SproutResponse Query(string query);
+List<SproutResponse> Query(string query);  // always returns list (multi-query support)
 IDisposable OnChange(string table, Action<SproutResponse> callback);
 ```
 
@@ -755,16 +756,28 @@ Content-Type: text/plain
 | `X-SproutDB-Database` | Ja | Aktive Datenbank |
 | `X-SproutDB-ApiKey` | Ja (wenn Auth aktiv) | API Key für Authentifizierung |
 
+### Response Format
+
+Response ist **immer ein JSON Array** von `SproutResponse` Objekten:
+```json
+// Single query: get users
+[{"operation": 1, "data": [...], ...}]
+
+// Multi query: get users; get orders
+[{"operation": 1, "data": [...]}, {"operation": 1, "data": [...]}]
+
+// Transaction: atomic; upsert A; upsert B; commit
+[{"operation": 2, ...}, {"operation": 2, ...}, {"operation": 27, "affected": 2}]
+```
+
 ### HTTP Status Codes
 
-| Status | Wann | Error Codes |
-|---|---|---|
-| 200 | Alles OK | – |
-| 400 | Query-Fehler | SYNTAX_ERROR, TYPE_MISMATCH, NOT_NULLABLE, TYPE_NARROWING, STRICT_VIOLATION, BULK_LIMIT |
-| 401 | Auth fehlend/ungültig | AUTH_REQUIRED, AUTH_INVALID |
-| 403 | Keine Berechtigung | PERMISSION_DENIED |
-| 404 | Ressource nicht gefunden | UNKNOWN_TABLE, UNKNOWN_COLUMN, UNKNOWN_DATABASE |
-| 409 | Ressource existiert bereits | TABLE_EXISTS, DATABASE_EXISTS |
+| Status | Wann |
+|---|---|
+| 200 | Query ausgeführt (Fehler stehen in den individuellen Responses) |
+| 400 | Leerer Body oder fehlender Database-Header |
+| 401 | Auth fehlend/ungültig (nur bei Auth-Middleware-Prüfung) |
+| 403 | Keine Berechtigung (nur bei Auth-Middleware-Prüfung) |
 
 ### Operation Enum
 
@@ -797,6 +810,7 @@ Content-Type: text/plain
 | 24 | purge_ttl |
 | 25 | shrink_table |
 | 26 | shrink_database |
+| 27 | transaction |
 
 ---
 
@@ -965,13 +979,19 @@ app.Run();
 | Feature | Aufwand | Status |
 |---------|---------|--------|
 | Alias | ~6-8h | Designed |
-| Transactions | ~6-8h | Designed |
 | Full-Text Search | ~12-16h | Design fehlt |
 | JSON Column Type | ~10-14h | Design fehlt |
 | Auto-Index Monitoring UI | ~3-4h | Offen |
 | Auto-Index Suggestions UI | ~4-5h | Offen |
 | Autocomplete Lücken | ~8-10h | ~60% fertig |
-| ~~Type Widening Fix~~ | ~~~4-6h~~ | ~~Bug~~ Funktioniert (10 Tests grün) |
+
+### Implementiert
+
+| Feature | Details |
+|---------|---------|
+| Multi-Query Batching | Semicolons als Delimiter, `Execute()` → `List<SproutResponse>` |
+| Transactions | `atomic; ...; commit`, TransactionJournal mit MMF-Rollback, read-your-own-writes |
+| Type Widening | Funktioniert (10 Tests grün) |
 
 ### Designed — bereit zur Implementierung
 
@@ -996,24 +1016,6 @@ Regeln:
 - Kombination mit `where`, `follow`, `select`, `distinct` am Aufruf
 - Paging darf NICHT im Body stehen
 - Execution: Nested (kein AST-Merge) — Alias komplett ausführen → materialisierte Rows → Aufrufer-Query operiert darauf
-
-**Transactions (~6-8h)**
-
-Atomarer Batch im Single Writer. Semikolon als Delimiter.
-
-```
-atomic;
-upsert accounts set balance = 900 where id = 1;
-upsert accounts set balance = 1100 where id = 2;
-commit
-```
-
-Regeln:
-- Fehler bei einer Op → Rollback der gesamten Gruppe
-- WAL schreibt alle Ops mit Group-ID, bei Crash vor `commit` → Gruppe verworfen
-- Nur Write-Ops (upsert/delete), kein GET innerhalb Transaction
-- Keine Verschachtelung, Cross-Table erlaubt
-- Muss als eine Query geschickt werden
 
 ### Geplant — Design ausstehend
 

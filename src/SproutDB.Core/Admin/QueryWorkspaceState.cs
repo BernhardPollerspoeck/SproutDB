@@ -73,6 +73,7 @@ public sealed class QueryTab
     public bool HasChanges => QueryText != OriginalText;
 
     // Result state — persists when switching tabs
+    public List<SproutResponse>? LastResults { get; set; }
     public SproutResponse? LastResponse { get; set; }
     public List<Dictionary<string, object?>>? DisplayData { get; set; }
     public List<ColumnMeta> Columns { get; set; } = [];

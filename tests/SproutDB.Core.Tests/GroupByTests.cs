@@ -9,23 +9,23 @@ public class GroupByTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", "testdb");
+        _engine.ExecuteOne("create database", "testdb");
 
-        _engine.Execute(
+        _engine.ExecuteOne(
             "create table orders (city string 50, status string 30, amount double, customer_id uint)",
             "testdb");
 
         // Berlin: 2 completed, 1 pending
-        _engine.Execute("upsert orders {city: 'Berlin', status: 'completed', amount: 100.0, customer_id: 1}", "testdb");
-        _engine.Execute("upsert orders {city: 'Berlin', status: 'completed', amount: 200.0, customer_id: 2}", "testdb");
-        _engine.Execute("upsert orders {city: 'Berlin', status: 'pending', amount: 50.0, customer_id: 1}", "testdb");
+        _engine.ExecuteOne("upsert orders {city: 'Berlin', status: 'completed', amount: 100.0, customer_id: 1}", "testdb");
+        _engine.ExecuteOne("upsert orders {city: 'Berlin', status: 'completed', amount: 200.0, customer_id: 2}", "testdb");
+        _engine.ExecuteOne("upsert orders {city: 'Berlin', status: 'pending', amount: 50.0, customer_id: 1}", "testdb");
 
         // Munich: 1 completed, 1 cancelled
-        _engine.Execute("upsert orders {city: 'Munich', status: 'completed', amount: 150.0, customer_id: 3}", "testdb");
-        _engine.Execute("upsert orders {city: 'Munich', status: 'cancelled', amount: 75.0, customer_id: 3}", "testdb");
+        _engine.ExecuteOne("upsert orders {city: 'Munich', status: 'completed', amount: 150.0, customer_id: 3}", "testdb");
+        _engine.ExecuteOne("upsert orders {city: 'Munich', status: 'cancelled', amount: 75.0, customer_id: 3}", "testdb");
 
         // Hamburg: 1 completed
-        _engine.Execute("upsert orders {city: 'Hamburg', status: 'completed', amount: 300.0, customer_id: 2}", "testdb");
+        _engine.ExecuteOne("upsert orders {city: 'Hamburg', status: 'completed', amount: 300.0, customer_id: 2}", "testdb");
     }
 
     public void Dispose()
@@ -40,7 +40,7 @@ public class GroupByTests : IDisposable
     [Fact]
     public void Sum_GroupBy_Status()
     {
-        var r = _engine.Execute("get orders sum amount as revenue group by status", "testdb");
+        var r = _engine.ExecuteOne("get orders sum amount as revenue group by status", "testdb");
 
         Assert.Equal(SproutOperation.Get, r.Operation);
         Assert.NotNull(r.Data);
@@ -59,7 +59,7 @@ public class GroupByTests : IDisposable
     [Fact]
     public void Sum_GroupBy_City()
     {
-        var r = _engine.Execute("get orders sum amount group by city", "testdb");
+        var r = _engine.ExecuteOne("get orders sum amount group by city", "testdb");
 
         Assert.NotNull(r.Data);
         Assert.Equal(3, r.Data.Count);
@@ -74,7 +74,7 @@ public class GroupByTests : IDisposable
     [Fact]
     public void Min_GroupBy()
     {
-        var r = _engine.Execute("get orders min amount as cheapest group by city", "testdb");
+        var r = _engine.ExecuteOne("get orders min amount as cheapest group by city", "testdb");
 
         Assert.NotNull(r.Data);
         var berlin = r.Data.First(row => (string?)row["city"] == "Berlin");
@@ -84,7 +84,7 @@ public class GroupByTests : IDisposable
     [Fact]
     public void Max_GroupBy()
     {
-        var r = _engine.Execute("get orders max amount as most_expensive group by city", "testdb");
+        var r = _engine.ExecuteOne("get orders max amount as most_expensive group by city", "testdb");
 
         Assert.NotNull(r.Data);
         var berlin = r.Data.First(row => (string?)row["city"] == "Berlin");
@@ -94,7 +94,7 @@ public class GroupByTests : IDisposable
     [Fact]
     public void Avg_GroupBy()
     {
-        var r = _engine.Execute("get orders avg amount as avg_amount group by status", "testdb");
+        var r = _engine.ExecuteOne("get orders avg amount as avg_amount group by status", "testdb");
 
         Assert.NotNull(r.Data);
         var completed = r.Data.First(row => (string?)row["status"] == "completed");
@@ -107,7 +107,7 @@ public class GroupByTests : IDisposable
     [Fact]
     public void Count_GroupBy_City()
     {
-        var r = _engine.Execute("get orders count group by city", "testdb");
+        var r = _engine.ExecuteOne("get orders count group by city", "testdb");
 
         Assert.NotNull(r.Data);
         Assert.Equal(3, r.Data.Count);
@@ -125,7 +125,7 @@ public class GroupByTests : IDisposable
     [Fact]
     public void Count_GroupBy_Status()
     {
-        var r = _engine.Execute("get orders count group by status", "testdb");
+        var r = _engine.ExecuteOne("get orders count group by status", "testdb");
 
         Assert.NotNull(r.Data);
         Assert.Equal(3, r.Data.Count);
@@ -137,7 +137,7 @@ public class GroupByTests : IDisposable
     [Fact]
     public void Count_GroupBy_MultipleColumns()
     {
-        var r = _engine.Execute("get orders count group by city, status", "testdb");
+        var r = _engine.ExecuteOne("get orders count group by city, status", "testdb");
 
         Assert.NotNull(r.Data);
         // Berlin/completed, Berlin/pending, Munich/completed, Munich/cancelled, Hamburg/completed = 5
@@ -153,7 +153,7 @@ public class GroupByTests : IDisposable
     [Fact]
     public void Avg_GroupBy_OrderBy_Limit()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get orders avg amount as avg_amount group by customer_id order by avg_amount desc limit 2",
             "testdb");
 
@@ -169,7 +169,7 @@ public class GroupByTests : IDisposable
     [Fact]
     public void Count_GroupBy_OrderBy_Count_Desc()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get orders count group by city order by count desc",
             "testdb");
 
@@ -184,7 +184,7 @@ public class GroupByTests : IDisposable
     [Fact]
     public void Sum_GroupBy_WithWhere()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get orders sum amount as revenue where status != 'cancelled' group by city",
             "testdb");
 
@@ -198,7 +198,7 @@ public class GroupByTests : IDisposable
     [Fact]
     public void Sum_GroupBy_WithWhere_OrderBy_Limit()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get orders sum amount as revenue where status = 'completed' group by city order by revenue desc limit 2",
             "testdb");
 
@@ -214,7 +214,7 @@ public class GroupByTests : IDisposable
     [Fact]
     public void GroupBy_UnknownColumn_Error()
     {
-        var r = _engine.Execute("get orders count group by nonexistent", "testdb");
+        var r = _engine.ExecuteOne("get orders count group by nonexistent", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.NotNull(r.Errors);

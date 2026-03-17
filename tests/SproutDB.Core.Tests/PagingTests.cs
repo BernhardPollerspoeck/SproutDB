@@ -16,12 +16,12 @@ public class PagingTests : IDisposable
             DefaultPageSize = 3,
         });
 
-        _engine.Execute("create database", "testdb");
-        _engine.Execute("create table users (name string 100, age ubyte)", "testdb");
+        _engine.ExecuteOne("create database", "testdb");
+        _engine.ExecuteOne("create table users (name string 100, age ubyte)", "testdb");
 
         // Seed 10 users
         for (var i = 1; i <= 10; i++)
-            _engine.Execute($"upsert users {{name: 'User{i:D2}', age: {20 + i}}}", "testdb");
+            _engine.ExecuteOne($"upsert users {{name: 'User{i:D2}', age: {20 + i}}}", "testdb");
     }
 
     public void Dispose()
@@ -36,7 +36,7 @@ public class PagingTests : IDisposable
     [Fact]
     public void AutoPaging_ExceedsPageSize_ReturnsFirstPage()
     {
-        var r = _engine.Execute("get users", "testdb");
+        var r = _engine.ExecuteOne("get users", "testdb");
 
         Assert.Equal(SproutOperation.Get, r.Operation);
         Assert.Equal(3, r.Data!.Count);
@@ -51,7 +51,7 @@ public class PagingTests : IDisposable
     [Fact]
     public void AutoPaging_NextQuery_ContainsPageAndSize()
     {
-        var r = _engine.Execute("get users", "testdb");
+        var r = _engine.ExecuteOne("get users", "testdb");
 
         Assert.NotNull(r.Paging?.Next);
         Assert.Contains("page 2", r.Paging.Next);
@@ -62,7 +62,7 @@ public class PagingTests : IDisposable
     public void AutoPaging_WithinPageSize_NoPaging()
     {
         // Only 2 matching rows, page size is 3
-        var r = _engine.Execute("get users where age > 29", "testdb");
+        var r = _engine.ExecuteOne("get users where age > 29", "testdb");
 
         Assert.Equal(1, r.Data!.Count);
         Assert.Null(r.Paging);
@@ -72,7 +72,7 @@ public class PagingTests : IDisposable
     public void AutoPaging_ExactPageSize_NoPaging()
     {
         // Exactly 3 matching rows
-        var r = _engine.Execute("get users where age <= 23", "testdb");
+        var r = _engine.ExecuteOne("get users where age <= 23", "testdb");
 
         Assert.Equal(3, r.Data!.Count);
         Assert.Null(r.Paging);
@@ -83,7 +83,7 @@ public class PagingTests : IDisposable
     [Fact]
     public void ManualPaging_Page1()
     {
-        var r = _engine.Execute("get users page 1 size 3", "testdb");
+        var r = _engine.ExecuteOne("get users page 1 size 3", "testdb");
 
         Assert.Equal(3, r.Data!.Count);
         Assert.NotNull(r.Paging);
@@ -96,7 +96,7 @@ public class PagingTests : IDisposable
     [Fact]
     public void ManualPaging_Page2()
     {
-        var r = _engine.Execute("get users page 2 size 3", "testdb");
+        var r = _engine.ExecuteOne("get users page 2 size 3", "testdb");
 
         Assert.Equal(3, r.Data!.Count);
         Assert.NotNull(r.Paging);
@@ -108,7 +108,7 @@ public class PagingTests : IDisposable
     public void ManualPaging_LastPage()
     {
         // 10 rows, page size 3 → 4 pages (3+3+3+1)
-        var r = _engine.Execute("get users page 4 size 3", "testdb");
+        var r = _engine.ExecuteOne("get users page 4 size 3", "testdb");
 
         Assert.Single(r.Data!);
         Assert.NotNull(r.Paging);
@@ -119,7 +119,7 @@ public class PagingTests : IDisposable
     [Fact]
     public void ManualPaging_BeyondLastPage()
     {
-        var r = _engine.Execute("get users page 5 size 3", "testdb");
+        var r = _engine.ExecuteOne("get users page 5 size 3", "testdb");
 
         Assert.Empty(r.Data!);
         Assert.NotNull(r.Paging);
@@ -131,7 +131,7 @@ public class PagingTests : IDisposable
     public void ManualPaging_SizeCappedToDefault()
     {
         // Server default is 3, requesting size 100 → capped to 3
-        var r = _engine.Execute("get users page 1 size 100", "testdb");
+        var r = _engine.ExecuteOne("get users page 1 size 100", "testdb");
 
         Assert.Equal(3, r.Data!.Count);
         Assert.NotNull(r.Paging);
@@ -141,7 +141,7 @@ public class PagingTests : IDisposable
     [Fact]
     public void ManualPaging_WithOrderBy()
     {
-        var r = _engine.Execute("get users order by name desc page 1 size 3", "testdb");
+        var r = _engine.ExecuteOne("get users order by name desc page 1 size 3", "testdb");
 
         Assert.Equal(3, r.Data!.Count);
         // Descending: User10, User09, User08
@@ -154,7 +154,7 @@ public class PagingTests : IDisposable
     public void ManualPaging_WithWhere()
     {
         // age > 25 → User06..User10 = 5 rows
-        var r = _engine.Execute("get users where age > 25 page 1 size 3", "testdb");
+        var r = _engine.ExecuteOne("get users where age > 25 page 1 size 3", "testdb");
 
         Assert.Equal(3, r.Data!.Count);
         Assert.NotNull(r.Paging);
@@ -164,7 +164,7 @@ public class PagingTests : IDisposable
     [Fact]
     public void ManualPaging_NextQueryReplacesPage()
     {
-        var r = _engine.Execute("get users page 1 size 3", "testdb");
+        var r = _engine.ExecuteOne("get users page 1 size 3", "testdb");
 
         Assert.NotNull(r.Paging?.Next);
         Assert.Contains("page 2", r.Paging.Next);
@@ -179,7 +179,7 @@ public class PagingTests : IDisposable
     public void Limit_DisablesAutoPaging()
     {
         // limit 5 exceeds page size 3, but should NOT auto-page
-        var r = _engine.Execute("get users limit 5", "testdb");
+        var r = _engine.ExecuteOne("get users limit 5", "testdb");
 
         Assert.Equal(5, r.Data!.Count);
         Assert.Null(r.Paging);
@@ -190,7 +190,7 @@ public class PagingTests : IDisposable
     [Fact]
     public void Count_NoPaging()
     {
-        var r = _engine.Execute("get users count", "testdb");
+        var r = _engine.ExecuteOne("get users count", "testdb");
 
         Assert.Equal(10, r.Affected);
         Assert.Empty(r.Data!);

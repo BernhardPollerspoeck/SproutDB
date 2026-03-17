@@ -107,12 +107,12 @@ public class InsertPipelineBenchmarks
     [Benchmark(Description = "4. Full pipeline (3 fields)", Baseline = true)]
     public SproutResponse FullPipeline_3Fields()
     {
-        return _engine.Execute(Query3Fields, "bench");
+        return _engine.Execute(Query3Fields, "bench")[0];
     }
 
     [Benchmark(Description = "4. Full pipeline (5 fields)")]
     public SproutResponse FullPipeline_5Fields()
     {
-        return _engine.Execute(Query5Fields, "bench");
+        return _engine.Execute(Query5Fields, "bench")[0];
     }
 }

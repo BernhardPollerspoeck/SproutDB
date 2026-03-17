@@ -1,4 +1,5 @@
 using SproutDB.Core.AutoIndex;
+using SproutDB.Core.Tests;
 
 namespace SproutDB.Core.Tests.AutoIndex;
 
@@ -34,14 +35,14 @@ public class AutoIndexTriggerTests : IDisposable
             },
         });
 
-        engine.Execute("create database", "shop");
-        engine.Execute("create table users (name string 100, age ubyte)", "shop");
+        engine.ExecuteOne("create database", "shop");
+        engine.ExecuteOne("create table users (name string 100, age ubyte)", "shop");
 
         // Only 5 queries — below MinimumQueryCount of 10
         for (int i = 0; i < 5; i++)
-            engine.Execute("upsert users {name: 'User" + i + "', age: " + (20 + i) + "}", "shop");
+            engine.ExecuteOne("upsert users {name: 'User" + i + "', age: " + (20 + i) + "}", "shop");
         for (int i = 0; i < 5; i++)
-            engine.Execute("get users where name = 'User" + i + "'", "shop");
+            engine.ExecuteOne("get users where name = 'User" + i + "'", "shop");
 
         // Force flush (which triggers evaluation)
         engine.Dispose();
@@ -68,16 +69,16 @@ public class AutoIndexTriggerTests : IDisposable
             },
         });
 
-        engine.Execute("create database", "shop");
-        engine.Execute("create table users (name string 100, age ubyte)", "shop");
+        engine.ExecuteOne("create database", "shop");
+        engine.ExecuteOne("create table users (name string 100, age ubyte)", "shop");
 
         // Insert some data
         for (int i = 0; i < 10; i++)
-            engine.Execute("upsert users {name: 'User" + i + "', age: " + (20 + i) + "}", "shop");
+            engine.ExecuteOne("upsert users {name: 'User" + i + "', age: " + (20 + i) + "}", "shop");
 
         // Run enough WHERE queries to exceed thresholds
         for (int i = 0; i < 20; i++)
-            engine.Execute("get users where name = 'User0'", "shop");
+            engine.ExecuteOne("get users where name = 'User0'", "shop");
 
         // Force flush → triggers auto-index evaluation
         // Dispose calls FlushAll which calls EvaluateAutoIndexes
@@ -102,13 +103,13 @@ public class AutoIndexTriggerTests : IDisposable
             },
         });
 
-        engine.Execute("create database", "shop");
-        engine.Execute("create table users (name string 100)", "shop");
+        engine.ExecuteOne("create database", "shop");
+        engine.ExecuteOne("create table users (name string 100)", "shop");
 
         for (int i = 0; i < 10; i++)
-            engine.Execute("upsert users {name: 'User" + i + "'}", "shop");
+            engine.ExecuteOne("upsert users {name: 'User" + i + "'}", "shop");
         for (int i = 0; i < 20; i++)
-            engine.Execute("get users where name = 'User0'", "shop");
+            engine.ExecuteOne("get users where name = 'User0'", "shop");
 
         engine.Dispose();
 
@@ -131,9 +132,9 @@ public class AutoIndexTriggerTests : IDisposable
             },
         });
 
-        engine.Execute("create database", "shop");
-        engine.Execute("create table users (name string 100)", "shop");
-        engine.Execute("create index users.name", "shop");
+        engine.ExecuteOne("create database", "shop");
+        engine.ExecuteOne("create table users (name string 100)", "shop");
+        engine.ExecuteOne("create index users.name", "shop");
 
         // No WHERE queries — index is "unused"
         engine.Dispose();
@@ -163,18 +164,18 @@ public class AutoIndexTriggerTests : IDisposable
                 },
             }))
             {
-                engine.Execute("create database", "shop");
-                engine.Execute("create table users (name string 100)", "shop");
+                engine.ExecuteOne("create database", "shop");
+                engine.ExecuteOne("create table users (name string 100)", "shop");
 
                 for (int i = 0; i < 10; i++)
-                    engine.Execute("upsert users {name: 'User" + i + "'}", "shop");
+                    engine.ExecuteOne("upsert users {name: 'User" + i + "'}", "shop");
                 for (int i = 0; i < 20; i++)
-                    engine.Execute("get users where name = 'User0'", "shop");
+                    engine.ExecuteOne("get users where name = 'User0'", "shop");
             }
 
             // Re-open and check audit log
             using var engine2 = new SproutEngine(dir);
-            var r = engine2.Execute("get audit_log where operation = 'auto_create_index'", "_system");
+            var r = engine2.ExecuteOne("get audit_log where operation = 'auto_create_index'", "_system");
 
             Assert.NotEqual(SproutOperation.Error, r.Operation);
             Assert.NotNull(r.Data);
@@ -212,16 +213,16 @@ public class AutoIndexTriggerTests : IDisposable
             },
         });
 
-        engine.Execute("create database", "testdb");
-        engine.Execute("create table users (name string 100, email string 320 strict, age ubyte, active bool default true, score sint)", "testdb");
+        engine.ExecuteOne("create database", "testdb");
+        engine.ExecuteOne("create table users (name string 100, email string 320 strict, age ubyte, active bool default true, score sint)", "testdb");
 
         // Upserts create metrics entries for all columns via RecordWrite
         for (int i = 0; i < 10; i++)
-            engine.Execute($"upsert users {{name: 'User{i}', email: 'user{i}@test.com', age: {20 + i}, score: {i * 10}}}", "testdb");
+            engine.ExecuteOne($"upsert users {{name: 'User{i}', email: 'user{i}@test.com', age: {20 + i}, score: {i * 10}}}", "testdb");
 
         // GETs without WHERE — should NOT trigger auto-indexing
         for (int i = 0; i < 20; i++)
-            engine.Execute("get users", "testdb");
+            engine.ExecuteOne("get users", "testdb");
 
         // Flush triggers EvaluateAutoIndexes
         engine.Dispose();
@@ -251,15 +252,15 @@ public class AutoIndexTriggerTests : IDisposable
             },
         });
 
-        engine.Execute("create database", "testdb");
-        engine.Execute("create table users (name string 100, email string 320, age ubyte, score sint)", "testdb");
+        engine.ExecuteOne("create database", "testdb");
+        engine.ExecuteOne("create table users (name string 100, email string 320, age ubyte, score sint)", "testdb");
 
         for (int i = 0; i < 10; i++)
-            engine.Execute($"upsert users {{name: 'User{i}', email: 'u{i}@test.com', age: {20 + i}, score: {i * 10}}}", "testdb");
+            engine.ExecuteOne($"upsert users {{name: 'User{i}', email: 'u{i}@test.com', age: {20 + i}, score: {i * 10}}}", "testdb");
 
         // Only query WHERE on 'name' — other columns should NOT be auto-indexed
         for (int i = 0; i < 20; i++)
-            engine.Execute("get users where name = 'User0'", "testdb");
+            engine.ExecuteOne("get users where name = 'User0'", "testdb");
 
         engine.Dispose();
 
@@ -290,18 +291,18 @@ public class AutoIndexTriggerTests : IDisposable
                 },
             }))
             {
-                engine.Execute("create database", "shop");
-                engine.Execute("create table users (name string 100)", "shop");
+                engine.ExecuteOne("create database", "shop");
+                engine.ExecuteOne("create table users (name string 100)", "shop");
 
                 for (int i = 0; i < 10; i++)
-                    engine.Execute($"upsert users {{name: 'User{i}'}}", "shop");
+                    engine.ExecuteOne($"upsert users {{name: 'User{i}'}}", "shop");
                 for (int i = 0; i < 20; i++)
-                    engine.Execute("get users where name = 'User0'", "shop");
+                    engine.ExecuteOne("get users where name = 'User0'", "shop");
             }
 
             // Re-open and check index_metrics
             using var engine2 = new SproutEngine(dir);
-            var r = engine2.Execute("get index_metrics", "_system");
+            var r = engine2.ExecuteOne("get index_metrics", "_system");
 
             Assert.NotNull(r.Data);
             var nameEntry = r.Data.FirstOrDefault(row =>
@@ -338,15 +339,15 @@ public class AutoIndexTriggerTests : IDisposable
             },
         });
 
-        engine.Execute("create database", "shop");
-        engine.Execute("create table products (name string 100, price float)", "shop");
+        engine.ExecuteOne("create database", "shop");
+        engine.ExecuteOne("create table products (name string 100, price float)", "shop");
 
         for (int i = 0; i < 10; i++)
-            engine.Execute($"upsert products {{name: 'Product{i}', price: {i * 9.99}}}", "shop");
+            engine.ExecuteOne($"upsert products {{name: 'Product{i}', price: {i * 9.99}}}", "shop");
 
         // ORDER BY queries on 'price' — should trigger auto-index
         for (int i = 0; i < 20; i++)
-            engine.Execute("get products order by price", "shop");
+            engine.ExecuteOne("get products order by price", "shop");
 
         engine.Dispose();
 
@@ -375,18 +376,18 @@ public class AutoIndexTriggerTests : IDisposable
             },
         });
 
-        engine.Execute("create database", "shop");
-        engine.Execute("create table users (name string 100)", "shop");
-        engine.Execute("create table orders (user_id ulong, total float)", "shop");
+        engine.ExecuteOne("create database", "shop");
+        engine.ExecuteOne("create table users (name string 100)", "shop");
+        engine.ExecuteOne("create table orders (user_id ulong, total float)", "shop");
 
         for (int i = 1; i <= 5; i++)
-            engine.Execute($"upsert users {{name: 'User{i}'}}", "shop");
+            engine.ExecuteOne($"upsert users {{name: 'User{i}'}}", "shop");
         for (int i = 1; i <= 10; i++)
-            engine.Execute($"upsert orders {{user_id: {(i % 5) + 1}, total: {i * 10.0}}}", "shop");
+            engine.ExecuteOne($"upsert orders {{user_id: {(i % 5) + 1}, total: {i * 10.0}}}", "shop");
 
         // FOLLOW queries — target column orders.user_id should be tracked
         for (int i = 0; i < 20; i++)
-            engine.Execute("get users follow users._id -> orders.user_id as orders", "shop");
+            engine.ExecuteOne("get users follow users._id -> orders.user_id as orders", "shop");
 
         engine.Dispose();
 

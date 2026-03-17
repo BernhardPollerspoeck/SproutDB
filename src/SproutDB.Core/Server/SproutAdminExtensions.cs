@@ -102,7 +102,7 @@ public static class SproutAdminExtensions
             }
         }
 
-        var response = engine.Execute("backup", db);
+        var response = engine.Execute("backup", db)[0];
 
         if (response.Operation == SproutOperation.Error)
         {
@@ -142,7 +142,7 @@ public static class SproutAdminExtensions
                 await file.CopyToAsync(fs);
             }
 
-            var response = engine.Execute($"restore '{tempPath}'", db);
+            var response = engine.Execute($"restore '{tempPath}'", db)[0];
 
             if (response.Operation == SproutOperation.Error)
             {

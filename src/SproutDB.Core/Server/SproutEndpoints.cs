@@ -47,7 +47,7 @@ internal static class SproutEndpoints
             {
                 var errorResponse = ResponseHelper.Error(query, ErrorCodes.AUTH_REQUIRED,
                     "missing required header: X-SproutDB-ApiKey");
-                return Results.Json(errorResponse, JsonOptions, statusCode: StatusCodes.Status401Unauthorized);
+                return Results.Json(new[] { errorResponse }, JsonOptions, statusCode: StatusCodes.Status401Unauthorized);
             }
 
             if (isAuthQuery)
@@ -61,7 +61,7 @@ internal static class SproutEndpoints
                     {
                         var errorResponse = ResponseHelper.Error(query, ErrorCodes.AUTH_INVALID,
                             "invalid api key");
-                        return Results.Json(errorResponse, JsonOptions, statusCode: StatusCodes.Status401Unauthorized);
+                        return Results.Json(new[] { errorResponse }, JsonOptions, statusCode: StatusCodes.Status401Unauthorized);
                     }
 
                     // Only master key can create/purge/rotate keys
@@ -69,7 +69,7 @@ internal static class SproutEndpoints
                     {
                         var errorResponse = ResponseHelper.Error(query, ErrorCodes.PERMISSION_DENIED,
                             "key management requires master key");
-                        return Results.Json(errorResponse, JsonOptions, statusCode: StatusCodes.Status403Forbidden);
+                        return Results.Json(new[] { errorResponse }, JsonOptions, statusCode: StatusCodes.Status403Forbidden);
                     }
 
                     // For grant/revoke/restrict/unrestrict: check if key has admin on the target DB
@@ -83,7 +83,7 @@ internal static class SproutEndpoints
                     {
                         var errorResponse = ResponseHelper.Error(query, ErrorCodes.PERMISSION_DENIED,
                             "requires master key or admin on target database");
-                        return Results.Json(errorResponse, JsonOptions, statusCode: StatusCodes.Status403Forbidden);
+                        return Results.Json(new[] { errorResponse }, JsonOptions, statusCode: StatusCodes.Status403Forbidden);
                     }
                 }
             }
@@ -97,19 +97,35 @@ internal static class SproutEndpoints
                     {
                         var errorResponse = ResponseHelper.Error(query, ErrorCodes.AUTH_INVALID,
                             "invalid api key");
-                        return Results.Json(errorResponse, JsonOptions, statusCode: StatusCodes.Status401Unauthorized);
+                        return Results.Json(new[] { errorResponse }, JsonOptions, statusCode: StatusCodes.Status401Unauthorized);
                     }
 
-                    // Parse to check permissions
-                    var parseResult = QueryParser.Parse(query);
-                    if (parseResult.Success && parseResult.Query is not null)
+                    // Parse to check permissions for all queries
+                    var parseResults = QueryParser.ParseMulti(query);
+                    var dbHeader = context.Request.Headers["X-SproutDB-Database"].ToString();
+                    if (!string.IsNullOrWhiteSpace(dbHeader))
                     {
-                        var dbHeader = context.Request.Headers["X-SproutDB-Database"].ToString();
-                        if (!string.IsNullOrWhiteSpace(dbHeader))
+                        foreach (var parseResult in parseResults)
                         {
-                            var permError = engine.AuthService.CheckPermission(key, parseResult.Query, dbHeader.ToLowerInvariant());
-                            if (permError is not null)
-                                return Results.Json(permError, JsonOptions, statusCode: StatusCodes.Status403Forbidden);
+                            if (!parseResult.Success || parseResult.Query is null)
+                                continue;
+
+                            // For transactions, check each inner query
+                            if (parseResult.Query is TransactionQuery txq)
+                            {
+                                foreach (var innerQuery in txq.Queries)
+                                {
+                                    var permError = engine.AuthService.CheckPermission(key, innerQuery, dbHeader.ToLowerInvariant());
+                                    if (permError is not null)
+                                        return Results.Json(new[] { permError }, JsonOptions, statusCode: StatusCodes.Status403Forbidden);
+                                }
+                            }
+                            else
+                            {
+                                var permError = engine.AuthService.CheckPermission(key, parseResult.Query, dbHeader.ToLowerInvariant());
+                                if (permError is not null)
+                                    return Results.Json(new[] { permError }, JsonOptions, statusCode: StatusCodes.Status403Forbidden);
+                            }
                         }
                     }
                 }
@@ -119,9 +135,8 @@ internal static class SproutEndpoints
         // 4. Auth queries don't need database header — use "_system"
         if (isAuthQuery)
         {
-            var response = engine.Execute(query, "_system");
-            var statusCode = MapStatusCode(response);
-            return Results.Json(response, JsonOptions, statusCode: statusCode);
+            var responses = engine.Execute(query, "_system");
+            return Results.Json(responses, JsonOptions, statusCode: StatusCodes.Status200OK);
         }
 
         // 5. Normal queries require database header
@@ -133,10 +148,8 @@ internal static class SproutEndpoints
 
         var database = dbHeaderValue.ToString();
 
-        var normalResponse = engine.Execute(query, database);
-        var normalStatusCode = MapStatusCode(normalResponse);
-
-        return Results.Json(normalResponse, JsonOptions, statusCode: normalStatusCode);
+        var normalResponses = engine.Execute(query, database);
+        return Results.Json(normalResponses, JsonOptions, statusCode: StatusCodes.Status200OK);
     }
 
     /// <summary>
@@ -220,33 +233,4 @@ internal static class SproutEndpoints
         };
     }
 
-    private static int MapStatusCode(SproutResponse response)
-    {
-        if (response.Errors is null || response.Errors.Count == 0)
-            return StatusCodes.Status200OK;
-
-        var code = response.Errors[0].Code;
-
-        return code switch
-        {
-            ErrorCodes.UNKNOWN_DATABASE
-                or ErrorCodes.UNKNOWN_TABLE
-                or ErrorCodes.UNKNOWN_COLUMN
-                or ErrorCodes.INDEX_NOT_FOUND
-                or ErrorCodes.KEY_NOT_FOUND => StatusCodes.Status404NotFound,
-
-            ErrorCodes.DATABASE_EXISTS
-                or ErrorCodes.TABLE_EXISTS
-                or ErrorCodes.INDEX_EXISTS
-                or ErrorCodes.KEY_EXISTS => StatusCodes.Status409Conflict,
-
-            ErrorCodes.PROTECTED_NAME
-                or ErrorCodes.PERMISSION_DENIED => StatusCodes.Status403Forbidden,
-
-            ErrorCodes.AUTH_REQUIRED
-                or ErrorCodes.AUTH_INVALID => StatusCodes.Status401Unauthorized,
-
-            _ => StatusCodes.Status400BadRequest,
-        };
-    }
 }

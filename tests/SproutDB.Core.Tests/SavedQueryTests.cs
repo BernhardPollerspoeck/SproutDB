@@ -10,7 +10,7 @@ public class SavedQueryTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", Db);
+        _engine.ExecuteOne("create database", Db);
     }
 
     public void Dispose()

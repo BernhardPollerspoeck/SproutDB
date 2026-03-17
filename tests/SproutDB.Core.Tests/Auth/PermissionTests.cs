@@ -1,3 +1,5 @@
+using SproutDB.Core.Tests;
+
 namespace SproutDB.Core.Tests.Auth;
 
 public sealed class PermissionTests : IDisposable
@@ -29,7 +31,7 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void CreateApiKey_ReturnsKeyInResponse()
     {
-        var response = _engine.Execute("create apikey 'test-key'", "_system");
+        var response = _engine.ExecuteOne("create apikey 'test-key'", "_system");
 
         Assert.Null(response.Errors);
         Assert.Equal(SproutOperation.CreateApiKey, response.Operation);
@@ -50,8 +52,8 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void CreateApiKey_DuplicateName_ReturnsError()
     {
-        _engine.Execute("create apikey 'dup-key'", "_system");
-        var response = _engine.Execute("create apikey 'dup-key'", "_system");
+        _engine.ExecuteOne("create apikey 'dup-key'", "_system");
+        var response = _engine.ExecuteOne("create apikey 'dup-key'", "_system");
 
         Assert.NotNull(response.Errors);
         Assert.Contains(response.Errors, e => e.Code == "KEY_EXISTS");
@@ -60,21 +62,21 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void PurgeApiKey_RemovesKey()
     {
-        _engine.Execute("create apikey 'temp-key'", "_system");
-        var response = _engine.Execute("purge apikey 'temp-key'", "_system");
+        _engine.ExecuteOne("create apikey 'temp-key'", "_system");
+        var response = _engine.ExecuteOne("purge apikey 'temp-key'", "_system");
 
         Assert.Null(response.Errors);
         Assert.Equal(SproutOperation.PurgeApiKey, response.Operation);
 
         // Can re-create the key
-        var recreate = _engine.Execute("create apikey 'temp-key'", "_system");
+        var recreate = _engine.ExecuteOne("create apikey 'temp-key'", "_system");
         Assert.Null(recreate.Errors);
     }
 
     [Fact]
     public void PurgeApiKey_NonExistent_ReturnsError()
     {
-        var response = _engine.Execute("purge apikey 'ghost'", "_system");
+        var response = _engine.ExecuteOne("purge apikey 'ghost'", "_system");
 
         Assert.NotNull(response.Errors);
         Assert.Contains(response.Errors, e => e.Code == "KEY_NOT_FOUND");
@@ -83,10 +85,10 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void RotateApiKey_ReturnsNewKey()
     {
-        var create = _engine.Execute("create apikey 'rotate-key'", "_system");
+        var create = _engine.ExecuteOne("create apikey 'rotate-key'", "_system");
         var originalKey = create.Data![0]["api_key"]!.ToString();
 
-        var response = _engine.Execute("rotate apikey 'rotate-key'", "_system");
+        var response = _engine.ExecuteOne("rotate apikey 'rotate-key'", "_system");
 
         Assert.Null(response.Errors);
         Assert.Equal(SproutOperation.RotateApiKey, response.Operation);
@@ -100,7 +102,7 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void RotateApiKey_NonExistent_ReturnsError()
     {
-        var response = _engine.Execute("rotate apikey 'ghost'", "_system");
+        var response = _engine.ExecuteOne("rotate apikey 'ghost'", "_system");
 
         Assert.NotNull(response.Errors);
         Assert.Contains(response.Errors, e => e.Code == "KEY_NOT_FOUND");
@@ -111,8 +113,8 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void Grant_WriterOnDatabase()
     {
-        _engine.Execute("create apikey 'grant-key'", "_system");
-        var response = _engine.Execute("grant writer on shop to 'grant-key'", "_system");
+        _engine.ExecuteOne("create apikey 'grant-key'", "_system");
+        var response = _engine.ExecuteOne("grant writer on shop to 'grant-key'", "_system");
 
         Assert.Null(response.Errors);
         Assert.Equal(SproutOperation.Grant, response.Operation);
@@ -121,7 +123,7 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void Grant_NonExistentKey_ReturnsError()
     {
-        var response = _engine.Execute("grant writer on shop to 'ghost'", "_system");
+        var response = _engine.ExecuteOne("grant writer on shop to 'ghost'", "_system");
 
         Assert.NotNull(response.Errors);
         Assert.Contains(response.Errors, e => e.Code == "KEY_NOT_FOUND");
@@ -130,10 +132,10 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void Revoke_RemovesAccess()
     {
-        _engine.Execute("create apikey 'revoke-key'", "_system");
-        _engine.Execute("grant writer on shop to 'revoke-key'", "_system");
+        _engine.ExecuteOne("create apikey 'revoke-key'", "_system");
+        _engine.ExecuteOne("grant writer on shop to 'revoke-key'", "_system");
 
-        var response = _engine.Execute("revoke shop from 'revoke-key'", "_system");
+        var response = _engine.ExecuteOne("revoke shop from 'revoke-key'", "_system");
 
         Assert.Null(response.Errors);
         Assert.Equal(SproutOperation.Revoke, response.Operation);
@@ -144,10 +146,10 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void Restrict_TableToReader()
     {
-        _engine.Execute("create apikey 'restrict-key'", "_system");
-        _engine.Execute("grant writer on shop to 'restrict-key'", "_system");
+        _engine.ExecuteOne("create apikey 'restrict-key'", "_system");
+        _engine.ExecuteOne("grant writer on shop to 'restrict-key'", "_system");
 
-        var response = _engine.Execute("restrict orders to reader for 'restrict-key' on shop", "_system");
+        var response = _engine.ExecuteOne("restrict orders to reader for 'restrict-key' on shop", "_system");
 
         Assert.Null(response.Errors);
         Assert.Equal(SproutOperation.Restrict, response.Operation);
@@ -156,10 +158,10 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void Restrict_WildcardToNone()
     {
-        _engine.Execute("create apikey 'wild-key'", "_system");
-        _engine.Execute("grant admin on shop to 'wild-key'", "_system");
+        _engine.ExecuteOne("create apikey 'wild-key'", "_system");
+        _engine.ExecuteOne("grant admin on shop to 'wild-key'", "_system");
 
-        var response = _engine.Execute("restrict * to none for 'wild-key' on shop", "_system");
+        var response = _engine.ExecuteOne("restrict * to none for 'wild-key' on shop", "_system");
 
         Assert.Null(response.Errors);
     }
@@ -167,11 +169,11 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void Unrestrict_RemovesRestriction()
     {
-        _engine.Execute("create apikey 'unrest-key'", "_system");
-        _engine.Execute("grant writer on shop to 'unrest-key'", "_system");
-        _engine.Execute("restrict orders to reader for 'unrest-key' on shop", "_system");
+        _engine.ExecuteOne("create apikey 'unrest-key'", "_system");
+        _engine.ExecuteOne("grant writer on shop to 'unrest-key'", "_system");
+        _engine.ExecuteOne("restrict orders to reader for 'unrest-key' on shop", "_system");
 
-        var response = _engine.Execute("unrestrict orders for 'unrest-key' on shop", "_system");
+        var response = _engine.ExecuteOne("unrestrict orders for 'unrest-key' on shop", "_system");
 
         Assert.Null(response.Errors);
         Assert.Equal(SproutOperation.Unrestrict, response.Operation);
@@ -182,7 +184,7 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void AuthService_ValidatesCreatedKey()
     {
-        var create = _engine.Execute("create apikey 'val-key'", "_system");
+        var create = _engine.ExecuteOne("create apikey 'val-key'", "_system");
         var apiKey = create.Data![0]["api_key"]!.ToString()!;
 
         var entry = _engine.AuthService!.ValidateKey(apiKey);
@@ -206,10 +208,10 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void AuthService_RotatedKey_OldKeyInvalid()
     {
-        var create = _engine.Execute("create apikey 'rot-check'", "_system");
+        var create = _engine.ExecuteOne("create apikey 'rot-check'", "_system");
         var oldKey = create.Data![0]["api_key"]!.ToString()!;
 
-        var rotate = _engine.Execute("rotate apikey 'rot-check'", "_system");
+        var rotate = _engine.ExecuteOne("rotate apikey 'rot-check'", "_system");
         var newKey = rotate.Data![0]["api_key"]!.ToString()!;
 
         Assert.Null(_engine.AuthService!.ValidateKey(oldKey));
@@ -219,11 +221,11 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void AuthService_PurgedKey_PurgesPermissionsAndRestrictions()
     {
-        _engine.Execute("create apikey 'purge-check'", "_system");
-        _engine.Execute("grant writer on shop to 'purge-check'", "_system");
-        _engine.Execute("restrict orders to reader for 'purge-check' on shop", "_system");
+        _engine.ExecuteOne("create apikey 'purge-check'", "_system");
+        _engine.ExecuteOne("grant writer on shop to 'purge-check'", "_system");
+        _engine.ExecuteOne("restrict orders to reader for 'purge-check' on shop", "_system");
 
-        _engine.Execute("purge apikey 'purge-check'", "_system");
+        _engine.ExecuteOne("purge apikey 'purge-check'", "_system");
 
         Assert.False(_engine.AuthService!.KeyExists("purge-check"));
     }
@@ -231,13 +233,13 @@ public sealed class PermissionTests : IDisposable
     [Fact]
     public void AuthService_RevokeAlsoRemovesRestrictions()
     {
-        var create = _engine.Execute("create apikey 'rev-rest'", "_system");
+        var create = _engine.ExecuteOne("create apikey 'rev-rest'", "_system");
         var apiKey = create.Data![0]["api_key"]!.ToString()!;
 
-        _engine.Execute("grant writer on shop to 'rev-rest'", "_system");
-        _engine.Execute("restrict orders to reader for 'rev-rest' on shop", "_system");
+        _engine.ExecuteOne("grant writer on shop to 'rev-rest'", "_system");
+        _engine.ExecuteOne("restrict orders to reader for 'rev-rest' on shop", "_system");
 
-        _engine.Execute("revoke shop from 'rev-rest'", "_system");
+        _engine.ExecuteOne("revoke shop from 'rev-rest'", "_system");
 
         var entry = _engine.AuthService!.ValidateKey(apiKey);
         Assert.NotNull(entry);

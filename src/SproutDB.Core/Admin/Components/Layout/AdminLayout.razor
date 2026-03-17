@@ -416,7 +416,7 @@
             return;
         }
 
-        var response = Engine.Execute("create database", name);
+        var response = Engine.Execute("create database", name)[0];
         if (response.Operation == SproutOperation.Error)
         {
             _createDbError = response.Errors?.FirstOrDefault()?.Message ?? "Failed to create database";
@@ -501,7 +501,7 @@
         foreach (var db in dbs)
         {
             var node = new DbNode { Name = db.Name, Expanded = true };
-            var describeResponse = Engine.Execute("describe", db.Name);
+            var describeResponse = Engine.Execute("describe", db.Name)[0];
             if (describeResponse.Schema?.Tables is { } tables)
             {
                 node.Tables = tables;
@@ -562,7 +562,7 @@
     private void RefreshIndexList(object? state)
     {
         _indexItems.Clear();
-        var response = Engine.Execute("get index_metrics", "_system");
+        var response = Engine.Execute("get index_metrics", "_system")[0];
         if (response.Data is { Count: > 0 } data)
         {
             foreach (var row in data)

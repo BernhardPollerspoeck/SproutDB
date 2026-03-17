@@ -267,8 +267,10 @@ internal sealed class BTreeHandle : IDisposable
 
     // ── Insert ──────────────────────────────────────────
 
-    public void Insert(byte[] key, long place)
+    public void Insert(byte[] key, long place, TransactionJournal? journal = null)
     {
+        journal?.RecordBTreeInsert(this, key, place);
+
         if (_rootOffset == 0)
         {
             // Create root as leaf
@@ -362,8 +364,10 @@ internal sealed class BTreeHandle : IDisposable
 
     // ── Remove ──────────────────────────────────────────
 
-    public void Remove(byte[] key, long place)
+    public void Remove(byte[] key, long place, TransactionJournal? journal = null)
     {
+        journal?.RecordBTreeRemove(this, key, place);
+
         if (_rootOffset == 0)
             return;
 

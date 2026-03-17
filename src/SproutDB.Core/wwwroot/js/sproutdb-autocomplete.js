@@ -2,7 +2,7 @@
 // Pure logic — no DOM dependencies. Used by AdminApp.razor and testable via Jint.
 
 var SproutAutocomplete = (function () {
-    var COMMANDS = ['get','upsert','delete','describe','create','purge','add','alter','rename','backup','restore','shrink','grant','revoke','restrict','unrestrict','rotate'];
+    var COMMANDS = ['get','upsert','delete','describe','create','purge','add','alter','rename','backup','restore','shrink','grant','revoke','restrict','unrestrict','rotate','atomic','commit'];
     var CLAUSES = ['where','select','-select','order','limit','page','count','distinct','group','follow','on','as'];
     var OPERATORS = ['=','!=','>','>=','<','<=','between','in','is','contains','starts','ends'];
     var DIRECTIONS = ['asc','desc'];

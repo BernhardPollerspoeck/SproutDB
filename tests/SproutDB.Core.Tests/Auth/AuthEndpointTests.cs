@@ -89,7 +89,8 @@ public sealed class AuthEndpointTests : IAsyncLifetime
             request.Headers.Add("X-SproutDB-ApiKey", apiKey);
 
         var response = await Client.SendAsync(request);
-        var body = await response.Content.ReadFromJsonAsync<SproutResponse>(JsonOptions);
+        var list = await response.Content.ReadFromJsonAsync<List<SproutResponse>>(JsonOptions);
+        var body = list is { Count: > 0 } ? list[0] : null;
         return (response, body);
     }
 
@@ -234,12 +235,13 @@ public sealed class AuthEndpointTests : IAsyncLifetime
     // ── Duplicate key ──────────────────────────────────────
 
     [Fact]
-    public async Task CreateApiKey_Duplicate_Returns409()
+    public async Task CreateApiKey_Duplicate_ReturnsError()
     {
         await PostQuery("create apikey 'dup-http'", apiKey: MasterKey);
         var (response, body) = await PostQuery("create apikey 'dup-http'", apiKey: MasterKey);
 
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        // Auth query responses always return 200, error in body
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(body?.Errors);
         Assert.Contains(body.Errors, e => e.Code == "KEY_EXISTS");
     }
@@ -247,11 +249,12 @@ public sealed class AuthEndpointTests : IAsyncLifetime
     // ── Purge nonexistent ──────────────────────────────────
 
     [Fact]
-    public async Task PurgeApiKey_NotFound_Returns404()
+    public async Task PurgeApiKey_NotFound_ReturnsError()
     {
         var (response, body) = await PostQuery("purge apikey 'ghost'", apiKey: MasterKey);
 
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        // Auth query responses always return 200, error in body
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(body?.Errors);
         Assert.Contains(body.Errors, e => e.Code == "KEY_NOT_FOUND");
     }

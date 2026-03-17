@@ -9,15 +9,15 @@ public class GetTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", "testdb");
-        _engine.Execute(
+        _engine.ExecuteOne("create database", "testdb");
+        _engine.ExecuteOne(
             "create table users (name string 100, email string 320, age ubyte, active bool default true)",
             "testdb");
 
         // Seed data
-        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
-        _engine.Execute("upsert users {name: 'Bob', email: 'bob@test.com', age: 35}", "testdb");
-        _engine.Execute("upsert users {name: 'Charlie', email: 'charlie@test.com', age: 22}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Bob', email: 'bob@test.com', age: 35}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Charlie', email: 'charlie@test.com', age: 22}", "testdb");
     }
 
     public void Dispose()
@@ -32,7 +32,7 @@ public class GetTests : IDisposable
     [Fact]
     public void GetAll_ReturnsAllRows()
     {
-        var r = _engine.Execute("get users", "testdb");
+        var r = _engine.ExecuteOne("get users", "testdb");
 
         Assert.Equal(SproutOperation.Get, r.Operation);
         Assert.Equal(3, r.Affected);
@@ -43,7 +43,7 @@ public class GetTests : IDisposable
     [Fact]
     public void GetAll_ReturnsAllColumns()
     {
-        var r = _engine.Execute("get users", "testdb");
+        var r = _engine.ExecuteOne("get users", "testdb");
 
         var row = r.Data![0];
         Assert.True(row.ContainsKey("_id"));
@@ -56,7 +56,7 @@ public class GetTests : IDisposable
     [Fact]
     public void GetAll_RowsOrderedById()
     {
-        var r = _engine.Execute("get users", "testdb");
+        var r = _engine.ExecuteOne("get users", "testdb");
 
         Assert.Equal((ulong)1, r.Data![0]["_id"]);
         Assert.Equal((ulong)2, r.Data[1]["_id"]);
@@ -66,7 +66,7 @@ public class GetTests : IDisposable
     [Fact]
     public void GetAll_CorrectValues()
     {
-        var r = _engine.Execute("get users", "testdb");
+        var r = _engine.ExecuteOne("get users", "testdb");
 
         var alice = r.Data![0];
         Assert.Equal("Alice", alice["name"]);
@@ -78,8 +78,8 @@ public class GetTests : IDisposable
     [Fact]
     public void GetAll_EmptyTable_ReturnsEmptyData()
     {
-        _engine.Execute("create table empty (name string)", "testdb");
-        var r = _engine.Execute("get empty", "testdb");
+        _engine.ExecuteOne("create table empty (name string)", "testdb");
+        var r = _engine.ExecuteOne("get empty", "testdb");
 
         Assert.Equal(SproutOperation.Get, r.Operation);
         Assert.Equal(0, r.Affected);
@@ -92,7 +92,7 @@ public class GetTests : IDisposable
     [Fact]
     public void GetSelect_SingleColumn()
     {
-        var r = _engine.Execute("get users select name", "testdb");
+        var r = _engine.ExecuteOne("get users select name", "testdb");
 
         Assert.Equal(3, r.Data!.Count);
         var row = r.Data[0];
@@ -103,7 +103,7 @@ public class GetTests : IDisposable
     [Fact]
     public void GetSelect_MultipleColumns()
     {
-        var r = _engine.Execute("get users select name, age", "testdb");
+        var r = _engine.ExecuteOne("get users select name, age", "testdb");
 
         var row = r.Data![0];
         Assert.Equal(2, row.Count);
@@ -114,7 +114,7 @@ public class GetTests : IDisposable
     [Fact]
     public void GetSelect_WithId()
     {
-        var r = _engine.Execute("get users select _id, name", "testdb");
+        var r = _engine.ExecuteOne("get users select _id, name", "testdb");
 
         var row = r.Data![0];
         Assert.Equal(2, row.Count);
@@ -125,7 +125,7 @@ public class GetTests : IDisposable
     [Fact]
     public void GetSelect_OnlyId()
     {
-        var r = _engine.Execute("get users select _id", "testdb");
+        var r = _engine.ExecuteOne("get users select _id", "testdb");
 
         var row = r.Data![0];
         Assert.Single(row);
@@ -135,7 +135,7 @@ public class GetTests : IDisposable
     [Fact]
     public void GetSelect_ExcludesNonSelectedColumns()
     {
-        var r = _engine.Execute("get users select name", "testdb");
+        var r = _engine.ExecuteOne("get users select name", "testdb");
 
         var row = r.Data![0];
         Assert.False(row.ContainsKey("_id"));
@@ -149,8 +149,8 @@ public class GetTests : IDisposable
     [Fact]
     public void Get_NullValues_ReturnedAsNull()
     {
-        _engine.Execute("upsert users {}", "testdb"); // id=4, all nullable columns null
-        var r = _engine.Execute("get users select name, age", "testdb");
+        _engine.ExecuteOne("upsert users {}", "testdb"); // id=4, all nullable columns null
+        var r = _engine.ExecuteOne("get users select name, age", "testdb");
 
         var lastRow = r.Data![3]; // id=4
         Assert.Null(lastRow["name"]);
@@ -160,8 +160,8 @@ public class GetTests : IDisposable
     [Fact]
     public void Get_DefaultValues_Returned()
     {
-        _engine.Execute("upsert users {}", "testdb"); // active defaults to true
-        var r = _engine.Execute("get users select active", "testdb");
+        _engine.ExecuteOne("upsert users {}", "testdb"); // active defaults to true
+        var r = _engine.ExecuteOne("get users select active", "testdb");
 
         var lastRow = r.Data![3];
         Assert.Equal(true, lastRow["active"]);
@@ -172,8 +172,8 @@ public class GetTests : IDisposable
     [Fact]
     public void Get_AfterUpdate_ReturnsUpdatedValues()
     {
-        _engine.Execute("upsert users {_id: 1, name: 'Alice Updated'}", "testdb");
-        var r = _engine.Execute("get users select _id, name", "testdb");
+        _engine.ExecuteOne("upsert users {_id: 1, name: 'Alice Updated'}", "testdb");
+        var r = _engine.ExecuteOne("get users select _id, name", "testdb");
 
         Assert.Equal("Alice Updated", r.Data![0]["name"]);
     }
@@ -183,7 +183,7 @@ public class GetTests : IDisposable
     [Fact]
     public void Get_UnknownTable_Error()
     {
-        var r = _engine.Execute("get nonexistent", "testdb");
+        var r = _engine.ExecuteOne("get nonexistent", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_TABLE", r.Errors![0].Code);
@@ -192,7 +192,7 @@ public class GetTests : IDisposable
     [Fact]
     public void Get_UnknownDatabase_Error()
     {
-        var r = _engine.Execute("get users", "nodb");
+        var r = _engine.ExecuteOne("get users", "nodb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_DATABASE", r.Errors![0].Code);
@@ -201,7 +201,7 @@ public class GetTests : IDisposable
     [Fact]
     public void Get_UnknownColumn_InSelect_Error()
     {
-        var r = _engine.Execute("get users select nonexistent", "testdb");
+        var r = _engine.ExecuteOne("get users select nonexistent", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_COLUMN", r.Errors![0].Code);
@@ -214,7 +214,7 @@ public class GetTests : IDisposable
     [Fact]
     public void Get_MultipleUnknownColumns_AllReported()
     {
-        var r = _engine.Execute("get users select foo, bar, baz", "testdb");
+        var r = _engine.ExecuteOne("get users select foo, bar, baz", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal(3, r.Errors!.Count);
@@ -230,7 +230,7 @@ public class GetTests : IDisposable
     [Fact]
     public void Get_MixedValidAndUnknown_OnlyUnknownReported()
     {
-        var r = _engine.Execute("get users select name, foo, age, bar", "testdb");
+        var r = _engine.ExecuteOne("get users select name, foo, age, bar", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal(2, r.Errors!.Count);
@@ -244,7 +244,7 @@ public class GetTests : IDisposable
     [Fact]
     public void Get_MultipleErrors_AnnotatedQueryInline()
     {
-        var r = _engine.Execute("get users select foo, bar", "testdb");
+        var r = _engine.ExecuteOne("get users select foo, bar", "testdb");
 
         Assert.NotNull(r.AnnotatedQuery);
         Assert.Equal(
@@ -255,7 +255,7 @@ public class GetTests : IDisposable
     [Fact]
     public void Get_CaseInsensitive()
     {
-        var r = _engine.Execute("GET users SELECT name", "testdb");
+        var r = _engine.ExecuteOne("GET users SELECT name", "testdb");
 
         Assert.Equal(SproutOperation.Get, r.Operation);
         Assert.Equal(3, r.Data!.Count);
@@ -266,7 +266,7 @@ public class GetTests : IDisposable
     [Fact]
     public void ExcludeSelect_ExcludesNamedColumns()
     {
-        var r = _engine.Execute("get users -select age, email", "testdb");
+        var r = _engine.ExecuteOne("get users -select age, email", "testdb");
 
         Assert.Equal(SproutOperation.Get, r.Operation);
         Assert.Equal(3, r.Data!.Count);
@@ -281,7 +281,7 @@ public class GetTests : IDisposable
     [Fact]
     public void ExcludeSelect_ExcludeId()
     {
-        var r = _engine.Execute("get users -select _id", "testdb");
+        var r = _engine.ExecuteOne("get users -select _id", "testdb");
 
         var row = r.Data![0];
         Assert.False(row.ContainsKey("_id"));
@@ -294,7 +294,7 @@ public class GetTests : IDisposable
     [Fact]
     public void ExcludeSelect_SingleColumn()
     {
-        var r = _engine.Execute("get users -select active", "testdb");
+        var r = _engine.ExecuteOne("get users -select active", "testdb");
 
         var row = r.Data![0];
         Assert.True(row.ContainsKey("_id"));
@@ -307,7 +307,7 @@ public class GetTests : IDisposable
     [Fact]
     public void ExcludeSelect_WithWhere()
     {
-        var r = _engine.Execute("get users -select email, active where age > 30", "testdb");
+        var r = _engine.ExecuteOne("get users -select email, active where age > 30", "testdb");
 
         Assert.Equal(1, r.Affected);
         var row = r.Data![0];
@@ -321,7 +321,7 @@ public class GetTests : IDisposable
     [Fact]
     public void ExcludeSelect_UnknownColumn_Error()
     {
-        var r = _engine.Execute("get users -select missing", "testdb");
+        var r = _engine.ExecuteOne("get users -select missing", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_COLUMN", r.Errors![0].Code);
@@ -332,7 +332,7 @@ public class GetTests : IDisposable
     [Fact]
     public void Get_NoErrors_NullErrorsAndAnnotatedQuery()
     {
-        var r = _engine.Execute("get users", "testdb");
+        var r = _engine.ExecuteOne("get users", "testdb");
 
         Assert.Null(r.Errors);
         Assert.Null(r.AnnotatedQuery);

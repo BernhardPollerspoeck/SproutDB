@@ -33,18 +33,18 @@ public class EndToEndBenchmarks
     [Benchmark(Description = "E2E: parse + execute create database (error: exists)")]
     public SproutResponse CreateDatabase_AlreadyExists()
     {
-        return _engine.Execute("create database", "bench");
+        return _engine.Execute("create database", "bench")[0];
     }
 
     [Benchmark(Description = "E2E: parse + execute (unknown command)")]
     public SproutResponse UnknownCommand()
     {
-        return _engine.Execute("select * from users", "bench");
+        return _engine.Execute("select * from users", "bench")[0];
     }
 
     [Benchmark(Description = "E2E: parse + execute (invalid db name)")]
     public SproutResponse InvalidDbName()
     {
-        return _engine.Execute("create database", "123bad");
+        return _engine.Execute("create database", "123bad")[0];
     }
 }

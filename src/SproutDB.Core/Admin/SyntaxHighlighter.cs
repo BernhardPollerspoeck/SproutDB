@@ -14,6 +14,7 @@ internal static class SyntaxHighlighter
         "get", "upsert", "delete", "describe", "create", "purge",
         "add", "alter", "rename", "backup", "restore", "shrink",
         "grant", "revoke", "restrict", "unrestrict", "rotate",
+        "atomic", "commit",
     };
 
     private static readonly HashSet<string> Clauses = new(StringComparer.OrdinalIgnoreCase)
@@ -70,10 +71,21 @@ internal static class SyntaxHighlighter
         {
             char c = query[i];
 
-            // Newline resets context for multi-query
+            // Newline or semicolon resets context for multi-query
             if (c == '\n')
             {
                 sb.Append(c);
+                i++;
+                ctx = Context.Normal;
+                braceDepth = 0;
+                continue;
+            }
+
+            if (c == ';')
+            {
+                sb.Append("<span class=\"hl-symbol\">");
+                AppendEscapedChar(sb, c);
+                sb.Append("</span>");
                 i++;
                 ctx = Context.Normal;
                 braceDepth = 0;
@@ -290,7 +302,7 @@ internal static class SyntaxHighlighter
     }
 
     private static bool IsSymbol(char c) =>
-        c is ',' or ':' or '=' or '<' or '>' or '*' or '!';
+        c is ',' or ':' or '=' or '<' or '>' or '*' or '!' or ';';
 
     private static void AppendEscaped(StringBuilder sb, string text, int start, int length)
     {

@@ -9,14 +9,14 @@ public class ColumnAliasTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", "testdb");
+        _engine.ExecuteOne("create database", "testdb");
 
-        _engine.Execute(
+        _engine.ExecuteOne(
             "create table users (name string 50, email string 100, age sint)",
             "testdb");
 
-        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.de', age: 30}", "testdb");
-        _engine.Execute("upsert users {name: 'Bob', email: 'bob@test.de', age: 25}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Alice', email: 'alice@test.de', age: 30}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Bob', email: 'bob@test.de', age: 25}", "testdb");
     }
 
     public void Dispose()
@@ -29,7 +29,7 @@ public class ColumnAliasTests : IDisposable
     [Fact]
     public void SelectAs_SingleColumn_RenamesKey()
     {
-        var r = _engine.Execute("get users select name as username", "testdb");
+        var r = _engine.ExecuteOne("get users select name as username", "testdb");
 
         Assert.Equal(SproutOperation.Get, r.Operation);
         Assert.NotNull(r.Data);
@@ -44,7 +44,7 @@ public class ColumnAliasTests : IDisposable
     [Fact]
     public void SelectAs_MultipleColumns_RenamesBoth()
     {
-        var r = _engine.Execute("get users select name as username, email as contact", "testdb");
+        var r = _engine.ExecuteOne("get users select name as username, email as contact", "testdb");
 
         Assert.NotNull(r.Data);
         var first = r.Data[0];
@@ -57,7 +57,7 @@ public class ColumnAliasTests : IDisposable
     [Fact]
     public void SelectAs_MixedAliasAndPlain()
     {
-        var r = _engine.Execute("get users select name as username, email, age", "testdb");
+        var r = _engine.ExecuteOne("get users select name as username, email, age", "testdb");
 
         Assert.NotNull(r.Data);
         var first = r.Data[0];
@@ -70,7 +70,7 @@ public class ColumnAliasTests : IDisposable
     [Fact]
     public void SelectAs_IdColumn_CanBeAliased()
     {
-        var r = _engine.Execute("get users select _id as user_id, name", "testdb");
+        var r = _engine.ExecuteOne("get users select _id as user_id, name", "testdb");
 
         Assert.NotNull(r.Data);
         var first = r.Data[0];
@@ -82,7 +82,7 @@ public class ColumnAliasTests : IDisposable
     [Fact]
     public void SelectAs_WithWhere_FiltersAndRenames()
     {
-        var r = _engine.Execute("get users select name as username where age > 25", "testdb");
+        var r = _engine.ExecuteOne("get users select name as username where age > 25", "testdb");
 
         Assert.NotNull(r.Data);
         Assert.Single(r.Data);
@@ -92,7 +92,7 @@ public class ColumnAliasTests : IDisposable
     [Fact]
     public void SelectAs_WithComputedField_BothWork()
     {
-        var r = _engine.Execute("get users select name as username, age * 2 as double_age", "testdb");
+        var r = _engine.ExecuteOne("get users select name as username, age * 2 as double_age", "testdb");
 
         Assert.NotNull(r.Data);
         var first = r.Data[0];
@@ -104,10 +104,10 @@ public class ColumnAliasTests : IDisposable
     [Fact]
     public void SelectAs_InFollowSelect_RenamesKey()
     {
-        _engine.Execute("create table orders (user_id ulong, total sint, status string 50)", "testdb");
-        _engine.Execute("upsert orders {user_id: 1, total: 100, status: 'completed'}", "testdb");
+        _engine.ExecuteOne("create table orders (user_id ulong, total sint, status string 50)", "testdb");
+        _engine.ExecuteOne("upsert orders {user_id: 1, total: 100, status: 'completed'}", "testdb");
 
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users follow users._id -> orders.user_id as orders select total as order_total, status as order_status",
             "testdb");
 
@@ -126,7 +126,7 @@ public class ColumnAliasTests : IDisposable
     [Fact]
     public void SelectAs_MissingAliasName_Error()
     {
-        var r = _engine.Execute("get users select name as", "testdb");
+        var r = _engine.ExecuteOne("get users select name as", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.NotNull(r.Errors);

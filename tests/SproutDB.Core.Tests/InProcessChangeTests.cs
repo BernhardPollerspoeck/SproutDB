@@ -9,8 +9,8 @@ public class InProcessChangeTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", "testdb");
-        _engine.Execute(
+        _engine.ExecuteOne("create database", "testdb");
+        _engine.ExecuteOne(
             "create table users (name string 100, email string 200)",
             "testdb");
 
@@ -33,7 +33,7 @@ public class InProcessChangeTests : IDisposable
         var received = new List<SproutResponse>();
         db.OnChange("users", r => received.Add(r));
 
-        _engine.Execute("upsert users {name: 'John', email: 'john@test.com'}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'John', email: 'john@test.com'}", "testdb");
 
         WaitForDispatch();
 
@@ -46,13 +46,13 @@ public class InProcessChangeTests : IDisposable
     public void OnChange_DeleteFiresCallback()
     {
         var db = _engine.SelectDatabase("testdb");
-        _engine.Execute("upsert users {name: 'John', email: 'john@test.com'}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'John', email: 'john@test.com'}", "testdb");
         WaitForDispatch(); // let upsert event drain before subscribing
 
         var received = new List<SproutResponse>();
         db.OnChange("users", r => received.Add(r));
 
-        _engine.Execute("delete users where _id = 1", "testdb");
+        _engine.ExecuteOne("delete users where _id = 1", "testdb");
 
         WaitForDispatch();
 
@@ -67,7 +67,7 @@ public class InProcessChangeTests : IDisposable
         var received = new List<SproutResponse>();
         db.OnChange("users", r => received.Add(r));
 
-        _engine.Execute("get users", "testdb");
+        _engine.ExecuteOne("get users", "testdb");
 
         WaitForDispatch();
 
@@ -81,7 +81,7 @@ public class InProcessChangeTests : IDisposable
         var received = new List<SproutResponse>();
         db.OnChange("_schema", r => received.Add(r));
 
-        _engine.Execute(
+        _engine.ExecuteOne(
             "create table orders (product string 100)",
             "testdb");
 
@@ -100,7 +100,7 @@ public class InProcessChangeTests : IDisposable
         db.OnChange("users", r => tableReceived.Add(r));
         db.OnChange("_schema", r => schemaReceived.Add(r));
 
-        _engine.Execute("add column users.score sint", "testdb");
+        _engine.ExecuteOne("add column users.score sint", "testdb");
 
         WaitForDispatch();
 
@@ -116,12 +116,12 @@ public class InProcessChangeTests : IDisposable
         var received = new List<SproutResponse>();
         var sub = db.OnChange("users", r => received.Add(r));
 
-        _engine.Execute("upsert users {name: 'John', email: 'john@test.com'}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'John', email: 'john@test.com'}", "testdb");
         WaitForDispatch();
 
         sub.Dispose();
 
-        _engine.Execute("upsert users {name: 'Jane', email: 'jane@test.com'}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Jane', email: 'jane@test.com'}", "testdb");
         WaitForDispatch();
 
         Assert.Single(received);
@@ -130,14 +130,14 @@ public class InProcessChangeTests : IDisposable
     [Fact]
     public void OnChange_DifferentDatabaseDoesNotFire()
     {
-        _engine.Execute("create database", "otherdb");
-        _engine.Execute("create table users (name string 100)", "otherdb");
+        _engine.ExecuteOne("create database", "otherdb");
+        _engine.ExecuteOne("create table users (name string 100)", "otherdb");
 
         var db = _engine.SelectDatabase("testdb");
         var received = new List<SproutResponse>();
         db.OnChange("users", r => received.Add(r));
 
-        _engine.Execute("upsert users {name: 'John'}", "otherdb");
+        _engine.ExecuteOne("upsert users {name: 'John'}", "otherdb");
 
         WaitForDispatch();
 
@@ -152,7 +152,7 @@ public class InProcessChangeTests : IDisposable
         db.OnChange("users", r => received.Add(r));
 
         // Upsert to non-existent table → should error, no notification
-        _engine.Execute("upsert nonexistent {name: 'John'}", "testdb");
+        _engine.ExecuteOne("upsert nonexistent {name: 'John'}", "testdb");
 
         WaitForDispatch();
 
@@ -165,7 +165,7 @@ public class InProcessChangeTests : IDisposable
         var received = new List<SproutResponse>();
         _engine.ChangeNotifier.Subscribe("newdb", "_schema", r => received.Add(r));
 
-        _engine.Execute("create database", "newdb");
+        _engine.ExecuteOne("create database", "newdb");
 
         WaitForDispatch(() => received.Count > 0);
 

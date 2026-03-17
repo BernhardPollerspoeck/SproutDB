@@ -5,7 +5,7 @@ namespace SproutDB.Core.Execution;
 
 internal static class UpsertExecutor
 {
-    public static SproutResponse Execute(string query, TableHandle table, UpsertQuery q, int bulkLimit)
+    public static SproutResponse Execute(string query, TableHandle table, UpsertQuery q, int bulkLimit, Storage.TransactionJournal? journal = null)
     {
         // ── Bulk limit check (fail fast, before any validation/writes) ──
         if (q.Records.Count > bulkLimit)
@@ -90,11 +90,11 @@ internal static class UpsertExecutor
 
             if (resolvedId.HasValue)
             {
-                (record, id, place) = WriteWithId(table, rec.FieldsByName, resolvedId.Value);
+                (record, id, place) = WriteWithId(table, rec.FieldsByName, resolvedId.Value, journal);
             }
             else
             {
-                (record, id, place) = WriteInsert(table, rec.FieldsByName);
+                (record, id, place) = WriteInsert(table, rec.FieldsByName, journal);
             }
 
             // Write TTL data
@@ -258,22 +258,24 @@ internal static class UpsertExecutor
 
     private static (Dictionary<string, object?> record, ulong id, long place) WriteInsert(
         TableHandle table,
-        Dictionary<string, UpsertField> fieldsByName)
+        Dictionary<string, UpsertField> fieldsByName,
+        Storage.TransactionJournal? journal)
     {
         var id = table.Index.ReadNextId();
-        table.Index.WriteNextId(id + 1);
+        table.Index.WriteNextId(id + 1, journal);
 
         var place = table.Index.FindNextPlace();
-        table.Index.WritePlace(id, place);
+        table.Index.WritePlace(id, place, journal);
 
-        var record = WriteRecord(table, place, id, fieldsByName, isNew: true);
+        var record = WriteRecord(table, place, id, fieldsByName, isNew: true, journal);
         return (record, id, place);
     }
 
     private static (Dictionary<string, object?> record, ulong id, long place) WriteWithId(
         TableHandle table,
         Dictionary<string, UpsertField> fieldsByName,
-        ulong id)
+        ulong id,
+        Storage.TransactionJournal? journal)
     {
         var existingPlace = table.Index.ReadPlace(id);
         bool isNew;
@@ -288,14 +290,14 @@ internal static class UpsertExecutor
         {
             isNew = true;
             place = table.Index.FindNextPlace();
-            table.Index.WritePlace(id, place);
+            table.Index.WritePlace(id, place, journal);
         }
 
         var currentNextId = table.Index.ReadNextId();
         if (id >= currentNextId)
-            table.Index.WriteNextId(id + 1);
+            table.Index.WriteNextId(id + 1, journal);
 
-        var record = WriteRecord(table, place, id, fieldsByName, isNew);
+        var record = WriteRecord(table, place, id, fieldsByName, isNew, journal);
         return (record, id, place);
     }
 
@@ -304,7 +306,8 @@ internal static class UpsertExecutor
         long place,
         ulong id,
         Dictionary<string, UpsertField> fieldsByName,
-        bool isNew)
+        bool isNew,
+        Storage.TransactionJournal? journal = null)
     {
         var record = new Dictionary<string, object?>(table.Schema.Columns.Count + 1);
 
@@ -328,7 +331,7 @@ internal static class UpsertExecutor
             {
                 if (field.Value.Kind == UpsertValueKind.Null)
                 {
-                    colHandle.WriteNull(place);
+                    colHandle.WriteNull(place, journal);
                     record[colSchema.Name] = null;
 
                     // Delete blob/array file if exists
@@ -339,14 +342,14 @@ internal static class UpsertExecutor
 
                     // Remove old value from B-Tree
                     if (oldEncoded is not null)
-                        table.GetBTree(colSchema.Name).Remove(oldEncoded, place);
+                        table.GetBTree(colSchema.Name).Remove(oldEncoded, place, journal);
                 }
                 else if (isBlob)
                 {
                     // Decode base64 → write .blob file → store byte count in .col
                     var blobBytes = Convert.FromBase64String(field.Value.Raw!);
                     table.WriteBlobFile(colSchema.Name, (long)id, blobBytes);
-                    colHandle.WriteValue(place, blobBytes.Length.ToString());
+                    colHandle.WriteValue(place, blobBytes.Length.ToString(), journal);
                     record[colSchema.Name] = (long)blobBytes.Length;
                 }
                 else if (isArray)
@@ -358,21 +361,21 @@ internal static class UpsertExecutor
                     var doc = System.Text.Json.JsonDocument.Parse(json);
                     var elementCount = doc.RootElement.GetArrayLength();
                     doc.Dispose();
-                    colHandle.WriteValue(place, elementCount.ToString());
+                    colHandle.WriteValue(place, elementCount.ToString(), journal);
                     record[colSchema.Name] = System.Text.Json.JsonSerializer.Deserialize<List<object?>>(json);
                 }
                 else
                 {
-                    record[colSchema.Name] = colHandle.WriteValue(place, field.Value.Raw!);
+                    record[colSchema.Name] = colHandle.WriteValue(place, field.Value.Raw!, journal);
 
                     // Update B-Tree: remove old, insert new
                     if (table.HasBTree(colSchema.Name))
                     {
                         var btree = table.GetBTree(colSchema.Name);
                         if (oldEncoded is not null)
-                            btree.Remove(oldEncoded, place);
+                            btree.Remove(oldEncoded, place, journal);
                         var newEncoded = colHandle.EncodeValueToBytes(field.Value.Raw!);
-                        btree.Insert(newEncoded, place);
+                        btree.Insert(newEncoded, place, journal);
                     }
                 }
             }
@@ -380,18 +383,18 @@ internal static class UpsertExecutor
             {
                 if (colSchema.Default is not null && !isBlob && !isArray)
                 {
-                    record[colSchema.Name] = colHandle.WriteValue(place, colSchema.Default);
+                    record[colSchema.Name] = colHandle.WriteValue(place, colSchema.Default, journal);
 
                     // Insert default value into B-Tree
                     if (table.HasBTree(colSchema.Name))
                     {
                         var newEncoded = colHandle.EncodeValueToBytes(colSchema.Default);
-                        table.GetBTree(colSchema.Name).Insert(newEncoded, place);
+                        table.GetBTree(colSchema.Name).Insert(newEncoded, place, journal);
                     }
                 }
                 else
                 {
-                    colHandle.WriteNull(place);
+                    colHandle.WriteNull(place, journal);
                     record[colSchema.Name] = null;
                 }
             }

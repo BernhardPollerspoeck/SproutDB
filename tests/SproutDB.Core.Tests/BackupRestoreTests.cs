@@ -9,10 +9,10 @@ public class BackupRestoreTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", "testdb");
-        _engine.Execute("create table users (name string 100, age ubyte)", "testdb");
-        _engine.Execute("upsert users {name: 'Alice', age: 25}", "testdb");
-        _engine.Execute("upsert users {name: 'Bob', age: 30}", "testdb");
+        _engine.ExecuteOne("create database", "testdb");
+        _engine.ExecuteOne("create table users (name string 100, age ubyte)", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Alice', age: 25}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Bob', age: 30}", "testdb");
     }
 
     public void Dispose()
@@ -27,7 +27,7 @@ public class BackupRestoreTests : IDisposable
     [Fact]
     public void Backup_Success()
     {
-        var r = _engine.Execute("backup", "testdb");
+        var r = _engine.ExecuteOne("backup", "testdb");
 
         Assert.Equal(SproutOperation.Backup, r.Operation);
         Assert.Null(r.Errors);
@@ -39,7 +39,7 @@ public class BackupRestoreTests : IDisposable
     [Fact]
     public void Backup_CreatesZipFile()
     {
-        var r = _engine.Execute("backup", "testdb");
+        var r = _engine.ExecuteOne("backup", "testdb");
 
         Assert.NotNull(r.BackupPath);
         Assert.EndsWith(".zip", r.BackupPath);
@@ -49,7 +49,7 @@ public class BackupRestoreTests : IDisposable
     [Fact]
     public void Backup_ZipContainsTableFiles()
     {
-        var r = _engine.Execute("backup", "testdb");
+        var r = _engine.ExecuteOne("backup", "testdb");
 
         using var zip = System.IO.Compression.ZipFile.OpenRead(r.BackupPath!);
         var entryNames = zip.Entries.Select(e => e.FullName).ToList();
@@ -63,7 +63,7 @@ public class BackupRestoreTests : IDisposable
     [Fact]
     public void Backup_ExcludesWal()
     {
-        var r = _engine.Execute("backup", "testdb");
+        var r = _engine.ExecuteOne("backup", "testdb");
 
         using var zip = System.IO.Compression.ZipFile.OpenRead(r.BackupPath!);
         var entryNames = zip.Entries.Select(e => e.FullName).ToList();
@@ -74,7 +74,7 @@ public class BackupRestoreTests : IDisposable
     [Fact]
     public void Backup_UnknownDatabase_Error()
     {
-        var r = _engine.Execute("backup", "nope");
+        var r = _engine.ExecuteOne("backup", "nope");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_DATABASE", r.Errors![0].Code);
@@ -86,21 +86,21 @@ public class BackupRestoreTests : IDisposable
     public void Restore_RecoverData()
     {
         // Backup
-        var backup = _engine.Execute("backup", "testdb");
+        var backup = _engine.ExecuteOne("backup", "testdb");
 
         // Purge the database
-        _engine.Execute("purge database", "testdb");
-        var gone = _engine.Execute("get users", "testdb");
+        _engine.ExecuteOne("purge database", "testdb");
+        var gone = _engine.ExecuteOne("get users", "testdb");
         Assert.Equal(SproutOperation.Error, gone.Operation);
 
         // Restore
-        var r = _engine.Execute($"restore '{backup.BackupPath}'", "testdb");
+        var r = _engine.ExecuteOne($"restore '{backup.BackupPath}'", "testdb");
         Assert.Equal(SproutOperation.Restore, r.Operation);
         Assert.Null(r.Errors);
         Assert.Equal("testdb", r.Schema?.Database);
 
         // Data is back
-        var data = _engine.Execute("get users", "testdb");
+        var data = _engine.ExecuteOne("get users", "testdb");
         Assert.Equal(2, data.Affected);
         Assert.Equal("Alice", data.Data![0]["name"]);
         Assert.Equal("Bob", data.Data[1]["name"]);
@@ -109,38 +109,38 @@ public class BackupRestoreTests : IDisposable
     [Fact]
     public void Restore_OverwritesExistingDatabase()
     {
-        var backup = _engine.Execute("backup", "testdb");
+        var backup = _engine.ExecuteOne("backup", "testdb");
 
         // Add more data
-        _engine.Execute("upsert users {name: 'Charlie', age: 35}", "testdb");
-        var before = _engine.Execute("get users", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Charlie', age: 35}", "testdb");
+        var before = _engine.ExecuteOne("get users", "testdb");
         Assert.Equal(3, before.Affected);
 
         // Restore from backup (should overwrite)
-        _engine.Execute($"restore '{backup.BackupPath}'", "testdb");
+        _engine.ExecuteOne($"restore '{backup.BackupPath}'", "testdb");
 
-        var after = _engine.Execute("get users", "testdb");
+        var after = _engine.ExecuteOne("get users", "testdb");
         Assert.Equal(2, after.Affected); // back to 2
     }
 
     [Fact]
     public void Restore_ToNewDatabase()
     {
-        var backup = _engine.Execute("backup", "testdb");
+        var backup = _engine.ExecuteOne("backup", "testdb");
 
         // Restore to a different database name
-        var r = _engine.Execute($"restore '{backup.BackupPath}'", "newdb");
+        var r = _engine.ExecuteOne($"restore '{backup.BackupPath}'", "newdb");
         Assert.Equal(SproutOperation.Restore, r.Operation);
         Assert.Null(r.Errors);
 
-        var data = _engine.Execute("get users", "newdb");
+        var data = _engine.ExecuteOne("get users", "newdb");
         Assert.Equal(2, data.Affected);
     }
 
     [Fact]
     public void Restore_MissingFile_Error()
     {
-        var r = _engine.Execute("restore '/nonexistent/backup.zip'", "testdb");
+        var r = _engine.ExecuteOne("restore '/nonexistent/backup.zip'", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Contains("does not exist", r.Errors![0].Message);
@@ -149,12 +149,12 @@ public class BackupRestoreTests : IDisposable
     [Fact]
     public void Restore_SchemaPreserved()
     {
-        var backup = _engine.Execute("backup", "testdb");
-        _engine.Execute("purge database", "testdb");
+        var backup = _engine.ExecuteOne("backup", "testdb");
+        _engine.ExecuteOne("purge database", "testdb");
 
-        _engine.Execute($"restore '{backup.BackupPath}'", "testdb");
+        _engine.ExecuteOne($"restore '{backup.BackupPath}'", "testdb");
 
-        var desc = _engine.Execute("describe users", "testdb");
+        var desc = _engine.ExecuteOne("describe users", "testdb");
         Assert.Equal(SproutOperation.Describe, desc.Operation);
         var cols = desc.Schema?.Columns;
         Assert.NotNull(cols);
@@ -167,14 +167,14 @@ public class BackupRestoreTests : IDisposable
     [Fact]
     public void Backup_AfterAddColumn_Preserved()
     {
-        _engine.Execute("add column users.email string 320", "testdb");
-        _engine.Execute("upsert users {_id: 1, email: 'alice@test.com'}", "testdb");
+        _engine.ExecuteOne("add column users.email string 320", "testdb");
+        _engine.ExecuteOne("upsert users {_id: 1, email: 'alice@test.com'}", "testdb");
 
-        var backup = _engine.Execute("backup", "testdb");
-        _engine.Execute("purge database", "testdb");
-        _engine.Execute($"restore '{backup.BackupPath}'", "testdb");
+        var backup = _engine.ExecuteOne("backup", "testdb");
+        _engine.ExecuteOne("purge database", "testdb");
+        _engine.ExecuteOne($"restore '{backup.BackupPath}'", "testdb");
 
-        var data = _engine.Execute("get users select name, email", "testdb");
+        var data = _engine.ExecuteOne("get users select name, email", "testdb");
         Assert.Equal("alice@test.com", data.Data![0]["email"]);
     }
 }

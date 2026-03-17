@@ -10,8 +10,8 @@ public class IndexTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", "testdb");
-        _engine.Execute(
+        _engine.ExecuteOne("create database", "testdb");
+        _engine.ExecuteOne(
             "create table users (name string 100, email string 200, age ubyte)",
             "testdb");
     }
@@ -34,7 +34,7 @@ public class IndexTests : IDisposable
     {
         SeedUsers(5);
 
-        var result = _engine.Execute("create index users.email", "testdb");
+        var result = _engine.ExecuteOne("create index users.email", "testdb");
 
         Assert.Equal(SproutOperation.CreateIndex, result.Operation);
         Assert.Equal(1, result.Affected);
@@ -48,9 +48,9 @@ public class IndexTests : IDisposable
     public void CreateIndex_AlreadyExists_Error()
     {
         SeedUsers(1);
-        _engine.Execute("create index users.email", "testdb");
+        _engine.ExecuteOne("create index users.email", "testdb");
 
-        var result = _engine.Execute("create index users.email", "testdb");
+        var result = _engine.ExecuteOne("create index users.email", "testdb");
 
         Assert.NotNull(result.Errors);
         Assert.Contains("already exists", result.Errors[0].Message);
@@ -59,7 +59,7 @@ public class IndexTests : IDisposable
     [Fact]
     public void CreateIndex_UnknownColumn_Error()
     {
-        var result = _engine.Execute("create index users.nonexistent", "testdb");
+        var result = _engine.ExecuteOne("create index users.nonexistent", "testdb");
 
         Assert.NotNull(result.Errors);
         Assert.Contains("does not exist", result.Errors[0].Message);
@@ -69,9 +69,9 @@ public class IndexTests : IDisposable
     public void PurgeIndex_RemovesFile()
     {
         SeedUsers(3);
-        _engine.Execute("create index users.email", "testdb");
+        _engine.ExecuteOne("create index users.email", "testdb");
 
-        var result = _engine.Execute("purge index users.email", "testdb");
+        var result = _engine.ExecuteOne("purge index users.email", "testdb");
 
         Assert.Equal(SproutOperation.PurgeIndex, result.Operation);
         Assert.Equal(1, result.Affected);
@@ -83,7 +83,7 @@ public class IndexTests : IDisposable
     [Fact]
     public void PurgeIndex_NotFound_Error()
     {
-        var result = _engine.Execute("purge index users.email", "testdb");
+        var result = _engine.ExecuteOne("purge index users.email", "testdb");
 
         Assert.NotNull(result.Errors);
         Assert.Contains("does not exist", result.Errors[0].Message);
@@ -95,11 +95,11 @@ public class IndexTests : IDisposable
     public void GetWithIndex_EqualityLookup_CorrectResult()
     {
         for (int i = 0; i < 100; i++)
-            _engine.Execute($"upsert users {{name: 'User{i}', email: 'user{i}@test.com', age: {(i % 50) + 18}}}", "testdb");
+            _engine.ExecuteOne($"upsert users {{name: 'User{i}', email: 'user{i}@test.com', age: {(i % 50) + 18}}}", "testdb");
 
-        _engine.Execute("create index users.email", "testdb");
+        _engine.ExecuteOne("create index users.email", "testdb");
 
-        var result = _engine.Execute("get users where email = 'user42@test.com'", "testdb");
+        var result = _engine.ExecuteOne("get users where email = 'user42@test.com'", "testdb");
 
         Assert.Null(result.Errors);
         Assert.NotNull(result.Data);
@@ -111,12 +111,12 @@ public class IndexTests : IDisposable
     public void GetWithIndex_RangeLookup_CorrectResult()
     {
         for (int i = 0; i < 20; i++)
-            _engine.Execute($"upsert users {{name: 'User{i}', email: 'user{i}@test.com', age: {i + 18}}}", "testdb");
+            _engine.ExecuteOne($"upsert users {{name: 'User{i}', email: 'user{i}@test.com', age: {i + 18}}}", "testdb");
 
-        _engine.Execute("create index users.age", "testdb");
+        _engine.ExecuteOne("create index users.age", "testdb");
 
         // age > 30 means age 31..37 (i=13..19)
-        var result = _engine.Execute("get users where age > 30", "testdb");
+        var result = _engine.ExecuteOne("get users where age > 30", "testdb");
 
         Assert.Null(result.Errors);
         Assert.NotNull(result.Data);
@@ -132,12 +132,12 @@ public class IndexTests : IDisposable
     public void GetWithIndex_BetweenLookup_CorrectResult()
     {
         for (int i = 0; i < 20; i++)
-            _engine.Execute($"upsert users {{name: 'User{i}', email: 'user{i}@test.com', age: {i + 18}}}", "testdb");
+            _engine.ExecuteOne($"upsert users {{name: 'User{i}', email: 'user{i}@test.com', age: {i + 18}}}", "testdb");
 
-        _engine.Execute("create index users.age", "testdb");
+        _engine.ExecuteOne("create index users.age", "testdb");
 
         // age between 25 and 30 → i=7..12 → 6 rows
-        var result = _engine.Execute("get users where age between 25 and 30", "testdb");
+        var result = _engine.ExecuteOne("get users where age between 25 and 30", "testdb");
 
         Assert.Null(result.Errors);
         Assert.NotNull(result.Data);
@@ -154,19 +154,19 @@ public class IndexTests : IDisposable
     [Fact]
     public void UpsertUpdatesIndex()
     {
-        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
-        _engine.Execute("create index users.email", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.ExecuteOne("create index users.email", "testdb");
 
         // Update email
-        _engine.Execute("upsert users {_id: 1, email: 'newalice@test.com'}", "testdb");
+        _engine.ExecuteOne("upsert users {_id: 1, email: 'newalice@test.com'}", "testdb");
 
         // Old email should not be found
-        var oldResult = _engine.Execute("get users where email = 'alice@test.com'", "testdb");
+        var oldResult = _engine.ExecuteOne("get users where email = 'alice@test.com'", "testdb");
         Assert.NotNull(oldResult.Data);
         Assert.Empty(oldResult.Data);
 
         // New email should be found
-        var newResult = _engine.Execute("get users where email = 'newalice@test.com'", "testdb");
+        var newResult = _engine.ExecuteOne("get users where email = 'newalice@test.com'", "testdb");
         Assert.NotNull(newResult.Data);
         Assert.Single(newResult.Data);
         Assert.Equal("Alice", newResult.Data[0]["name"]);
@@ -177,19 +177,19 @@ public class IndexTests : IDisposable
     [Fact]
     public void DeleteUpdatesIndex()
     {
-        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
-        _engine.Execute("upsert users {name: 'Bob', email: 'bob@test.com', age: 35}", "testdb");
-        _engine.Execute("create index users.email", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Bob', email: 'bob@test.com', age: 35}", "testdb");
+        _engine.ExecuteOne("create index users.email", "testdb");
 
-        _engine.Execute("delete users where name = 'Alice'", "testdb");
+        _engine.ExecuteOne("delete users where name = 'Alice'", "testdb");
 
         // Deleted email should not be found
-        var result = _engine.Execute("get users where email = 'alice@test.com'", "testdb");
+        var result = _engine.ExecuteOne("get users where email = 'alice@test.com'", "testdb");
         Assert.NotNull(result.Data);
         Assert.Empty(result.Data);
 
         // Bob's email should still be found
-        var bobResult = _engine.Execute("get users where email = 'bob@test.com'", "testdb");
+        var bobResult = _engine.ExecuteOne("get users where email = 'bob@test.com'", "testdb");
         Assert.NotNull(bobResult.Data);
         Assert.Single(bobResult.Data);
     }
@@ -200,10 +200,10 @@ public class IndexTests : IDisposable
     public void BTreePersistAndReload()
     {
         SeedUsers(10);
-        _engine.Execute("create index users.email", "testdb");
+        _engine.ExecuteOne("create index users.email", "testdb");
 
         // Verify lookup works before dispose
-        var before = _engine.Execute("get users where email = 'user3@test.com'", "testdb");
+        var before = _engine.ExecuteOne("get users where email = 'user3@test.com'", "testdb");
         Assert.NotNull(before.Data);
         Assert.Single(before.Data);
 
@@ -215,7 +215,7 @@ public class IndexTests : IDisposable
         _engine = new SproutEngine(_tempDir);
         _disposed = false;
 
-        var after = _engine.Execute("get users where email = 'user3@test.com'", "testdb");
+        var after = _engine.ExecuteOne("get users where email = 'user3@test.com'", "testdb");
         Assert.NotNull(after.Data);
         Assert.Single(after.Data);
         Assert.Equal("User3", after.Data[0]["name"]);
@@ -229,7 +229,7 @@ public class IndexTests : IDisposable
         SeedUsers(5);
 
         // No index — should still work via full scan
-        var result = _engine.Execute("get users where email = 'user2@test.com'", "testdb");
+        var result = _engine.ExecuteOne("get users where email = 'user2@test.com'", "testdb");
 
         Assert.Null(result.Errors);
         Assert.NotNull(result.Data);
@@ -242,10 +242,10 @@ public class IndexTests : IDisposable
     [Fact]
     public void UniqueIndex_CreateSucceeds_WhenNoDuplicates()
     {
-        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
-        _engine.Execute("upsert users {name: 'Bob', email: 'bob@test.com', age: 35}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Bob', email: 'bob@test.com', age: 35}", "testdb");
 
-        var result = _engine.Execute("create index unique users.email", "testdb");
+        var result = _engine.ExecuteOne("create index unique users.email", "testdb");
 
         Assert.Equal(SproutOperation.CreateIndex, result.Operation);
         Assert.Null(result.Errors);
@@ -254,10 +254,10 @@ public class IndexTests : IDisposable
     [Fact]
     public void UniqueIndex_CreateFails_WhenDuplicatesExist()
     {
-        _engine.Execute("upsert users {name: 'Alice', email: 'same@test.com', age: 28}", "testdb");
-        _engine.Execute("upsert users {name: 'Bob', email: 'same@test.com', age: 35}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Alice', email: 'same@test.com', age: 28}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Bob', email: 'same@test.com', age: 35}", "testdb");
 
-        var result = _engine.Execute("create index unique users.email", "testdb");
+        var result = _engine.ExecuteOne("create index unique users.email", "testdb");
 
         Assert.NotNull(result.Errors);
         Assert.Contains("duplicate values", result.Errors[0].Message);
@@ -266,10 +266,10 @@ public class IndexTests : IDisposable
     [Fact]
     public void UniqueIndex_InsertDuplicate_Error()
     {
-        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
-        _engine.Execute("create index unique users.email", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.ExecuteOne("create index unique users.email", "testdb");
 
-        var result = _engine.Execute("upsert users {name: 'Bob', email: 'alice@test.com', age: 35}", "testdb");
+        var result = _engine.ExecuteOne("upsert users {name: 'Bob', email: 'alice@test.com', age: 35}", "testdb");
 
         Assert.NotNull(result.Errors);
         Assert.Equal("UNIQUE_VIOLATION", result.Errors[0].Code);
@@ -279,10 +279,10 @@ public class IndexTests : IDisposable
     [Fact]
     public void UniqueIndex_InsertUniqueValue_Succeeds()
     {
-        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
-        _engine.Execute("create index unique users.email", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.ExecuteOne("create index unique users.email", "testdb");
 
-        var result = _engine.Execute("upsert users {name: 'Bob', email: 'bob@test.com', age: 35}", "testdb");
+        var result = _engine.ExecuteOne("upsert users {name: 'Bob', email: 'bob@test.com', age: 35}", "testdb");
 
         Assert.Null(result.Errors);
         Assert.Equal(SproutOperation.Upsert, result.Operation);
@@ -291,11 +291,11 @@ public class IndexTests : IDisposable
     [Fact]
     public void UniqueIndex_UpdateSameRow_Allowed()
     {
-        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
-        _engine.Execute("create index unique users.email", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.ExecuteOne("create index unique users.email", "testdb");
 
         // Update the same row — same email value, should be allowed
-        var result = _engine.Execute("upsert users {_id: 1, name: 'Alice Updated', email: 'alice@test.com', age: 29}", "testdb");
+        var result = _engine.ExecuteOne("upsert users {_id: 1, name: 'Alice Updated', email: 'alice@test.com', age: 29}", "testdb");
 
         Assert.Null(result.Errors);
         Assert.Equal(SproutOperation.Upsert, result.Operation);
@@ -305,21 +305,21 @@ public class IndexTests : IDisposable
     public void UniqueIndex_NullValues_AllowedMultiple()
     {
         // name column has no default → nullable
-        _engine.Execute("create index unique users.name", "testdb");
+        _engine.ExecuteOne("create index unique users.name", "testdb");
 
-        var r1 = _engine.Execute("upsert users {email: 'a@test.com', age: 20}", "testdb");
+        var r1 = _engine.ExecuteOne("upsert users {email: 'a@test.com', age: 20}", "testdb");
         Assert.Null(r1.Errors);
 
-        var r2 = _engine.Execute("upsert users {email: 'b@test.com', age: 25}", "testdb");
+        var r2 = _engine.ExecuteOne("upsert users {email: 'b@test.com', age: 25}", "testdb");
         Assert.Null(r2.Errors);
     }
 
     [Fact]
     public void UniqueIndex_BatchDuplicate_Error()
     {
-        _engine.Execute("create index unique users.email", "testdb");
+        _engine.ExecuteOne("create index unique users.email", "testdb");
 
-        var result = _engine.Execute(
+        var result = _engine.ExecuteOne(
             "upsert users [{name: 'Alice', email: 'same@test.com', age: 28}, {name: 'Bob', email: 'same@test.com', age: 35}]",
             "testdb");
 
@@ -331,14 +331,14 @@ public class IndexTests : IDisposable
     [Fact]
     public void UniqueIndex_PurgeIndex_RemovesConstraint()
     {
-        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
-        _engine.Execute("create index unique users.email", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.ExecuteOne("create index unique users.email", "testdb");
 
-        _engine.Execute("purge index users.email", "testdb");
+        _engine.ExecuteOne("purge index users.email", "testdb");
 
         // Now duplicates should be allowed (no index, no constraint)
-        _engine.Execute("upsert users {name: 'Bob', email: 'alice@test.com', age: 35}", "testdb");
-        var result = _engine.Execute("get users", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Bob', email: 'alice@test.com', age: 35}", "testdb");
+        var result = _engine.ExecuteOne("get users", "testdb");
 
         Assert.NotNull(result.Data);
         Assert.Equal(2, result.Data.Count);
@@ -347,9 +347,9 @@ public class IndexTests : IDisposable
     [Fact]
     public void UniqueIndex_DescribeShowsUnique()
     {
-        _engine.Execute("create index unique users.email", "testdb");
+        _engine.ExecuteOne("create index unique users.email", "testdb");
 
-        var result = _engine.Execute("describe users", "testdb");
+        var result = _engine.ExecuteOne("describe users", "testdb");
 
         Assert.NotNull(result.Schema);
         var emailCol = result.Schema.Columns.Find(c => c.Name == "email");
@@ -361,8 +361,8 @@ public class IndexTests : IDisposable
     [Fact]
     public void UniqueIndex_PersistsAfterReload()
     {
-        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
-        _engine.Execute("create index unique users.email", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Alice', email: 'alice@test.com', age: 28}", "testdb");
+        _engine.ExecuteOne("create index unique users.email", "testdb");
 
         // Reload engine
         _engine.Dispose();
@@ -371,7 +371,7 @@ public class IndexTests : IDisposable
         _disposed = false;
 
         // Unique constraint should still be enforced
-        var result = _engine.Execute("upsert users {name: 'Bob', email: 'alice@test.com', age: 35}", "testdb");
+        var result = _engine.ExecuteOne("upsert users {name: 'Bob', email: 'alice@test.com', age: 35}", "testdb");
 
         Assert.NotNull(result.Errors);
         Assert.Equal("UNIQUE_VIOLATION", result.Errors[0].Code);
@@ -382,6 +382,6 @@ public class IndexTests : IDisposable
     private void SeedUsers(int count)
     {
         for (int i = 0; i < count; i++)
-            _engine.Execute($"upsert users {{name: 'User{i}', email: 'user{i}@test.com', age: {(i % 50) + 18}}}", "testdb");
+            _engine.ExecuteOne($"upsert users {{name: 'User{i}', email: 'user{i}@test.com', age: {(i % 50) + 18}}}", "testdb");
     }
 }

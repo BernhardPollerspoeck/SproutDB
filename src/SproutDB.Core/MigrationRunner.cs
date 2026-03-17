@@ -84,9 +84,14 @@ internal static class MigrationRunner
 
     private static HashSet<string> LoadAppliedMigrations(ISproutDatabase db)
     {
-        var result = db.Query($"get {MigrationsTable} select name");
+        var results = db.Query($"get {MigrationsTable} select name");
         var applied = new HashSet<string>();
 
+        // Query returns a list; take the first result
+        if (results.Count == 0)
+            return applied;
+
+        var result = results[0];
         if (result.Data is null)
             return applied;
 
@@ -120,17 +125,20 @@ internal static class MigrationRunner
             _inner = inner;
         }
 
-        public SproutResponse Query(string query)
+        public List<SproutResponse> Query(string query)
         {
-            var result = _inner.Query(query);
+            var results = _inner.Query(query);
 
-            if (result.Operation == SproutOperation.Error && result.Errors is { Count: > 0 })
+            foreach (var result in results)
             {
-                var error = result.Errors[0];
-                throw new SproutMigrationException(CurrentMigrationName, query, error.Code, error.Message);
+                if (result.Operation == SproutOperation.Error && result.Errors is { Count: > 0 })
+                {
+                    var error = result.Errors[0];
+                    throw new SproutMigrationException(CurrentMigrationName, query, error.Code, error.Message);
+                }
             }
 
-            return result;
+            return results;
         }
 
         public IDisposable OnChange(string table, Action<SproutResponse> callback)

@@ -26,7 +26,7 @@ public class MigrationTests : IDisposable
         _engine.Migrate(typeof(TestMigrations.Schema.CreateUsers).Assembly, db);
 
         // CreateUsers (Order=1) creates users table, then AddEmail (Order=2) adds email column
-        var desc = db.Query("describe users");
+        var desc = db.QueryOne("describe users");
         Assert.Equal(SproutOperation.Describe, desc.Operation);
         Assert.NotNull(desc.Schema?.Columns);
         Assert.Contains(desc.Schema.Columns, c => c.Name == "name");
@@ -44,7 +44,7 @@ public class MigrationTests : IDisposable
         _engine.Migrate(assembly, db);
 
         // _migrations should have exactly 2 Once entries (CreateUsers + AddEmail)
-        var r = db.Query("get _migrations");
+        var r = db.QueryOne("get _migrations");
         Assert.Equal(2, r.Affected);
     }
 
@@ -57,7 +57,7 @@ public class MigrationTests : IDisposable
             _engine.Migrate(typeof(TestMigrations.Failing.FailingMigration).Assembly, db));
 
         // The failing migration should not be tracked
-        var r = db.Query("get _migrations select name");
+        var r = db.QueryOne("get _migrations select name");
         if (r.Data is not null)
         {
             Assert.DoesNotContain(r.Data, row =>
@@ -76,12 +76,12 @@ public class MigrationTests : IDisposable
 
         // First migrate: creates table + inserts startup marker
         _engine.Migrate(assembly, db);
-        var r1 = db.Query("get startupcounter");
+        var r1 = db.QueryOne("get startupcounter");
         Assert.Equal(1, r1.Affected);
 
         // Second migrate: OnStartup runs again, inserts another marker
         _engine.Migrate(assembly, db);
-        var r2 = db.Query("get startupcounter");
+        var r2 = db.QueryOne("get startupcounter");
         Assert.Equal(2, r2.Affected);
     }
 
@@ -92,7 +92,7 @@ public class MigrationTests : IDisposable
 
         _engine.Migrate(typeof(TestMigrations.Startup.CreateStartupTable).Assembly, db);
 
-        var r = db.Query("get _migrations");
+        var r = db.QueryOne("get _migrations");
         // Only the Once migration (CreateStartupTable) should be tracked
         Assert.Equal(1, r.Affected);
         Assert.Contains(r.Data, row =>
@@ -116,7 +116,7 @@ public class MigrationTests : IDisposable
         _engine.Migrate(typeof(TestMigrations.Startup.CreateStartupTable).Assembly, db);
 
         // If order was wrong, StartupCleanup would fail because table doesn't exist yet
-        var r = db.Query("get startupcounter");
+        var r = db.QueryOne("get startupcounter");
         Assert.Equal(1, r.Affected);
     }
 
@@ -141,7 +141,7 @@ public class MigrationTests : IDisposable
         Assert.Throws<SproutMigrationException>(() =>
             _engine.Migrate(typeof(TestMigrations.SilentFailing.SilentlyFailingMigration).Assembly, db));
 
-        var r = db.Query("get _migrations select name");
+        var r = db.QueryOne("get _migrations select name");
         if (r.Data is not null)
         {
             Assert.DoesNotContain(r.Data, row =>
@@ -160,7 +160,7 @@ public class MigrationTests : IDisposable
         Assert.Equal("newdb", db.Name);
 
         // Verify database exists by creating a table in it
-        var r = db.Query("create table test (val sint)");
+        var r = db.QueryOne("create table test (val sint)");
         Assert.Equal(SproutOperation.CreateTable, r.Operation);
     }
 

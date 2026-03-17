@@ -146,6 +146,33 @@
     </div>
 </div>
 
+<!-- Multi-Result Summary (when >1 result) -->
+@if (Tab.LastResults is { Count: > 1 } multiResults)
+{
+    <div class="multi-result-summary">
+        @for (var ri = 0; ri < multiResults.Count; ri++)
+        {
+            var mr = multiResults[ri];
+            var isError = mr.Operation == SproutOperation.Error;
+            <div class="multi-result-item @(isError ? "multi-result-error" : "multi-result-ok")">
+                <span class="multi-result-op">@mr.Operation</span>
+                @if (isError && mr.Errors is { Count: > 0 })
+                {
+                    <span class="multi-result-detail">@mr.Errors[0].Message</span>
+                }
+                else if (mr.Data is { Count: > 0 })
+                {
+                    <span class="multi-result-detail">@mr.Data.Count row(s)</span>
+                }
+                else
+                {
+                    <span class="multi-result-detail">@mr.Affected affected</span>
+                }
+            </div>
+        }
+    </div>
+}
+
 <!-- Results / Error -->
 <div class="results-section">
     @if (Tab.LastResponse is not null && Tab.LastResponse.Operation == SproutOperation.Error)
@@ -630,8 +657,23 @@
             return;
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var response = Engine.Execute(query, selectedDatabase);
+        var responses = Engine.Execute(query, selectedDatabase);
         sw.Stop();
+
+        Tab.LastResults = responses;
+
+        // For display, use the primary response:
+        // - Single result: use it directly
+        // - Multi results: use the last GET result, or the last result
+        var response = responses[^1];
+        foreach (var r in responses)
+        {
+            if (r.Operation == SproutOperation.Get && r.Data is { Count: > 0 })
+            {
+                response = r;
+                break;
+            }
+        }
 
         if (response.Operation != SproutOperation.Error)
         {
@@ -640,8 +682,8 @@
 
         Tab.LastResponse = response;
         Tab.ElapsedMs = sw.Elapsed.TotalMilliseconds;
-        Tab.RowCount = response.Data?.Count ?? response.Affected;
-        Tab.PayloadBytes = EstimatePayload(response);
+        Tab.RowCount = responses.Sum(r => r.Data?.Count ?? r.Affected);
+        Tab.PayloadBytes = responses.Sum(r => EstimatePayload(r));
 
         RebuildColumns(response, query);
         Tab.DisplayData = response.Data;
@@ -678,7 +720,7 @@
 
         if (tableName is not null)
         {
-            var describeResponse = Engine.Execute($"describe {tableName}", selectedDatabase);
+            var describeResponse = Engine.Execute($"describe {tableName}", selectedDatabase)[0];
             if (describeResponse.Schema?.Columns is { } cols)
             {
                 schemaMap = new Dictionary<string, ColumnInfo>(StringComparer.OrdinalIgnoreCase);
@@ -751,7 +793,7 @@
 
         // Re-run the query to get fresh data
         var query = CollapseQuery(QueryText);
-        var freshResponse = Engine.Execute(query, _subscribedDb);
+        var freshResponse = Engine.Execute(query, _subscribedDb)[0];
         if (freshResponse.Operation == SproutOperation.Error || freshResponse.Data is null)
             return;
 
@@ -892,7 +934,7 @@
         var escapedValue = EscapeQueryValue(_editValue);
         var query = $"upsert {_subscribedTable} {{_id: {_editingRowId.Value}, {_editingColumn}: {escapedValue}}}";
 
-        var response = Engine.Execute(query, selectedDatabase);
+        var response = Engine.Execute(query, selectedDatabase)[0];
         if (response.Operation == SproutOperation.Error)
         {
             _editError = response.Errors?.FirstOrDefault()?.Message ?? "Unknown error";
@@ -903,7 +945,7 @@
 
         // Refresh data
         var collapsed = CollapseQuery(QueryText);
-        var freshResponse = Engine.Execute(collapsed, selectedDatabase);
+        var freshResponse = Engine.Execute(collapsed, selectedDatabase)[0];
         if (freshResponse.Data is not null)
         {
             Tab.DisplayData = freshResponse.Data;
@@ -966,13 +1008,13 @@
         var tables = new List<string>();
         var columns = new Dictionary<string, List<string>>();
 
-        var describeDb = Engine.Execute("describe", dbName);
+        var describeDb = Engine.Execute("describe", dbName)[0];
         if (describeDb.Schema?.Tables is { } tableList)
         {
             tables.AddRange(tableList);
             foreach (var table in tableList)
             {
-                var describeTable = Engine.Execute($"describe {table}", dbName);
+                var describeTable = Engine.Execute($"describe {table}", dbName)[0];
                 if (describeTable.Schema?.Columns is { } cols)
                 {
                     var colNames = cols.Select(c => c.Name).ToList();
@@ -1345,7 +1387,7 @@
             return [];
 
         var tableName = tokens[1];
-        var describeResponse = Engine.Execute($"describe {tableName}", selectedDatabase);
+        var describeResponse = Engine.Execute($"describe {tableName}", selectedDatabase)[0];
         if (describeResponse.Schema?.Columns is not { } cols)
             return [];
 
@@ -1545,7 +1587,7 @@
         var table = _subscribedTable;
 
         var query = $"upsert {table} {{_id: {rowId}, {colName}: '{base64}'}}";
-        var response = Engine.Execute(query, selectedDatabase);
+        var response = Engine.Execute(query, selectedDatabase)[0];
         if (response.Operation == SproutOperation.Error)
         {
             _editError = response.Errors?.FirstOrDefault()?.Message ?? "Unknown error";
@@ -1556,7 +1598,7 @@
 
         // Refresh data
         var collapsed = CollapseQuery(QueryText);
-        var freshResponse = Engine.Execute(collapsed, selectedDatabase);
+        var freshResponse = Engine.Execute(collapsed, selectedDatabase)[0];
         if (freshResponse.Data is not null)
         {
             Tab.DisplayData = freshResponse.Data;

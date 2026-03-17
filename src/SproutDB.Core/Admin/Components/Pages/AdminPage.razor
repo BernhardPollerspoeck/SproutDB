@@ -151,7 +151,7 @@
     private List<string> GetTablesForDb(string dbName)
     {
         if (string.IsNullOrEmpty(dbName)) return new List<string>();
-        var resp = Engine.Execute("describe", dbName);
+        var resp = Engine.Execute("describe", dbName)[0];
         if (resp.Schema?.Tables is not { } tables) return new List<string>();
         return tables.Where(t => !t.StartsWith("_")).OrderBy(t => t).ToList();
     }
@@ -339,9 +339,9 @@
 
     private void RefreshPermissions()
     {
-        _apiKeys = Engine.Execute("get _api_keys", "_system").Data;
-        _apiPermissions = Engine.Execute("get _api_permissions", "_system").Data;
-        _apiRestrictions = Engine.Execute("get _api_restrictions", "_system").Data;
+        _apiKeys = Engine.Execute("get _api_keys", "_system")[0].Data;
+        _apiPermissions = Engine.Execute("get _api_permissions", "_system")[0].Data;
+        _apiRestrictions = Engine.Execute("get _api_restrictions", "_system")[0].Data;
     }
 
     private RenderFragment RenderPermissions() => __builder =>
@@ -514,7 +514,7 @@
     private void DoCreateKey()
     {
         ClearStatus();
-        var response = Engine.Execute("create apikey '" + _newKeyName.Replace("'", "") + "'", "_system");
+        var response = Engine.Execute("create apikey '" + _newKeyName.Replace("'", "") + "'", "_system")[0];
         if (response.Operation == SproutOperation.Error)
             SetStatus(response.Errors?.Count > 0 ? response.Errors[0].Message : "failed", true);
         else
@@ -529,7 +529,7 @@
     private void DoGrant(string keyName)
     {
         ClearStatus();
-        var response = Engine.Execute("grant " + _grantRole + " on " + _grantDb + " to '" + keyName + "'", "_system");
+        var response = Engine.Execute("grant " + _grantRole + " on " + _grantDb + " to '" + keyName + "'", "_system")[0];
         if (response.Operation == SproutOperation.Error)
             SetStatus(response.Errors?.Count > 0 ? response.Errors[0].Message : "failed", true);
         else
@@ -543,7 +543,7 @@
     private void DoRevoke(string keyName, string database)
     {
         ClearStatus();
-        var response = Engine.Execute("revoke " + database + " from '" + keyName + "'", "_system");
+        var response = Engine.Execute("revoke " + database + " from '" + keyName + "'", "_system")[0];
         if (response.Operation == SproutOperation.Error)
             SetStatus(response.Errors?.Count > 0 ? response.Errors[0].Message : "failed", true);
         else
@@ -556,7 +556,7 @@
     private void DoRestrict(string keyName)
     {
         ClearStatus();
-        var response = Engine.Execute("restrict " + _restrictTable + " to " + _restrictRole + " for '" + keyName + "' on " + _restrictDb, "_system");
+        var response = Engine.Execute("restrict " + _restrictTable + " to " + _restrictRole + " for '" + keyName + "' on " + _restrictDb, "_system")[0];
         if (response.Operation == SproutOperation.Error)
             SetStatus(response.Errors?.Count > 0 ? response.Errors[0].Message : "failed", true);
         else
@@ -572,7 +572,7 @@
     private void DoUnrestrict(string keyName, string database, string table)
     {
         ClearStatus();
-        var response = Engine.Execute("unrestrict " + table + " for '" + keyName + "' on " + database, "_system");
+        var response = Engine.Execute("unrestrict " + table + " for '" + keyName + "' on " + database, "_system")[0];
         if (response.Operation == SproutOperation.Error)
             SetStatus(response.Errors?.Count > 0 ? response.Errors[0].Message : "failed", true);
         else
@@ -585,7 +585,7 @@
     private void DoPurgeKey(string keyName)
     {
         ClearStatus();
-        var response = Engine.Execute("purge apikey '" + keyName + "'", "_system");
+        var response = Engine.Execute("purge apikey '" + keyName + "'", "_system")[0];
         if (response.Operation == SproutOperation.Error)
             SetStatus(response.Errors?.Count > 0 ? response.Errors[0].Message : "failed", true);
         else
@@ -627,7 +627,7 @@
         if (_purgeConfirm != _purgeDb || string.IsNullOrEmpty(_purgeDb)) return;
         ClearStatus();
 
-        var response = Engine.Execute("purge database", _purgeDb);
+        var response = Engine.Execute("purge database", _purgeDb)[0];
         if (response.Operation == SproutOperation.Error)
         {
             SetStatus(response.Errors?.Count > 0 ? response.Errors[0].Message : "purge failed", true);
@@ -838,7 +838,7 @@
 
     private void RunInsertBench(string db, string table, int ops)
     {
-        var descResp = Engine.Execute($"describe {table}", db);
+        var descResp = Engine.Execute($"describe {table}", db)[0];
         var columns = descResp.Schema?.Columns;
 
         var sw = System.Diagnostics.Stopwatch.StartNew();

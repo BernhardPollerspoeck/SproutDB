@@ -7,6 +7,12 @@ internal sealed class ParseResult
     public string? AnnotatedQuery { get; }
     public bool Success => Query is not null;
 
+    /// <summary>
+    /// The original text segment for this query (set by ParseMulti for multi-query inputs).
+    /// Null when parsed via single Parse().
+    /// </summary>
+    public string? OriginalText { get; set; }
+
     private ParseResult(IQuery query)
     {
         Query = query;

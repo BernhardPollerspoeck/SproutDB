@@ -9,8 +9,8 @@ public class ExplicitIdTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", "testdb");
-        _engine.Execute("create table users (name string 100, age ubyte)", "testdb");
+        _engine.ExecuteOne("create database", "testdb");
+        _engine.ExecuteOne("create table users (name string 100, age ubyte)", "testdb");
     }
 
     public void Dispose()
@@ -25,11 +25,11 @@ public class ExplicitIdTests : IDisposable
     [Fact]
     public void Upsert_ExplicitId_ExistingRow_Updates()
     {
-        var insert = _engine.Execute("upsert users {name: 'Alice', age: 25}", "testdb");
+        var insert = _engine.ExecuteOne("upsert users {name: 'Alice', age: 25}", "testdb");
         var id = insert.Data?[0]["_id"];
         Assert.NotNull(id);
 
-        var update = _engine.Execute($"upsert users {{_id: {id}, name: 'Alice Updated', age: 30}}", "testdb");
+        var update = _engine.ExecuteOne($"upsert users {{_id: {id}, name: 'Alice Updated', age: 30}}", "testdb");
         Assert.Equal(SproutOperation.Upsert, update.Operation);
         Assert.Equal(1, update.Affected);
         Assert.Equal("Alice Updated", update.Data?[0]["name"]?.ToString());
@@ -40,7 +40,7 @@ public class ExplicitIdTests : IDisposable
     [Fact]
     public void Upsert_ExplicitId_NonExistent_ReturnsError()
     {
-        var result = _engine.Execute("upsert users {_id: 999, name: 'Ghost'}", "testdb");
+        var result = _engine.ExecuteOne("upsert users {_id: 999, name: 'Ghost'}", "testdb");
         Assert.Equal(SproutOperation.Error, result.Operation);
         Assert.NotNull(result.Errors);
         Assert.Single(result.Errors);
@@ -51,7 +51,7 @@ public class ExplicitIdTests : IDisposable
     [Fact]
     public void Upsert_ExplicitId_LargeNonExistent_ReturnsError()
     {
-        var result = _engine.Execute("upsert users {_id: 999999, name: 'BigId'}", "testdb");
+        var result = _engine.ExecuteOne("upsert users {_id: 999999, name: 'BigId'}", "testdb");
         Assert.Equal(SproutOperation.Error, result.Operation);
         Assert.Equal("ID_NOT_FOUND", result.Errors?[0].Code);
     }
@@ -61,7 +61,7 @@ public class ExplicitIdTests : IDisposable
     [Fact]
     public void Upsert_WithoutId_CreatesNewRow()
     {
-        var result = _engine.Execute("upsert users {name: 'NewUser', age: 20}", "testdb");
+        var result = _engine.ExecuteOne("upsert users {name: 'NewUser', age: 20}", "testdb");
         Assert.Equal(SproutOperation.Upsert, result.Operation);
         Assert.Equal(1, result.Affected);
         Assert.NotNull(result.Data?[0]["_id"]);
@@ -72,17 +72,17 @@ public class ExplicitIdTests : IDisposable
     [Fact]
     public void Upsert_ExplicitId_NonExistent_DoesNotAffectExistingRows()
     {
-        var insert = _engine.Execute("upsert users {name: 'Original', age: 10}", "testdb");
+        var insert = _engine.ExecuteOne("upsert users {name: 'Original', age: 10}", "testdb");
         var id = insert.Data?[0]["_id"];
         Assert.NotNull(id);
 
         // Try to update a non-existent id — should fail
-        var result = _engine.Execute("upsert users {_id: 888, name: 'Ghost'}", "testdb");
+        var result = _engine.ExecuteOne("upsert users {_id: 888, name: 'Ghost'}", "testdb");
         Assert.Equal(SproutOperation.Error, result.Operation);
         Assert.Equal("ID_NOT_FOUND", result.Errors?[0].Code);
 
         // Verify original row is untouched
-        var check = _engine.Execute($"get users where _id = {id}", "testdb");
+        var check = _engine.ExecuteOne($"get users where _id = {id}", "testdb");
         Assert.Equal("Original", check.Data?[0]["name"]?.ToString());
     }
 
@@ -91,13 +91,13 @@ public class ExplicitIdTests : IDisposable
     [Fact]
     public void Upsert_ExplicitId_DeletedRow_ReturnsError()
     {
-        var insert = _engine.Execute("upsert users {name: 'ToDelete', age: 1}", "testdb");
+        var insert = _engine.ExecuteOne("upsert users {name: 'ToDelete', age: 1}", "testdb");
         var id = insert.Data?[0]["_id"];
         Assert.NotNull(id);
 
-        _engine.Execute($"delete users where _id = {id}", "testdb");
+        _engine.ExecuteOne($"delete users where _id = {id}", "testdb");
 
-        var result = _engine.Execute($"upsert users {{_id: {id}, name: 'Revive'}}", "testdb");
+        var result = _engine.ExecuteOne($"upsert users {{_id: {id}, name: 'Revive'}}", "testdb");
         Assert.Equal(SproutOperation.Error, result.Operation);
         Assert.Equal("ID_NOT_FOUND", result.Errors?[0].Code);
     }

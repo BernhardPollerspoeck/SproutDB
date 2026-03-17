@@ -10,32 +10,32 @@ public class ComplexQueryTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", Db);
+        _engine.ExecuteOne("create database", Db);
 
         // Mirror the sandbox garden schema
-        _engine.Execute("create table customers (name string 200, email string 320, city string 100, joined_at string 30)", Db);
-        _engine.Execute("create table orders (customer_id string 36, order_date string 30, status string 20, total sint)", Db);
-        _engine.Execute("create table order_items (order_id string 36, plant_id string 36, quantity sint, unit_price sint)", Db);
+        _engine.ExecuteOne("create table customers (name string 200, email string 320, city string 100, joined_at string 30)", Db);
+        _engine.ExecuteOne("create table orders (customer_id string 36, order_date string 30, status string 20, total sint)", Db);
+        _engine.ExecuteOne("create table order_items (order_id string 36, plant_id string 36, quantity sint, unit_price sint)", Db);
 
         // Customers (5) — IDs are 1-5
-        _engine.Execute("upsert customers { name: 'Anna Müller', email: 'anna@test.de', city: 'München', joined_at: '2024-06-15' }", Db);        // id=1
-        _engine.Execute("upsert customers { name: 'Thomas Wagner', email: 'thomas@test.de', city: 'Berlin', joined_at: '2024-07-20' }", Db);     // id=2
-        _engine.Execute("upsert customers { name: 'Sophie Becker', email: 'sophie@test.de', city: 'Hamburg', joined_at: '2024-08-01' }", Db);     // id=3
-        _engine.Execute("upsert customers { name: 'Markus Hoffmann', email: 'markus@test.de', city: 'Berlin', joined_at: '2024-11-10' }", Db);    // id=4
-        _engine.Execute("upsert customers { name: 'Laura Fischer', email: 'laura@test.de', city: 'München', joined_at: '2025-01-05' }", Db);      // id=5
+        _engine.ExecuteOne("upsert customers { name: 'Anna Müller', email: 'anna@test.de', city: 'München', joined_at: '2024-06-15' }", Db);        // id=1
+        _engine.ExecuteOne("upsert customers { name: 'Thomas Wagner', email: 'thomas@test.de', city: 'Berlin', joined_at: '2024-07-20' }", Db);     // id=2
+        _engine.ExecuteOne("upsert customers { name: 'Sophie Becker', email: 'sophie@test.de', city: 'Hamburg', joined_at: '2024-08-01' }", Db);     // id=3
+        _engine.ExecuteOne("upsert customers { name: 'Markus Hoffmann', email: 'markus@test.de', city: 'Berlin', joined_at: '2024-11-10' }", Db);    // id=4
+        _engine.ExecuteOne("upsert customers { name: 'Laura Fischer', email: 'laura@test.de', city: 'München', joined_at: '2025-01-05' }", Db);      // id=5
 
         // Orders (5) — IDs are 1-5
-        _engine.Execute("upsert orders { customer_id: '1', order_date: '2024-12-01', status: 'delivered', total: 80 }", Db);    // id=1 Anna, delivered, >50 ✓
-        _engine.Execute("upsert orders { customer_id: '1', order_date: '2025-01-15', status: 'pending', total: 30 }", Db);      // id=2 Anna, pending ✗
-        _engine.Execute("upsert orders { customer_id: '2', order_date: '2024-11-20', status: 'delivered', total: 120 }", Db);   // id=3 Thomas, delivered, >50 ✓
-        _engine.Execute("upsert orders { customer_id: '2', order_date: '2024-12-10', status: 'delivered', total: 40 }", Db);    // id=4 Thomas, delivered, ≤50 ✗
-        _engine.Execute("upsert orders { customer_id: '4', order_date: '2025-02-01', status: 'delivered', total: 60 }", Db);    // id=5 Markus, delivered, >50 ✓
+        _engine.ExecuteOne("upsert orders { customer_id: '1', order_date: '2024-12-01', status: 'delivered', total: 80 }", Db);    // id=1 Anna, delivered, >50 ✓
+        _engine.ExecuteOne("upsert orders { customer_id: '1', order_date: '2025-01-15', status: 'pending', total: 30 }", Db);      // id=2 Anna, pending ✗
+        _engine.ExecuteOne("upsert orders { customer_id: '2', order_date: '2024-11-20', status: 'delivered', total: 120 }", Db);   // id=3 Thomas, delivered, >50 ✓
+        _engine.ExecuteOne("upsert orders { customer_id: '2', order_date: '2024-12-10', status: 'delivered', total: 40 }", Db);    // id=4 Thomas, delivered, ≤50 ✗
+        _engine.ExecuteOne("upsert orders { customer_id: '4', order_date: '2025-02-01', status: 'delivered', total: 60 }", Db);    // id=5 Markus, delivered, >50 ✓
 
         // Order items — IDs are 1-3
-        _engine.Execute("upsert order_items { order_id: '1', plant_id: '1', quantity: 3, unit_price: 10 }", Db);  // id=1 for order 1
-        _engine.Execute("upsert order_items { order_id: '1', plant_id: '2', quantity: 5, unit_price: 10 }", Db);  // id=2 for order 1
-        _engine.Execute("upsert order_items { order_id: '3', plant_id: '1', quantity: 2, unit_price: 20 }", Db);  // id=3 for order 3
-        _engine.Execute("upsert order_items { order_id: '5', plant_id: '3', quantity: 1, unit_price: 15 }", Db);  // id=4 for order 5
+        _engine.ExecuteOne("upsert order_items { order_id: '1', plant_id: '1', quantity: 3, unit_price: 10 }", Db);  // id=1 for order 1
+        _engine.ExecuteOne("upsert order_items { order_id: '1', plant_id: '2', quantity: 5, unit_price: 10 }", Db);  // id=2 for order 1
+        _engine.ExecuteOne("upsert order_items { order_id: '3', plant_id: '1', quantity: 2, unit_price: 20 }", Db);  // id=3 for order 3
+        _engine.ExecuteOne("upsert order_items { order_id: '5', plant_id: '3', quantity: 1, unit_price: 15 }", Db);  // id=4 for order 5
     }
 
     public void Dispose()
@@ -45,7 +45,7 @@ public class ComplexQueryTests : IDisposable
             Directory.Delete(_tempDir, true);
     }
 
-    private SproutResponse Run(string query) => _engine.Execute(query, Db);
+    private SproutResponse Run(string query) => _engine.ExecuteOne(query, Db);
 
     private void AssertSuccess(SproutResponse result, string context)
     {

@@ -9,8 +9,8 @@ public class AddColumnTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", "testdb");
-        _engine.Execute("create table users (name string 100, age ubyte)", "testdb");
+        _engine.ExecuteOne("create database", "testdb");
+        _engine.ExecuteOne("create table users (name string 100, age ubyte)", "testdb");
     }
 
     public void Dispose()
@@ -25,7 +25,7 @@ public class AddColumnTests : IDisposable
     [Fact]
     public void AddColumn_Success()
     {
-        var r = _engine.Execute("add column users.email string 320", "testdb");
+        var r = _engine.ExecuteOne("add column users.email string 320", "testdb");
 
         Assert.Equal(SproutOperation.AddColumn, r.Operation);
         Assert.NotNull(r.Schema);
@@ -36,7 +36,7 @@ public class AddColumnTests : IDisposable
     [Fact]
     public void AddColumn_ResponseIncludesAllColumns()
     {
-        var r = _engine.Execute("add column users.email string 320", "testdb");
+        var r = _engine.ExecuteOne("add column users.email string 320", "testdb");
 
         var cols = r.Schema!.Columns!;
         Assert.Equal(4, cols.Count); // _id + name + age + email
@@ -50,7 +50,7 @@ public class AddColumnTests : IDisposable
     [Fact]
     public void AddColumn_CreatesColFile()
     {
-        _engine.Execute("add column users.email string 320", "testdb");
+        _engine.ExecuteOne("add column users.email string 320", "testdb");
 
         var colPath = Path.Combine(_tempDir, "testdb", "users", "email.col");
         Assert.True(File.Exists(colPath));
@@ -60,10 +60,10 @@ public class AddColumnTests : IDisposable
     [Fact]
     public void AddColumn_UpdatesSchema()
     {
-        _engine.Execute("add column users.email string 320 strict", "testdb");
+        _engine.ExecuteOne("add column users.email string 320 strict", "testdb");
 
         // Verify the response has the right columns (schema is binary now)
-        var r = _engine.Execute("add column users.email string 320 strict", "testdb"); // idempotent re-read
+        var r = _engine.ExecuteOne("add column users.email string 320 strict", "testdb"); // idempotent re-read
         var cols = r.Schema!.Columns!;
         var email = cols.First(c => c.Name == "email");
         Assert.Equal("string", email.Type);
@@ -78,8 +78,8 @@ public class AddColumnTests : IDisposable
     [Fact]
     public void AddColumn_UpsertCanUseNewColumn()
     {
-        _engine.Execute("add column users.email string 320", "testdb");
-        var r = _engine.Execute("upsert users {name: 'John', email: 'john@test.com'}", "testdb");
+        _engine.ExecuteOne("add column users.email string 320", "testdb");
+        var r = _engine.ExecuteOne("upsert users {name: 'John', email: 'john@test.com'}", "testdb");
 
         Assert.Equal(SproutOperation.Upsert, r.Operation);
         Assert.Equal("john@test.com", r.Data![0]["email"]);
@@ -91,28 +91,28 @@ public class AddColumnTests : IDisposable
     public void AddColumn_WithDefault_BackfillsExistingRows()
     {
         // Insert some rows first
-        _engine.Execute("upsert users {name: 'John', age: 25}", "testdb");
-        _engine.Execute("upsert users {name: 'Jane', age: 30}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'John', age: 25}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Jane', age: 30}", "testdb");
 
         // Add column with default
-        _engine.Execute("add column users.active bool default true", "testdb");
+        _engine.ExecuteOne("add column users.active bool default true", "testdb");
 
         // Update row 1 to read it back — active should be true (backfilled)
-        var r = _engine.Execute("upsert users {_id: 1, name: 'John'}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {_id: 1, name: 'John'}", "testdb");
         Assert.Equal(true, r.Data![0]["active"]);
 
-        var r2 = _engine.Execute("upsert users {_id: 2, name: 'Jane'}", "testdb");
+        var r2 = _engine.ExecuteOne("upsert users {_id: 2, name: 'Jane'}", "testdb");
         Assert.Equal(true, r2.Data![0]["active"]);
     }
 
     [Fact]
     public void AddColumn_NullableNoDefault_ExistingRowsAreNull()
     {
-        _engine.Execute("upsert users {name: 'John'}", "testdb");
-        _engine.Execute("add column users.email string 320", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'John'}", "testdb");
+        _engine.ExecuteOne("add column users.email string 320", "testdb");
 
         // Read back via update
-        var r = _engine.Execute("upsert users {_id: 1, name: 'John'}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {_id: 1, name: 'John'}", "testdb");
         Assert.Null(r.Data![0]["email"]);
     }
 
@@ -121,8 +121,8 @@ public class AddColumnTests : IDisposable
     [Fact]
     public void AddColumn_SameType_SilentOk()
     {
-        _engine.Execute("add column users.email string 320", "testdb");
-        var r = _engine.Execute("add column users.email string 320", "testdb");
+        _engine.ExecuteOne("add column users.email string 320", "testdb");
+        var r = _engine.ExecuteOne("add column users.email string 320", "testdb");
 
         Assert.Equal(SproutOperation.AddColumn, r.Operation);
         Assert.Null(r.Errors);
@@ -134,7 +134,7 @@ public class AddColumnTests : IDisposable
     public void AddColumn_TypeExpansion_UbyteToUshort()
     {
         // age is ubyte
-        var r = _engine.Execute("add column users.age ushort", "testdb");
+        var r = _engine.ExecuteOne("add column users.age ushort", "testdb");
 
         Assert.Equal(SproutOperation.AddColumn, r.Operation);
         Assert.Null(r.Errors);
@@ -147,8 +147,8 @@ public class AddColumnTests : IDisposable
     [Fact]
     public void AddColumn_TypeExpansion_FloatToDouble()
     {
-        _engine.Execute("create table metrics (value float)", "testdb");
-        var r = _engine.Execute("add column metrics.value double", "testdb");
+        _engine.ExecuteOne("create table metrics (value float)", "testdb");
+        var r = _engine.ExecuteOne("add column metrics.value double", "testdb");
 
         Assert.Equal(SproutOperation.AddColumn, r.Operation);
         var col = r.Schema!.Columns!.First(c => c.Name == "value");
@@ -161,8 +161,8 @@ public class AddColumnTests : IDisposable
     public void AddColumn_TypeNarrowing_Error()
     {
         // age is ubyte, try to narrow to... wait, let's widen first then narrow
-        _engine.Execute("add column users.age ushort", "testdb"); // expand to ushort
-        var r = _engine.Execute("add column users.age ubyte", "testdb"); // try to narrow back
+        _engine.ExecuteOne("add column users.age ushort", "testdb"); // expand to ushort
+        var r = _engine.ExecuteOne("add column users.age ubyte", "testdb"); // try to narrow back
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("TYPE_NARROWING", r.Errors![0].Code);
@@ -172,7 +172,7 @@ public class AddColumnTests : IDisposable
     public void AddColumn_IncompatibleType_Error()
     {
         // age is ubyte, try bool
-        var r = _engine.Execute("add column users.age bool", "testdb");
+        var r = _engine.ExecuteOne("add column users.age bool", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("TYPE_NARROWING", r.Errors![0].Code);
@@ -183,8 +183,8 @@ public class AddColumnTests : IDisposable
     [Fact]
     public void AddColumn_StrictViolation_Error()
     {
-        _engine.Execute("create table t (score ubyte strict)", "testdb");
-        var r = _engine.Execute("add column t.score ushort", "testdb");
+        _engine.ExecuteOne("create table t (score ubyte strict)", "testdb");
+        var r = _engine.ExecuteOne("add column t.score ushort", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("STRICT_VIOLATION", r.Errors![0].Code);
@@ -196,7 +196,7 @@ public class AddColumnTests : IDisposable
     [Fact]
     public void AddColumn_UnknownTable_Error()
     {
-        var r = _engine.Execute("add column missing.col string", "testdb");
+        var r = _engine.ExecuteOne("add column missing.col string", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_TABLE", r.Errors![0].Code);
@@ -205,7 +205,7 @@ public class AddColumnTests : IDisposable
     [Fact]
     public void AddColumn_UnknownDatabase_Error()
     {
-        var r = _engine.Execute("add column users.col string", "nope");
+        var r = _engine.ExecuteOne("add column users.col string", "nope");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_DATABASE", r.Errors![0].Code);

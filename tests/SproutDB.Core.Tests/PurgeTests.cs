@@ -9,8 +9,8 @@ public class PurgeTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", "testdb");
-        _engine.Execute("create table users (name string 100, age ubyte)", "testdb");
+        _engine.ExecuteOne("create database", "testdb");
+        _engine.ExecuteOne("create table users (name string 100, age ubyte)", "testdb");
     }
 
     public void Dispose()
@@ -25,7 +25,7 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeColumn_Success()
     {
-        var r = _engine.Execute("purge column users.age", "testdb");
+        var r = _engine.ExecuteOne("purge column users.age", "testdb");
 
         Assert.Equal(SproutOperation.PurgeColumn, r.Operation);
         Assert.NotNull(r.Schema);
@@ -36,7 +36,7 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeColumn_ResponseShowsRemainingColumns()
     {
-        var r = _engine.Execute("purge column users.age", "testdb");
+        var r = _engine.ExecuteOne("purge column users.age", "testdb");
 
         var cols = r.Schema!.Columns!;
         Assert.Equal(2, cols.Count); // _id + name (age removed)
@@ -47,7 +47,7 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeColumn_DeletesColFile()
     {
-        _engine.Execute("purge column users.age", "testdb");
+        _engine.ExecuteOne("purge column users.age", "testdb");
 
         var colPath = Path.Combine(_tempDir, "testdb", "users", "age.col");
         Assert.False(File.Exists(colPath));
@@ -56,8 +56,8 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeColumn_Idempotent()
     {
-        _engine.Execute("purge column users.age", "testdb");
-        var r = _engine.Execute("purge column users.age", "testdb");
+        _engine.ExecuteOne("purge column users.age", "testdb");
+        var r = _engine.ExecuteOne("purge column users.age", "testdb");
 
         Assert.Equal(SproutOperation.PurgeColumn, r.Operation);
         Assert.Null(r.Errors);
@@ -66,7 +66,7 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeColumn_UnknownTable_Error()
     {
-        var r = _engine.Execute("purge column missing.col", "testdb");
+        var r = _engine.ExecuteOne("purge column missing.col", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_TABLE", r.Errors![0].Code);
@@ -75,7 +75,7 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeColumn_UnknownDatabase_Error()
     {
-        var r = _engine.Execute("purge column users.age", "nope");
+        var r = _engine.ExecuteOne("purge column users.age", "nope");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_DATABASE", r.Errors![0].Code);
@@ -85,10 +85,10 @@ public class PurgeTests : IDisposable
     public void PurgeColumn_DataStillAccessibleAfterPurge()
     {
         // Insert a row, purge a column, then get — remaining data should work
-        _engine.Execute("upsert users {name: 'John', age: 25}", "testdb");
-        _engine.Execute("purge column users.age", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'John', age: 25}", "testdb");
+        _engine.ExecuteOne("purge column users.age", "testdb");
 
-        var r = _engine.Execute("get users", "testdb");
+        var r = _engine.ExecuteOne("get users", "testdb");
 
         Assert.Equal(SproutOperation.Get, r.Operation);
         Assert.Single(r.Data!);
@@ -101,7 +101,7 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeTable_Success()
     {
-        var r = _engine.Execute("purge table users", "testdb");
+        var r = _engine.ExecuteOne("purge table users", "testdb");
 
         Assert.Equal(SproutOperation.PurgeTable, r.Operation);
         Assert.NotNull(r.Schema);
@@ -112,7 +112,7 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeTable_DeletesDirectory()
     {
-        _engine.Execute("purge table users", "testdb");
+        _engine.ExecuteOne("purge table users", "testdb");
 
         var tablePath = Path.Combine(_tempDir, "testdb", "users");
         Assert.False(Directory.Exists(tablePath));
@@ -121,8 +121,8 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeTable_Idempotent()
     {
-        _engine.Execute("purge table users", "testdb");
-        var r = _engine.Execute("purge table users", "testdb");
+        _engine.ExecuteOne("purge table users", "testdb");
+        var r = _engine.ExecuteOne("purge table users", "testdb");
 
         Assert.Equal(SproutOperation.PurgeTable, r.Operation);
         Assert.Null(r.Errors);
@@ -131,8 +131,8 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeTable_CanRecreateAfterPurge()
     {
-        _engine.Execute("purge table users", "testdb");
-        var r = _engine.Execute("create table users (email string 320)", "testdb");
+        _engine.ExecuteOne("purge table users", "testdb");
+        var r = _engine.ExecuteOne("create table users (email string 320)", "testdb");
 
         Assert.Equal(SproutOperation.CreateTable, r.Operation);
         Assert.Null(r.Errors);
@@ -143,7 +143,7 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeDatabase_Success()
     {
-        var r = _engine.Execute("purge database", "testdb");
+        var r = _engine.ExecuteOne("purge database", "testdb");
 
         Assert.Equal(SproutOperation.PurgeDatabase, r.Operation);
         Assert.NotNull(r.Schema);
@@ -154,7 +154,7 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeDatabase_DeletesDirectory()
     {
-        _engine.Execute("purge database", "testdb");
+        _engine.ExecuteOne("purge database", "testdb");
 
         var dbPath = Path.Combine(_tempDir, "testdb");
         Assert.False(Directory.Exists(dbPath));
@@ -163,8 +163,8 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeDatabase_Idempotent()
     {
-        _engine.Execute("purge database", "testdb");
-        var r = _engine.Execute("purge database", "testdb");
+        _engine.ExecuteOne("purge database", "testdb");
+        var r = _engine.ExecuteOne("purge database", "testdb");
 
         Assert.Equal(SproutOperation.PurgeDatabase, r.Operation);
         Assert.Null(r.Errors);
@@ -173,8 +173,8 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeDatabase_CanRecreateAfterPurge()
     {
-        _engine.Execute("purge database", "testdb");
-        var r = _engine.Execute("create database", "testdb");
+        _engine.ExecuteOne("purge database", "testdb");
+        var r = _engine.ExecuteOne("create database", "testdb");
 
         Assert.Equal(SproutOperation.CreateDatabase, r.Operation);
         Assert.Null(r.Errors);
@@ -183,11 +183,11 @@ public class PurgeTests : IDisposable
     [Fact]
     public void PurgeDatabase_WithMultipleTables()
     {
-        _engine.Execute("create table orders (total uint)", "testdb");
-        _engine.Execute("upsert users {name: 'John'}", "testdb");
-        _engine.Execute("upsert orders {total: 100}", "testdb");
+        _engine.ExecuteOne("create table orders (total uint)", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'John'}", "testdb");
+        _engine.ExecuteOne("upsert orders {total: 100}", "testdb");
 
-        var r = _engine.Execute("purge database", "testdb");
+        var r = _engine.ExecuteOne("purge database", "testdb");
 
         Assert.Equal(SproutOperation.PurgeDatabase, r.Operation);
         Assert.Null(r.Errors);

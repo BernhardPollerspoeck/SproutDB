@@ -135,6 +135,7 @@ internal static class Tokenizer
                 '=' => TokenType.Equals,
                 '>' => TokenType.GreaterThan,
                 '<' => TokenType.LessThan,
+                ';' => TokenType.Semicolon,
                 _ => TokenType.Eof, // sentinel for unknown
             };
 

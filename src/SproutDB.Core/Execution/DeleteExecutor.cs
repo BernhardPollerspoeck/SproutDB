@@ -5,7 +5,7 @@ namespace SproutDB.Core.Execution;
 
 internal static class DeleteExecutor
 {
-    public static SproutResponse Execute(string query, TableHandle table, DeleteQuery q)
+    public static SproutResponse Execute(string query, TableHandle table, DeleteQuery q, Storage.TransactionJournal? journal = null)
     {
         // Validate where tree
         var whereErrors = WhereEngine.ValidateWhereNode(table, q.Where);
@@ -39,7 +39,7 @@ internal static class DeleteExecutor
                         if (val is not null)
                         {
                             var encoded = colHandle.EncodeValueToBytes(val.ToString() ?? "");
-                            table.GetBTree(col.Name).Remove(encoded, place);
+                            table.GetBTree(col.Name).Remove(encoded, place, journal);
                         }
                     }
                 }
@@ -56,14 +56,14 @@ internal static class DeleteExecutor
             }
 
             // Free slot (marks as deleted, decrements count)
-            table.Index.FreeSlot(place);
+            table.Index.FreeSlot(place, journal);
 
             // Clear TTL entry
             table.Ttl?.Clear(place);
 
             // Write null flag for each column
             foreach (var col in table.Schema.Columns)
-                table.GetColumn(col.Name).WriteNull(place);
+                table.GetColumn(col.Name).WriteNull(place, journal);
         }
 
         return new SproutResponse { Operation = SproutOperation.Delete, Affected = toDelete.Count };

@@ -43,7 +43,7 @@ public sealed class CreateTableBuilder
     public SproutResponse Execute()
     {
         var query = BuildQuery();
-        var result = _db.Query(query);
+        var result = _db.Query(query)[0];
 
         if (result.Errors is not null && result.Errors.Count > 0)
             throw new SproutQueryException(result.Errors[0].Message);

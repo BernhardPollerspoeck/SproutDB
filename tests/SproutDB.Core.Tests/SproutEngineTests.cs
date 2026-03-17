@@ -23,7 +23,7 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateDatabase_Success()
     {
-        var response = _engine.Execute("create database", "shop");
+        var response = _engine.ExecuteOne("create database", "shop");
 
         Assert.Equal(SproutOperation.CreateDatabase, response.Operation);
         Assert.NotNull(response.Schema);
@@ -35,7 +35,7 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateDatabase_CreatesDirectory()
     {
-        _engine.Execute("create database", "shop");
+        _engine.ExecuteOne("create database", "shop");
 
         Assert.True(Directory.Exists(Path.Combine(_tempDir, "shop")));
     }
@@ -43,7 +43,7 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateDatabase_WritesMetaBin()
     {
-        _engine.Execute("create database", "shop");
+        _engine.ExecuteOne("create database", "shop");
 
         var metaPath = Path.Combine(_tempDir, "shop", "_meta.bin");
         Assert.True(File.Exists(metaPath));
@@ -58,7 +58,7 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateDatabase_NameIsLowercased()
     {
-        _engine.Execute("create database", "MyShop");
+        _engine.ExecuteOne("create database", "MyShop");
 
         var dbPath = Path.Combine(_tempDir, "myshop");
         Assert.True(Directory.Exists(dbPath));
@@ -70,7 +70,7 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateDatabase_ResponseSchemaHasLowercaseName()
     {
-        var response = _engine.Execute("create database", "MyShop");
+        var response = _engine.ExecuteOne("create database", "MyShop");
 
         Assert.Equal("myshop", response.Schema!.Database);
     }
@@ -78,8 +78,8 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateDatabase_AlreadyExists_Error()
     {
-        _engine.Execute("create database", "shop");
-        var response = _engine.Execute("create database", "shop");
+        _engine.ExecuteOne("create database", "shop");
+        var response = _engine.ExecuteOne("create database", "shop");
 
         Assert.Equal(SproutOperation.Error, response.Operation);
         Assert.NotNull(response.Errors);
@@ -91,8 +91,8 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateDatabase_AlreadyExists_AnnotatedQuery()
     {
-        _engine.Execute("create database", "shop");
-        var response = _engine.Execute("create database", "shop");
+        _engine.ExecuteOne("create database", "shop");
+        var response = _engine.ExecuteOne("create database", "shop");
 
         Assert.NotNull(response.AnnotatedQuery);
         Assert.Contains("##", response.AnnotatedQuery);
@@ -109,7 +109,7 @@ public class SproutEngineTests : IDisposable
     [InlineData("my_shop")]
     public void ValidName_Accepted(string name)
     {
-        var response = _engine.Execute("create database", name);
+        var response = _engine.ExecuteOne("create database", name);
         Assert.Equal(SproutOperation.CreateDatabase, response.Operation);
     }
 
@@ -121,7 +121,7 @@ public class SproutEngineTests : IDisposable
     [InlineData("123")]
     public void InvalidName_Error(string name)
     {
-        var response = _engine.Execute("create database", name);
+        var response = _engine.ExecuteOne("create database", name);
 
         Assert.Equal(SproutOperation.Error, response.Operation);
         Assert.Equal("SYNTAX_ERROR", response.Errors![0].Code);
@@ -133,8 +133,8 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateTable_Success()
     {
-        _engine.Execute("create database", "shop");
-        var response = _engine.Execute("create table users (name string, age ubyte)", "shop");
+        _engine.ExecuteOne("create database", "shop");
+        var response = _engine.ExecuteOne("create table users (name string, age ubyte)", "shop");
 
         Assert.Equal(SproutOperation.CreateTable, response.Operation);
         Assert.NotNull(response.Schema);
@@ -145,8 +145,8 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateTable_CreatesDirectory()
     {
-        _engine.Execute("create database", "shop");
-        _engine.Execute("create table users (name string)", "shop");
+        _engine.ExecuteOne("create database", "shop");
+        _engine.ExecuteOne("create table users (name string)", "shop");
 
         Assert.True(Directory.Exists(Path.Combine(_tempDir, "shop", "users")));
     }
@@ -154,8 +154,8 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateTable_WritesSchemaBin()
     {
-        _engine.Execute("create database", "shop");
-        _engine.Execute("create table users (name string 100, age ubyte strict, active bool default true)", "shop");
+        _engine.ExecuteOne("create database", "shop");
+        _engine.ExecuteOne("create table users (name string 100, age ubyte strict, active bool default true)", "shop");
 
         var schemaPath = Path.Combine(_tempDir, "shop", "users", "_schema.bin");
         Assert.True(File.Exists(schemaPath));
@@ -174,8 +174,8 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateTable_CreatesIndexFile()
     {
-        _engine.Execute("create database", "shop");
-        _engine.Execute("create table users (name string)", "shop");
+        _engine.ExecuteOne("create database", "shop");
+        _engine.ExecuteOne("create table users (name string)", "shop");
 
         var indexPath = Path.Combine(_tempDir, "shop", "users", "_index");
         Assert.True(File.Exists(indexPath));
@@ -187,8 +187,8 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateTable_CreatesColumnFiles()
     {
-        _engine.Execute("create database", "shop");
-        _engine.Execute("create table users (name string 100, age ubyte)", "shop");
+        _engine.ExecuteOne("create database", "shop");
+        _engine.ExecuteOne("create table users (name string 100, age ubyte)", "shop");
 
         var tablePath = Path.Combine(_tempDir, "shop", "users");
 
@@ -204,8 +204,8 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateTable_EmptyTable_NoColumnFiles()
     {
-        _engine.Execute("create database", "shop");
-        _engine.Execute("create table users", "shop");
+        _engine.ExecuteOne("create database", "shop");
+        _engine.ExecuteOne("create table users", "shop");
 
         var tablePath = Path.Combine(_tempDir, "shop", "users");
         Assert.True(Directory.Exists(tablePath));
@@ -219,8 +219,8 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateTable_ResponseIncludesIdColumn()
     {
-        _engine.Execute("create database", "shop");
-        var response = _engine.Execute("create table users (name string)", "shop");
+        _engine.ExecuteOne("create database", "shop");
+        var response = _engine.ExecuteOne("create table users (name string)", "shop");
 
         var columns = response.Schema!.Columns!;
         Assert.Equal(2, columns.Count); // _id + name
@@ -238,8 +238,8 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateTable_ResponseStringSizeIncluded()
     {
-        _engine.Execute("create database", "shop");
-        var response = _engine.Execute("create table users (name string 500, age ubyte)", "shop");
+        _engine.ExecuteOne("create database", "shop");
+        var response = _engine.ExecuteOne("create table users (name string 500, age ubyte)", "shop");
 
         var columns = response.Schema!.Columns!;
         Assert.Equal(500, columns[1].Size); // name string has size
@@ -249,9 +249,9 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateTable_AlreadyExists_Error()
     {
-        _engine.Execute("create database", "shop");
-        _engine.Execute("create table users (name string)", "shop");
-        var response = _engine.Execute("create table users (name string)", "shop");
+        _engine.ExecuteOne("create database", "shop");
+        _engine.ExecuteOne("create table users (name string)", "shop");
+        var response = _engine.ExecuteOne("create table users (name string)", "shop");
 
         Assert.Equal(SproutOperation.Error, response.Operation);
         Assert.Equal("TABLE_EXISTS", response.Errors![0].Code);
@@ -261,7 +261,7 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateTable_DatabaseNotFound_Error()
     {
-        var response = _engine.Execute("create table users (name string)", "missing");
+        var response = _engine.ExecuteOne("create table users (name string)", "missing");
 
         Assert.Equal(SproutOperation.Error, response.Operation);
         Assert.Equal("UNKNOWN_DATABASE", response.Errors![0].Code);
@@ -271,8 +271,8 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void CreateTable_NameIsLowercased()
     {
-        _engine.Execute("create database", "shop");
-        var response = _engine.Execute("create table Users (Name STRING)", "shop");
+        _engine.ExecuteOne("create database", "shop");
+        var response = _engine.ExecuteOne("create table Users (Name STRING)", "shop");
 
         Assert.Equal("users", response.Schema!.Table);
     }
@@ -282,7 +282,7 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void ParseError_Propagated()
     {
-        var response = _engine.Execute("creat database", "shop");
+        var response = _engine.ExecuteOne("creat database", "shop");
 
         Assert.Equal(SproutOperation.Error, response.Operation);
         Assert.NotNull(response.Errors);
@@ -295,7 +295,7 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void EndToEnd_CreateDatabase_CaseInsensitive()
     {
-        var response = _engine.Execute("CREATE DATABASE", "Shop");
+        var response = _engine.ExecuteOne("CREATE DATABASE", "Shop");
 
         Assert.Equal(SproutOperation.CreateDatabase, response.Operation);
         Assert.Equal("shop", response.Schema!.Database);
@@ -305,7 +305,7 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void EndToEnd_CreateDatabase_WithComment()
     {
-        var response = _engine.Execute("create database ## new db", "shop");
+        var response = _engine.ExecuteOne("create database ## new db", "shop");
 
         Assert.Equal(SproutOperation.CreateDatabase, response.Operation);
     }
@@ -313,8 +313,8 @@ public class SproutEngineTests : IDisposable
     [Fact]
     public void EndToEnd_MultipleDatabases()
     {
-        var r1 = _engine.Execute("create database", "shop");
-        var r2 = _engine.Execute("create database", "analytics");
+        var r1 = _engine.ExecuteOne("create database", "shop");
+        var r2 = _engine.ExecuteOne("create database", "analytics");
 
         Assert.Equal(SproutOperation.CreateDatabase, r1.Operation);
         Assert.Equal(SproutOperation.CreateDatabase, r2.Operation);

@@ -47,18 +47,18 @@ public class GetBenchmarks
     [Benchmark(Description = "Get: all columns")]
     public SproutResponse GetAll()
     {
-        return _engine.Execute("get users", "bench");
+        return _engine.Execute("get users", "bench")[0];
     }
 
     [Benchmark(Description = "Get: select 2 columns")]
     public SproutResponse GetSelect2()
     {
-        return _engine.Execute("get users select name, score", "bench");
+        return _engine.Execute("get users select name, score", "bench")[0];
     }
 
     [Benchmark(Description = "Get: select id only")]
     public SproutResponse GetSelectId()
     {
-        return _engine.Execute("get users select id", "bench");
+        return _engine.Execute("get users select id", "bench")[0];
     }
 }

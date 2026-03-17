@@ -26,16 +26,16 @@ public class WalTests : IDisposable
         // First engine: create db + table, insert data
         using (var engine = new SproutEngine(dataDir))
         {
-            engine.Execute("create database", "testdb");
-            engine.Execute("create table users (name string 100, age ubyte)", "testdb");
-            engine.Execute("upsert users {name: 'Alice', age: 28}", "testdb");
-            engine.Execute("upsert users {name: 'Bob', age: 35}", "testdb");
+            engine.ExecuteOne("create database", "testdb");
+            engine.ExecuteOne("create table users (name string 100, age ubyte)", "testdb");
+            engine.ExecuteOne("upsert users {name: 'Alice', age: 28}", "testdb");
+            engine.ExecuteOne("upsert users {name: 'Bob', age: 35}", "testdb");
         }
 
         // Second engine: WAL replays, data should be there
         using (var engine = new SproutEngine(dataDir))
         {
-            var r = engine.Execute("get users", "testdb");
+            var r = engine.ExecuteOne("get users", "testdb");
 
             Assert.Equal(SproutOperation.Get, r.Operation);
             Assert.Equal(2, r.Data?.Count);
@@ -51,15 +51,15 @@ public class WalTests : IDisposable
 
         using (var engine = new SproutEngine(dataDir))
         {
-            engine.Execute("create database", "testdb");
-            engine.Execute("create table users (name string 100)", "testdb");
-            engine.Execute("upsert users {name: 'Alice'}", "testdb"); // id=1
-            engine.Execute("upsert users {name: 'Bob'}", "testdb");   // id=2
+            engine.ExecuteOne("create database", "testdb");
+            engine.ExecuteOne("create table users (name string 100)", "testdb");
+            engine.ExecuteOne("upsert users {name: 'Alice'}", "testdb"); // id=1
+            engine.ExecuteOne("upsert users {name: 'Bob'}", "testdb");   // id=2
         }
 
         using (var engine = new SproutEngine(dataDir))
         {
-            var r = engine.Execute("get users select _id, name", "testdb");
+            var r = engine.ExecuteOne("get users select _id, name", "testdb");
 
             Assert.Equal((ulong)1, r.Data?[0]["_id"]);
             Assert.Equal((ulong)2, r.Data?[1]["_id"]);
@@ -73,15 +73,15 @@ public class WalTests : IDisposable
 
         using (var engine = new SproutEngine(dataDir))
         {
-            engine.Execute("create database", "testdb");
-            engine.Execute("create table users (name string 100)", "testdb");
-            engine.Execute("upsert users {name: 'Alice'}", "testdb"); // id=1
+            engine.ExecuteOne("create database", "testdb");
+            engine.ExecuteOne("create table users (name string 100)", "testdb");
+            engine.ExecuteOne("upsert users {name: 'Alice'}", "testdb"); // id=1
         }
 
         using (var engine = new SproutEngine(dataDir))
         {
             // After replay, next insert should get id=2
-            var r = engine.Execute("upsert users {name: 'Bob'}", "testdb");
+            var r = engine.ExecuteOne("upsert users {name: 'Bob'}", "testdb");
             Assert.Equal((ulong)2, r.Data?[0]["_id"]);
         }
     }
@@ -93,15 +93,15 @@ public class WalTests : IDisposable
 
         using (var engine = new SproutEngine(dataDir))
         {
-            engine.Execute("create database", "testdb");
-            engine.Execute("create table users (name string 100, score sint)", "testdb");
-            engine.Execute("upsert users {name: 'Alice', score: 100}", "testdb");
-            engine.Execute("upsert users {_id: 1, score: 200}", "testdb"); // update
+            engine.ExecuteOne("create database", "testdb");
+            engine.ExecuteOne("create table users (name string 100, score sint)", "testdb");
+            engine.ExecuteOne("upsert users {name: 'Alice', score: 100}", "testdb");
+            engine.ExecuteOne("upsert users {_id: 1, score: 200}", "testdb"); // update
         }
 
         using (var engine = new SproutEngine(dataDir))
         {
-            var r = engine.Execute("get users select name, score", "testdb");
+            var r = engine.ExecuteOne("get users select name, score", "testdb");
 
             Assert.Single(r.Data ?? []);
             Assert.Equal("Alice", r.Data?[0]["name"]);
@@ -116,16 +116,16 @@ public class WalTests : IDisposable
 
         using (var engine = new SproutEngine(dataDir))
         {
-            engine.Execute("create database", "testdb");
-            engine.Execute("create table users (name string 100)", "testdb");
-            engine.Execute("upsert users {name: 'Alice'}", "testdb");
-            engine.Execute("add column users.score sint", "testdb");
-            engine.Execute("upsert users {_id: 1, score: 42}", "testdb");
+            engine.ExecuteOne("create database", "testdb");
+            engine.ExecuteOne("create table users (name string 100)", "testdb");
+            engine.ExecuteOne("upsert users {name: 'Alice'}", "testdb");
+            engine.ExecuteOne("add column users.score sint", "testdb");
+            engine.ExecuteOne("upsert users {_id: 1, score: 42}", "testdb");
         }
 
         using (var engine = new SproutEngine(dataDir))
         {
-            var r = engine.Execute("get users select name, score", "testdb");
+            var r = engine.ExecuteOne("get users select name, score", "testdb");
 
             Assert.Equal("Alice", r.Data?[0]["name"]);
             Assert.Equal(42, r.Data?[0]["score"]);
@@ -139,14 +139,14 @@ public class WalTests : IDisposable
 
         using (var engine = new SproutEngine(dataDir))
         {
-            engine.Execute("create database", "testdb");
-            engine.Execute("create table users (name string 100)", "testdb");
+            engine.ExecuteOne("create database", "testdb");
+            engine.ExecuteOne("create table users (name string 100)", "testdb");
         }
 
         // Replay should not crash even though table already exists on disk
         using (var engine = new SproutEngine(dataDir))
         {
-            var r = engine.Execute("get users", "testdb");
+            var r = engine.ExecuteOne("get users", "testdb");
             Assert.Equal(SproutOperation.Get, r.Operation);
         }
     }
@@ -158,16 +158,16 @@ public class WalTests : IDisposable
 
         using (var engine = new SproutEngine(dataDir))
         {
-            engine.Execute("create database", "testdb");
-            engine.Execute("create table users (name string 100)", "testdb");
-            engine.Execute("upsert users {name: 'Alice'}", "testdb");
+            engine.ExecuteOne("create database", "testdb");
+            engine.ExecuteOne("create table users (name string 100)", "testdb");
+            engine.ExecuteOne("upsert users {name: 'Alice'}", "testdb");
         }
 
         // After replay + truncation, WAL file should be empty
         using (var engine = new SproutEngine(dataDir))
         {
             // Trigger replay by accessing the database
-            engine.Execute("get users", "testdb");
+            engine.ExecuteOne("get users", "testdb");
         }
 
         // Check WAL file is empty
@@ -183,20 +183,20 @@ public class WalTests : IDisposable
 
         using (var engine = new SproutEngine(dataDir))
         {
-            engine.Execute("create database", "testdb");
-            engine.Execute("create table users (name string 100)", "testdb");
+            engine.ExecuteOne("create database", "testdb");
+            engine.ExecuteOne("create table users (name string 100)", "testdb");
         }
 
         // First restart: replays and truncates
         using (var engine = new SproutEngine(dataDir))
         {
-            engine.Execute("get users", "testdb");
+            engine.ExecuteOne("get users", "testdb");
         }
 
         // Second restart: WAL is empty, should work fine
         using (var engine = new SproutEngine(dataDir))
         {
-            var r = engine.Execute("get users", "testdb");
+            var r = engine.ExecuteOne("get users", "testdb");
             Assert.Equal(SproutOperation.Get, r.Operation);
             Assert.Empty(r.Data ?? []);
         }
@@ -209,14 +209,14 @@ public class WalTests : IDisposable
 
         using (var engine = new SproutEngine(dataDir))
         {
-            engine.Execute("create database", "testdb");
-            engine.Execute("create table users (name string 100, age ubyte)", "testdb");
-            engine.Execute("upsert users {name: 'Alice'}", "testdb"); // age=null
+            engine.ExecuteOne("create database", "testdb");
+            engine.ExecuteOne("create table users (name string 100, age ubyte)", "testdb");
+            engine.ExecuteOne("upsert users {name: 'Alice'}", "testdb"); // age=null
         }
 
         using (var engine = new SproutEngine(dataDir))
         {
-            var r = engine.Execute("get users select name, age", "testdb");
+            var r = engine.ExecuteOne("get users select name, age", "testdb");
 
             Assert.Equal("Alice", r.Data?[0]["name"]);
             Assert.Null(r.Data?[0]["age"]);
@@ -230,14 +230,14 @@ public class WalTests : IDisposable
 
         using (var engine = new SproutEngine(dataDir))
         {
-            engine.Execute("create database", "testdb");
-            engine.Execute("create table users (name string 100, active bool default true)", "testdb");
-            engine.Execute("upsert users {name: 'Alice'}", "testdb"); // active=true (default)
+            engine.ExecuteOne("create database", "testdb");
+            engine.ExecuteOne("create table users (name string 100, active bool default true)", "testdb");
+            engine.ExecuteOne("upsert users {name: 'Alice'}", "testdb"); // active=true (default)
         }
 
         using (var engine = new SproutEngine(dataDir))
         {
-            var r = engine.Execute("get users select name, active", "testdb");
+            var r = engine.ExecuteOne("get users select name, active", "testdb");
 
             Assert.Equal("Alice", r.Data?[0]["name"]);
             Assert.Equal(true, r.Data?[0]["active"]);
@@ -251,17 +251,17 @@ public class WalTests : IDisposable
 
         using (var engine = new SproutEngine(dataDir))
         {
-            engine.Execute("create database", "testdb");
-            engine.Execute("create table users (name string 100)", "testdb");
-            engine.Execute("create table orders (total sint)", "testdb");
-            engine.Execute("upsert users {name: 'Alice'}", "testdb");
-            engine.Execute("upsert orders {total: 500}", "testdb");
+            engine.ExecuteOne("create database", "testdb");
+            engine.ExecuteOne("create table users (name string 100)", "testdb");
+            engine.ExecuteOne("create table orders (total sint)", "testdb");
+            engine.ExecuteOne("upsert users {name: 'Alice'}", "testdb");
+            engine.ExecuteOne("upsert orders {total: 500}", "testdb");
         }
 
         using (var engine = new SproutEngine(dataDir))
         {
-            var users = engine.Execute("get users", "testdb");
-            var orders = engine.Execute("get orders", "testdb");
+            var users = engine.ExecuteOne("get users", "testdb");
+            var orders = engine.ExecuteOne("get orders", "testdb");
 
             Assert.Equal("Alice", users.Data?[0]["name"]);
             Assert.Equal(500, orders.Data?[0]["total"]);
@@ -276,15 +276,15 @@ public class WalTests : IDisposable
         ulong insertedId;
         using (var engine = new SproutEngine(dataDir))
         {
-            engine.Execute("create database", "testdb");
-            engine.Execute("create table users (name string 100)", "testdb");
-            var r = engine.Execute("upsert users {name: 'Alice'}", "testdb");
+            engine.ExecuteOne("create database", "testdb");
+            engine.ExecuteOne("create table users (name string 100)", "testdb");
+            var r = engine.ExecuteOne("upsert users {name: 'Alice'}", "testdb");
             insertedId = (ulong)(r.Data?[0]["_id"] ?? 0UL);
         }
 
         using (var engine = new SproutEngine(dataDir))
         {
-            var r = engine.Execute("get users select _id, name", "testdb");
+            var r = engine.ExecuteOne("get users select _id, name", "testdb");
 
             Assert.Single(r.Data ?? []);
             Assert.Equal(insertedId, r.Data?[0]["_id"]);

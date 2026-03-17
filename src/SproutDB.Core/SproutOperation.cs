@@ -32,4 +32,5 @@ public enum SproutOperation : byte
     PurgeTtl = 24,
     ShrinkTable = 25,
     ShrinkDatabase = 26,
+    Transaction = 27,
 }

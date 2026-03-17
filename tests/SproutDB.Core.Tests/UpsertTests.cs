@@ -9,8 +9,8 @@ public class UpsertTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", "testdb");
-        _engine.Execute(
+        _engine.ExecuteOne("create database", "testdb");
+        _engine.ExecuteOne(
             "create table users (name string 100, email string 320 strict, age ubyte, active bool default true, score sint)",
             "testdb");
     }
@@ -27,7 +27,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Insert_ReturnsId1()
     {
-        var r = _engine.Execute("upsert users {name: 'John'}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {name: 'John'}", "testdb");
 
         Assert.Equal(SproutOperation.Upsert, r.Operation);
         Assert.Equal(1, r.Affected);
@@ -39,8 +39,8 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Insert_AutoIncrementsId()
     {
-        _engine.Execute("upsert users {name: 'John'}", "testdb");
-        var r2 = _engine.Execute("upsert users {name: 'Jane'}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'John'}", "testdb");
+        var r2 = _engine.ExecuteOne("upsert users {name: 'Jane'}", "testdb");
 
         Assert.Equal((ulong)2, r2.Data![0]["_id"]);
     }
@@ -48,7 +48,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Insert_ReturnsFullRecord()
     {
-        var r = _engine.Execute("upsert users {name: 'John', email: 'john@test.com', age: 25}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {name: 'John', email: 'john@test.com', age: 25}", "testdb");
 
         var row = r.Data![0];
         Assert.Equal((ulong)1, row["_id"]);
@@ -62,7 +62,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Insert_EmptyObject_OnlyDefaults()
     {
-        var r = _engine.Execute("upsert users {}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {}", "testdb");
 
         var row = r.Data![0];
         Assert.Equal((ulong)1, row["_id"]);
@@ -76,7 +76,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Insert_NullOnNullableColumn()
     {
-        var r = _engine.Execute("upsert users {name: null}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {name: null}", "testdb");
 
         Assert.Equal(SproutOperation.Upsert, r.Operation);
         Assert.Null(r.Data![0]["name"]);
@@ -87,8 +87,8 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Update_WithExplicitId()
     {
-        _engine.Execute("upsert users {name: 'John', age: 25}", "testdb");
-        var r = _engine.Execute("upsert users {_id: 1, name: 'John Doe'}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'John', age: 25}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {_id: 1, name: 'John Doe'}", "testdb");
 
         Assert.Equal(SproutOperation.Upsert, r.Operation);
         Assert.Equal(1, r.Affected);
@@ -102,8 +102,8 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Update_SetToNull()
     {
-        _engine.Execute("upsert users {name: 'John', age: 25}", "testdb");
-        var r = _engine.Execute("upsert users {_id: 1, age: null}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'John', age: 25}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {_id: 1, age: null}", "testdb");
 
         Assert.Null(r.Data![0]["age"]);
         Assert.Equal("John", r.Data[0]["name"]); // unchanged
@@ -112,8 +112,8 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Update_PreservesUnchangedFields()
     {
-        _engine.Execute("upsert users {name: 'John', email: 'john@test.com', age: 25, score: -100}", "testdb");
-        var r = _engine.Execute("upsert users {_id: 1, email: 'new@test.com'}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'John', email: 'john@test.com', age: 25, score: -100}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {_id: 1, email: 'new@test.com'}", "testdb");
 
         var row = r.Data![0];
         Assert.Equal("John", row["name"]);
@@ -126,7 +126,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Upsert_NewId_NonExistent_ReturnsError()
     {
-        var r = _engine.Execute("upsert users {_id: 42, name: 'John'}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {_id: 42, name: 'John'}", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("ID_NOT_FOUND", r.Errors?[0].Code);
@@ -135,11 +135,11 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Upsert_ExplicitId_UpdatesExistingRow()
     {
-        var insert = _engine.Execute("upsert users {name: 'John'}", "testdb");
+        var insert = _engine.ExecuteOne("upsert users {name: 'John'}", "testdb");
         var id = insert.Data?[0]["_id"];
         Assert.NotNull(id);
 
-        var r = _engine.Execute($"upsert users {{_id: {id}, name: 'Jane'}}", "testdb");
+        var r = _engine.ExecuteOne($"upsert users {{_id: {id}, name: 'Jane'}}", "testdb");
 
         Assert.Equal(SproutOperation.Upsert, r.Operation);
         Assert.Equal("Jane", r.Data?[0]["name"]);
@@ -150,11 +150,11 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Insert_AllNumericTypes()
     {
-        _engine.Execute(
+        _engine.ExecuteOne(
             "create table nums (a sbyte, b ubyte, c sshort, d ushort, e sint, f uint, g slong, h ulong, i float, j double)",
             "testdb");
 
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "upsert nums {a: -1, b: 255, c: -1000, d: 60000, e: -100000, f: 100000, g: -999999999, h: 999999999, i: 3.14, j: 2.71828}",
             "testdb");
 
@@ -174,15 +174,15 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Insert_BoolColumn()
     {
-        var r = _engine.Execute("upsert users {active: false}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {active: false}", "testdb");
         Assert.Equal(false, r.Data![0]["active"]);
     }
 
     [Fact]
     public void Insert_FloatAcceptsInteger()
     {
-        _engine.Execute("create table t (val double)", "testdb");
-        var r = _engine.Execute("upsert t {val: 42}", "testdb");
+        _engine.ExecuteOne("create table t (val double)", "testdb");
+        var r = _engine.ExecuteOne("upsert t {val: 42}", "testdb");
 
         Assert.Equal(42.0, r.Data![0]["val"]);
     }
@@ -192,7 +192,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void UnknownTable_Error()
     {
-        var r = _engine.Execute("upsert missing {name: 'x'}", "testdb");
+        var r = _engine.ExecuteOne("upsert missing {name: 'x'}", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_TABLE", r.Errors![0].Code);
@@ -201,7 +201,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void UnknownColumn_Error()
     {
-        var r = _engine.Execute("upsert users {nonexistent: 'x'}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {nonexistent: 'x'}", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_COLUMN", r.Errors![0].Code);
@@ -211,7 +211,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void TypeMismatch_StringToInt_Error()
     {
-        var r = _engine.Execute("upsert users {age: 'twenty'}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {age: 'twenty'}", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("TYPE_MISMATCH", r.Errors![0].Code);
@@ -220,7 +220,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void TypeMismatch_IntToBool_Error()
     {
-        var r = _engine.Execute("upsert users {active: 1}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {active: 1}", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("TYPE_MISMATCH", r.Errors![0].Code);
@@ -229,7 +229,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void NotNullable_Error()
     {
-        var r = _engine.Execute("upsert users {active: null}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {active: null}", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("NOT_NULLABLE", r.Errors![0].Code);
@@ -240,7 +240,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void UnknownDatabase_Error()
     {
-        var r = _engine.Execute("upsert users {name: 'x'}", "missing");
+        var r = _engine.ExecuteOne("upsert users {name: 'x'}", "missing");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_DATABASE", r.Errors![0].Code);
@@ -251,7 +251,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void UpsertOn_NoMatch_Inserts()
     {
-        var r = _engine.Execute("upsert users {email: 'john@test.com', name: 'John'} on email", "testdb");
+        var r = _engine.ExecuteOne("upsert users {email: 'john@test.com', name: 'John'} on email", "testdb");
 
         Assert.Equal(SproutOperation.Upsert, r.Operation);
         Assert.Equal(1, r.Affected);
@@ -263,8 +263,8 @@ public class UpsertTests : IDisposable
     [Fact]
     public void UpsertOn_Match_Updates()
     {
-        _engine.Execute("upsert users {email: 'john@test.com', name: 'John', age: 25}", "testdb");
-        var r = _engine.Execute("upsert users {email: 'john@test.com', name: 'John Doe'} on email", "testdb");
+        _engine.ExecuteOne("upsert users {email: 'john@test.com', name: 'John', age: 25}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {email: 'john@test.com', name: 'John Doe'} on email", "testdb");
 
         Assert.Equal(SproutOperation.Upsert, r.Operation);
         Assert.Equal(1, r.Affected);
@@ -277,8 +277,8 @@ public class UpsertTests : IDisposable
     [Fact]
     public void UpsertOn_Match_PreservesUnchangedFields()
     {
-        _engine.Execute("upsert users {email: 'john@test.com', name: 'John', age: 25, score: -50}", "testdb");
-        var r = _engine.Execute("upsert users {email: 'john@test.com', age: 30} on email", "testdb");
+        _engine.ExecuteOne("upsert users {email: 'john@test.com', name: 'John', age: 25, score: -50}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {email: 'john@test.com', age: 30} on email", "testdb");
 
         var row = r.Data![0];
         Assert.Equal((ulong)1, row["_id"]);
@@ -290,8 +290,8 @@ public class UpsertTests : IDisposable
     [Fact]
     public void UpsertOn_SecondInsert_GetsNewId()
     {
-        _engine.Execute("upsert users {email: 'john@test.com', name: 'John'} on email", "testdb");
-        var r = _engine.Execute("upsert users {email: 'jane@test.com', name: 'Jane'} on email", "testdb");
+        _engine.ExecuteOne("upsert users {email: 'john@test.com', name: 'John'} on email", "testdb");
+        var r = _engine.ExecuteOne("upsert users {email: 'jane@test.com', name: 'Jane'} on email", "testdb");
 
         Assert.Equal((ulong)2, r.Data![0]["_id"]); // new record
         Assert.Equal("jane@test.com", r.Data[0]["email"]);
@@ -300,8 +300,8 @@ public class UpsertTests : IDisposable
     [Fact]
     public void UpsertOn_NumericMatch()
     {
-        _engine.Execute("upsert users {age: 25, name: 'John'}", "testdb");
-        var r = _engine.Execute("upsert users {age: 25, name: 'John Updated'} on age", "testdb");
+        _engine.ExecuteOne("upsert users {age: 25, name: 'John'}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {age: 25, name: 'John Updated'} on age", "testdb");
 
         Assert.Equal((ulong)1, r.Data![0]["_id"]); // same record
         Assert.Equal("John Updated", r.Data[0]["name"]);
@@ -310,7 +310,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void UpsertOn_UnknownColumn_Error()
     {
-        var r = _engine.Execute("upsert users {name: 'John'} on nonexistent", "testdb");
+        var r = _engine.ExecuteOne("upsert users {name: 'John'} on nonexistent", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_COLUMN", r.Errors![0].Code);
@@ -319,7 +319,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void UpsertOn_ColumnNotInFields_Error()
     {
-        var r = _engine.Execute("upsert users {name: 'John'} on email", "testdb");
+        var r = _engine.ExecuteOne("upsert users {name: 'John'} on email", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("SYNTAX_ERROR", r.Errors![0].Code);
@@ -329,7 +329,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void UpsertOn_WithExplicitId_Error()
     {
-        var r = _engine.Execute("upsert users {_id: 1, email: 'john@test.com'} on email", "testdb");
+        var r = _engine.ExecuteOne("upsert users {_id: 1, email: 'john@test.com'} on email", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         // Explicit _id check runs first — ID 1 doesn't exist
@@ -341,7 +341,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Bulk_InsertsMultipleRecords()
     {
-        var r = _engine.Execute("upsert users [{name: 'John', age: 25}, {name: 'Jane', age: 30}]", "testdb");
+        var r = _engine.ExecuteOne("upsert users [{name: 'John', age: 25}, {name: 'Jane', age: 30}]", "testdb");
 
         Assert.Equal(SproutOperation.Upsert, r.Operation);
         Assert.Equal(2, r.Affected);
@@ -355,9 +355,9 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Bulk_WithOn_UpdatesAndInserts()
     {
-        _engine.Execute("upsert users {email: 'john@test.com', name: 'John', age: 25}", "testdb");
+        _engine.ExecuteOne("upsert users {email: 'john@test.com', name: 'John', age: 25}", "testdb");
 
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "upsert users [{email: 'john@test.com', name: 'John Updated'}, {email: 'jane@test.com', name: 'Jane'}] on email",
             "testdb");
 
@@ -372,10 +372,10 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Bulk_WithOn_SinglePassMatchesAll()
     {
-        _engine.Execute("upsert users {email: 'a@test.com', name: 'A'}", "testdb");
-        _engine.Execute("upsert users {email: 'b@test.com', name: 'B'}", "testdb");
+        _engine.ExecuteOne("upsert users {email: 'a@test.com', name: 'A'}", "testdb");
+        _engine.ExecuteOne("upsert users {email: 'b@test.com', name: 'B'}", "testdb");
 
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "upsert users [{email: 'b@test.com', name: 'B Updated'}, {email: 'a@test.com', name: 'A Updated'}] on email",
             "testdb");
 
@@ -389,7 +389,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void Bulk_ReturnsAllRecordsWithAllFields()
     {
-        var r = _engine.Execute("upsert users [{name: 'John'}, {name: 'Jane'}]", "testdb");
+        var r = _engine.ExecuteOne("upsert users [{name: 'John'}, {name: 'Jane'}]", "testdb");
 
         foreach (var row in r.Data!)
         {
@@ -412,10 +412,10 @@ public class UpsertTests : IDisposable
             DataDirectory = tempDir.Path,
             BulkLimit = 2,
         });
-        engine.Execute("create database", "testdb");
-        engine.Execute("create table users (name string 100)", "testdb");
+        engine.ExecuteOne("create database", "testdb");
+        engine.ExecuteOne("create table users (name string 100)", "testdb");
 
-        var r = engine.Execute("upsert users [{name: 'A'}, {name: 'B'}, {name: 'C'}]", "testdb");
+        var r = engine.ExecuteOne("upsert users [{name: 'A'}, {name: 'B'}, {name: 'C'}]", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("BULK_LIMIT", r.Errors![0].Code);
@@ -431,10 +431,10 @@ public class UpsertTests : IDisposable
             DataDirectory = tempDir.Path,
             BulkLimit = 2,
         });
-        engine.Execute("create database", "testdb");
-        engine.Execute("create table users (name string 100)", "testdb");
+        engine.ExecuteOne("create database", "testdb");
+        engine.ExecuteOne("create table users (name string 100)", "testdb");
 
-        var r = engine.Execute("upsert users [{name: 'A'}, {name: 'B'}]", "testdb");
+        var r = engine.ExecuteOne("upsert users [{name: 'A'}, {name: 'B'}]", "testdb");
 
         Assert.Equal(SproutOperation.Upsert, r.Operation);
         Assert.Equal(2, r.Affected);
@@ -448,7 +448,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void MultipleUnknownColumns_AllReported()
     {
-        var r = _engine.Execute("upsert users {foo: 'x', bar: 42}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {foo: 'x', bar: 42}", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal(2, r.Errors!.Count);
@@ -465,7 +465,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void UnknownColumn_And_TypeMismatch_BothReported()
     {
-        var r = _engine.Execute("upsert users {foo: 'x', age: 'twenty'}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {foo: 'x', age: 'twenty'}", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal(2, r.Errors!.Count);
@@ -481,7 +481,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void MultipleTypeMismatches_AllReported()
     {
-        var r = _engine.Execute("upsert users {age: 'twenty', active: 1}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {age: 'twenty', active: 1}", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal(2, r.Errors!.Count);
@@ -494,7 +494,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void InvalidId_And_UnknownColumn_BothReported()
     {
-        var r = _engine.Execute("upsert users {_id: -5, foo: 'x'}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {_id: -5, foo: 'x'}", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal(2, r.Errors!.Count);
@@ -510,7 +510,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void MultipleErrors_AnnotatedQueryInline()
     {
-        var r = _engine.Execute("upsert users {foo: 'x', bar: 42}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {foo: 'x', bar: 42}", "testdb");
 
         Assert.NotNull(r.AnnotatedQuery);
         // Errors are annotated inline after the field name
@@ -525,7 +525,7 @@ public class UpsertTests : IDisposable
     [Fact]
     public void SingleError_InlineAnnotation()
     {
-        var r = _engine.Execute("upsert users {nonexistent: 'x'}", "testdb");
+        var r = _engine.ExecuteOne("upsert users {nonexistent: 'x'}", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Single(r.Errors!);
@@ -542,12 +542,12 @@ public class UpsertTests : IDisposable
     {
         using var tempDir = new TempDir();
         using var engine = new SproutEngine(tempDir.Path);
-        engine.Execute("create database", "testdb");
-        engine.Execute("create table products (color string 7)", "testdb");
+        engine.ExecuteOne("create database", "testdb");
+        engine.ExecuteOne("create table products (color string 7)", "testdb");
 
-        engine.Execute("upsert products {color: '#818cf4'}", "testdb");
+        engine.ExecuteOne("upsert products {color: '#818cf4'}", "testdb");
 
-        var r = engine.Execute("get products", "testdb");
+        var r = engine.ExecuteOne("get products", "testdb");
         Assert.Equal("#818cf4", r.Data![0]["color"]); // all 7 chars preserved
     }
 
@@ -556,12 +556,12 @@ public class UpsertTests : IDisposable
     {
         using var tempDir = new TempDir();
         using var engine = new SproutEngine(tempDir.Path);
-        engine.Execute("create database", "testdb");
-        engine.Execute("create table products (color string 7)", "testdb");
+        engine.ExecuteOne("create database", "testdb");
+        engine.ExecuteOne("create table products (color string 7)", "testdb");
 
-        engine.Execute("upsert products {color: '#818cf4X'}", "testdb"); // 8 chars
+        engine.ExecuteOne("upsert products {color: '#818cf4X'}", "testdb"); // 8 chars
 
-        var r = engine.Execute("get products", "testdb");
+        var r = engine.ExecuteOne("get products", "testdb");
         Assert.Equal("#818cf4", r.Data![0]["color"]); // truncated to 7
     }
 

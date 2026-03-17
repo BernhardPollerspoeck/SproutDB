@@ -80,7 +80,8 @@ public sealed class HttpEndpointTests : IAsyncLifetime
         request.Headers.Add("X-SproutDB-Database", database);
 
         var response = await Client.SendAsync(request);
-        var body = await response.Content.ReadFromJsonAsync<SproutResponse>(JsonOptions);
+        var list = await response.Content.ReadFromJsonAsync<List<SproutResponse>>(JsonOptions);
+        var body = list is { Count: > 0 } ? list[0] : null;
         return (response, body);
     }
 
@@ -127,49 +128,50 @@ public sealed class HttpEndpointTests : IAsyncLifetime
         await PostQuery("create database", "conflictdb");
         var (response, body) = await PostQuery("create database", "conflictdb");
 
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        // Multi-query: always 200, errors in individual responses
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(body?.Errors);
         Assert.Contains(body.Errors, e => e.Code == "DATABASE_EXISTS");
     }
 
     [Fact]
-    public async Task UnknownDatabase_Returns404()
+    public async Task UnknownDatabase_ReturnsError()
     {
         var (response, body) = await PostQuery("get users", "nonexistent");
 
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(body?.Errors);
         Assert.Contains(body.Errors, e => e.Code == "UNKNOWN_DATABASE");
     }
 
     [Fact]
-    public async Task UnknownTable_Returns404()
+    public async Task UnknownTable_ReturnsError()
     {
         await PostQuery("create database", "tabletest");
         var (response, body) = await PostQuery("get nonexistent", "tabletest");
 
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(body?.Errors);
         Assert.Contains(body.Errors, e => e.Code == "UNKNOWN_TABLE");
     }
 
     [Fact]
-    public async Task SyntaxError_Returns400()
+    public async Task SyntaxError_ReturnsError()
     {
         await PostQuery("create database", "syntaxdb");
         var (response, body) = await PostQuery("this is not valid", "syntaxdb");
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(body?.Errors);
         Assert.Contains(body.Errors, e => e.Code == "SYNTAX_ERROR");
     }
 
     [Fact]
-    public async Task ProtectedName_Returns403()
+    public async Task ProtectedName_ReturnsError()
     {
         var (response, body) = await PostQuery("create database", "_protected");
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(body?.Errors);
         Assert.Contains(body.Errors, e => e.Code == "PROTECTED_NAME");
     }
@@ -214,7 +216,7 @@ public sealed class HttpEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task IndexExists_Returns409()
+    public async Task IndexExists_ReturnsError()
     {
         await PostQuery("create database", "idxdb");
         await PostQuery("create table products (name string 100)", "idxdb");
@@ -222,21 +224,38 @@ public sealed class HttpEndpointTests : IAsyncLifetime
 
         var (response, body) = await PostQuery("create index products.name", "idxdb");
 
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(body?.Errors);
         Assert.Contains(body.Errors, e => e.Code == "INDEX_EXISTS");
     }
 
     [Fact]
-    public async Task IndexNotFound_Returns404()
+    public async Task IndexNotFound_ReturnsError()
     {
         await PostQuery("create database", "purgeidxdb");
         await PostQuery("create table items (name string 100)", "purgeidxdb");
 
         var (response, body) = await PostQuery("purge index items.name", "purgeidxdb");
 
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(body?.Errors);
         Assert.Contains(body.Errors, e => e.Code == "INDEX_NOT_FOUND");
+    }
+
+    [Fact]
+    public async Task ResponseIsAlwaysArray()
+    {
+        await PostQuery("create database", "arraydb");
+
+        var request = new HttpRequestMessage(HttpMethod.Post, "/sproutdb/query")
+        {
+            Content = new StringContent("describe", Encoding.UTF8, "text/plain"),
+        };
+        request.Headers.Add("X-SproutDB-Database", "arraydb");
+
+        var response = await Client.SendAsync(request);
+        var rawJson = await response.Content.ReadAsStringAsync();
+
+        Assert.StartsWith("[", rawJson.TrimStart());
     }
 }

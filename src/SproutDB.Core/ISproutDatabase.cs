@@ -11,9 +11,10 @@ public interface ISproutDatabase
     string Name { get; }
 
     /// <summary>
-    /// Executes a query string against this database.
+    /// Executes one or more queries (semicolon-separated) against this database.
+    /// Returns one SproutResponse per query/transaction.
     /// </summary>
-    SproutResponse Query(string query);
+    List<SproutResponse> Query(string query);
 
     /// <summary>
     /// Subscribes to change notifications for the specified table.

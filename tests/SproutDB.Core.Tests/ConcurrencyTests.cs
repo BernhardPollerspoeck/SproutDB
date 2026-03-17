@@ -31,8 +31,8 @@ public class ConcurrencyTests : IDisposable
 
     private static void SetupDbAndTable(SproutEngine engine, string db = "testdb")
     {
-        engine.Execute("create database", db);
-        engine.Execute("create table users (name string 100, score sint)", db);
+        engine.ExecuteOne("create database", db);
+        engine.ExecuteOne("create table users (name string 100, score sint)", db);
     }
 
     // ── 1. Parallel reads see consistent data ────────────────
@@ -44,7 +44,7 @@ public class ConcurrencyTests : IDisposable
         SetupDbAndTable(engine);
 
         for (int i = 1; i <= 50; i++)
-            engine.Execute($"upsert users {{name: 'User{i}', score: {i * 10}}}", "testdb");
+            engine.ExecuteOne($"upsert users {{name: 'User{i}', score: {i * 10}}}", "testdb");
 
         var exceptions = new ConcurrentBag<Exception>();
         var tasks = new Task[10];
@@ -57,7 +57,7 @@ public class ConcurrencyTests : IDisposable
                 {
                     for (int r = 0; r < 20; r++)
                     {
-                        var result = engine.Execute("get users", "testdb");
+                        var result = engine.ExecuteOne("get users", "testdb");
                         Assert.Equal(SproutOperation.Get, result.Operation);
                         Assert.Equal(50, result.Data?.Count);
                     }
@@ -94,7 +94,7 @@ public class ConcurrencyTests : IDisposable
             {
                 for (int w = 0; w < writesPerThread; w++)
                 {
-                    var r = engine.Execute(
+                    var r = engine.ExecuteOne(
                         $"upsert users {{name: 'T{threadId}W{w}', score: {threadId * 100 + w}}}",
                         "testdb");
                     Assert.Null(r.Errors);
@@ -108,7 +108,7 @@ public class ConcurrencyTests : IDisposable
         var totalExpected = writersCount * writesPerThread;
 
         // Use count to verify total (auto-paging would truncate Data)
-        var countResult = engine.Execute("get users count", "testdb");
+        var countResult = engine.ExecuteOne("get users count", "testdb");
         Assert.Equal(totalExpected, countResult.Affected);
 
         // Collect all IDs via paging
@@ -116,7 +116,7 @@ public class ConcurrencyTests : IDisposable
         var page = 1;
         while (true)
         {
-            var result = engine.Execute($"get users select _id page {page} size 100", "testdb");
+            var result = engine.ExecuteOne($"get users select _id page {page} size 100", "testdb");
             if (result.Data is null || result.Data.Count == 0) break;
             allIds.AddRange(result.Data.Select(row => (ulong)row["_id"]!));
             if (result.Paging?.Next is null) break;
@@ -137,7 +137,7 @@ public class ConcurrencyTests : IDisposable
 
         // Seed some initial data
         for (int i = 0; i < 10; i++)
-            engine.Execute($"upsert users {{name: 'Seed{i}', score: {i}}}", "testdb");
+            engine.ExecuteOne($"upsert users {{name: 'Seed{i}', score: {i}}}", "testdb");
 
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
         var exceptions = new ConcurrentBag<Exception>();
@@ -150,7 +150,7 @@ public class ConcurrencyTests : IDisposable
             {
                 try
                 {
-                    engine.Execute($"upsert users {{name: 'W{counter}', score: {counter}}}", "testdb");
+                    engine.ExecuteOne($"upsert users {{name: 'W{counter}', score: {counter}}}", "testdb");
                     counter++;
                 }
                 catch (Exception ex)
@@ -167,7 +167,7 @@ public class ConcurrencyTests : IDisposable
             {
                 try
                 {
-                    var r = engine.Execute("get users", "testdb");
+                    var r = engine.ExecuteOne("get users", "testdb");
                     Assert.Equal(SproutOperation.Get, r.Operation);
                     Assert.NotNull(r.Data);
                     Assert.True(r.Data.Count >= 10);
@@ -202,7 +202,7 @@ public class ConcurrencyTests : IDisposable
         {
             SetupDbAndTable(engine);
             for (int i = 1; i <= 20; i++)
-                engine.Execute($"upsert users {{name: 'User{i}', score: {i}}}", "testdb");
+                engine.ExecuteOne($"upsert users {{name: 'User{i}', score: {i}}}", "testdb");
         }
 
         // Second engine: parallel reads after replay
@@ -215,7 +215,7 @@ public class ConcurrencyTests : IDisposable
         {
             var tasks = Enumerable.Range(0, 6).Select(_ => Task.Run(() =>
             {
-                var r = engine.Execute("get users", "testdb");
+                var r = engine.ExecuteOne("get users", "testdb");
                 Assert.Equal(SproutOperation.Get, r.Operation);
                 Assert.Equal(20, r.Data?.Count);
             })).ToArray();
@@ -245,7 +245,7 @@ public class ConcurrencyTests : IDisposable
         var tasks = Enumerable.Range(0, 4).Select(t => Task.Run(() =>
         {
             for (int w = 0; w < totalWrites / 4; w++)
-                engine.Execute($"upsert users {{name: 'F{t}W{w}', score: {t * 100 + w}}}", "testdb");
+                engine.ExecuteOne($"upsert users {{name: 'F{t}W{w}', score: {t * 100 + w}}}", "testdb");
         })).ToArray();
 
         Task.WaitAll(tasks);
@@ -253,7 +253,7 @@ public class ConcurrencyTests : IDisposable
         // Wait a bit to let flush cycles run
         Thread.Sleep(200);
 
-        var result = engine.Execute("get users select _id, name", "testdb");
+        var result = engine.ExecuteOne("get users select _id, name", "testdb");
         Assert.Equal(totalWrites, result.Data?.Count);
 
         var ids = result.Data?.Select(row => (ulong)row["_id"]!).ToList();
@@ -284,7 +284,7 @@ public class ConcurrencyTests : IDisposable
             {
                 var idx = i;
                 tasks[i] = Task.Run(() =>
-                    engine.Execute($"upsert users {{name: 'D{idx}', score: {idx}}}", "testdb"));
+                    engine.ExecuteOne($"upsert users {{name: 'D{idx}', score: {idx}}}", "testdb"));
             }
 
             Task.WaitAll(tasks);
@@ -300,7 +300,7 @@ public class ConcurrencyTests : IDisposable
             WalSyncInterval = TimeSpan.Zero,
         }))
         {
-            var result = engine.Execute("get users", "testdb");
+            var result = engine.ExecuteOne("get users", "testdb");
             Assert.Equal(totalInserted, result.Data?.Count);
         }
     }
@@ -318,8 +318,8 @@ public class ConcurrencyTests : IDisposable
         // Create databases and tables
         for (int d = 0; d < dbCount; d++)
         {
-            engine.Execute("create database", $"db{d}");
-            engine.Execute($"create table items (label string 100, value sint)", $"db{d}");
+            engine.ExecuteOne("create database", $"db{d}");
+            engine.ExecuteOne($"create table items (label string 100, value sint)", $"db{d}");
         }
 
         // Concurrent writes to different databases
@@ -327,7 +327,7 @@ public class ConcurrencyTests : IDisposable
         {
             for (int r = 0; r < rowsPerDb; r++)
             {
-                var result = engine.Execute(
+                var result = engine.ExecuteOne(
                     $"upsert items {{label: 'DB{d}R{r}', value: {d * 1000 + r}}}",
                     $"db{d}");
                 Assert.Null(result.Errors);
@@ -339,7 +339,7 @@ public class ConcurrencyTests : IDisposable
         // Verify each database has exactly the right count
         for (int d = 0; d < dbCount; d++)
         {
-            var result = engine.Execute("get items", $"db{d}");
+            var result = engine.ExecuteOne("get items", $"db{d}");
             Assert.Equal(rowsPerDb, result.Data?.Count);
         }
     }

@@ -44,13 +44,13 @@ public class UpsertBenchmarks
     [Benchmark(Description = "Insert: 5 fields")]
     public SproutResponse Insert_5Fields()
     {
-        return _engine.Execute("upsert users {name: 'Bench', email: 'bench@test.com', age: 30, active: false, score: 999}", "bench");
+        return _engine.Execute("upsert users {name: 'Bench', email: 'bench@test.com', age: 30, active: false, score: 999}", "bench")[0];
     }
 
     [Benchmark(Description = "Insert: empty record")]
     public SproutResponse Insert_Empty()
     {
-        return _engine.Execute("upsert users {}", "bench");
+        return _engine.Execute("upsert users {}", "bench")[0];
     }
 
     [Benchmark(Description = "Update: 1 field")]
@@ -58,7 +58,7 @@ public class UpsertBenchmarks
     {
         var id = _nextUpdateId++;
         if (_nextUpdateId > 1000) _nextUpdateId = 1;
-        return _engine.Execute($"upsert users {{id: {id}, name: 'Updated'}}", "bench");
+        return _engine.Execute($"upsert users {{id: {id}, name: 'Updated'}}", "bench")[0];
     }
 
     [Benchmark(Description = "Update: 3 fields")]
@@ -66,6 +66,6 @@ public class UpsertBenchmarks
     {
         var id = _nextUpdateId++;
         if (_nextUpdateId > 1000) _nextUpdateId = 1;
-        return _engine.Execute($"upsert users {{id: {id}, name: 'Updated', age: 99, score: -1}}", "bench");
+        return _engine.Execute($"upsert users {{id: {id}, name: 'Updated', age: 99, score: -1}}", "bench")[0];
     }
 }

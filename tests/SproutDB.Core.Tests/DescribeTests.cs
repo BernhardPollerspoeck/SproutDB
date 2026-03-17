@@ -9,8 +9,8 @@ public class DescribeTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", "testdb");
-        _engine.Execute("create table users (name string 100, age ubyte, email string 320)", "testdb");
+        _engine.ExecuteOne("create database", "testdb");
+        _engine.ExecuteOne("create table users (name string 100, age ubyte, email string 320)", "testdb");
     }
 
     public void Dispose()
@@ -25,7 +25,7 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeTable_ReturnsColumns()
     {
-        var r = _engine.Execute("describe users", "testdb");
+        var r = _engine.ExecuteOne("describe users", "testdb");
 
         Assert.Equal(SproutOperation.Describe, r.Operation);
         Assert.Null(r.Errors);
@@ -39,7 +39,7 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeTable_IdColumn()
     {
-        var r = _engine.Execute("describe users", "testdb");
+        var r = _engine.ExecuteOne("describe users", "testdb");
         var id = r.Schema?.Columns?.Find(c => c.Name == "_id");
 
         Assert.NotNull(id);
@@ -52,7 +52,7 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeTable_StringColumn()
     {
-        var r = _engine.Execute("describe users", "testdb");
+        var r = _engine.ExecuteOne("describe users", "testdb");
         var name = r.Schema?.Columns?.Find(c => c.Name == "name");
 
         Assert.NotNull(name);
@@ -64,7 +64,7 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeTable_NullableColumn()
     {
-        var r = _engine.Execute("describe users", "testdb");
+        var r = _engine.ExecuteOne("describe users", "testdb");
         var email = r.Schema?.Columns?.Find(c => c.Name == "email");
 
         Assert.NotNull(email);
@@ -76,7 +76,7 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeTable_NumericColumn()
     {
-        var r = _engine.Execute("describe users", "testdb");
+        var r = _engine.ExecuteOne("describe users", "testdb");
         var age = r.Schema?.Columns?.Find(c => c.Name == "age");
 
         Assert.NotNull(age);
@@ -88,8 +88,8 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeTable_NonNullableColumn()
     {
-        _engine.Execute("create table prefs (theme string 50 default 'dark')", "testdb");
-        var r = _engine.Execute("describe prefs", "testdb");
+        _engine.ExecuteOne("create table prefs (theme string 50 default 'dark')", "testdb");
+        var r = _engine.ExecuteOne("describe prefs", "testdb");
         var theme = r.Schema?.Columns?.Find(c => c.Name == "theme");
 
         Assert.NotNull(theme);
@@ -100,7 +100,7 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeTable_CaseInsensitive()
     {
-        var r = _engine.Execute("DESCRIBE Users", "testdb");
+        var r = _engine.ExecuteOne("DESCRIBE Users", "testdb");
 
         Assert.Equal(SproutOperation.Describe, r.Operation);
         Assert.Equal("users", r.Schema?.Table);
@@ -109,7 +109,7 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeTable_UnknownTable_Error()
     {
-        var r = _engine.Execute("describe missing", "testdb");
+        var r = _engine.ExecuteOne("describe missing", "testdb");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_TABLE", r.Errors?[0].Code);
@@ -118,7 +118,7 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeTable_UnknownDatabase_Error()
     {
-        var r = _engine.Execute("describe users", "nope");
+        var r = _engine.ExecuteOne("describe users", "nope");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_DATABASE", r.Errors?[0].Code);
@@ -129,9 +129,9 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeAll_ReturnsTables()
     {
-        _engine.Execute("create table orders (amount uint)", "testdb");
+        _engine.ExecuteOne("create table orders (amount uint)", "testdb");
 
-        var r = _engine.Execute("describe", "testdb");
+        var r = _engine.ExecuteOne("describe", "testdb");
 
         Assert.Equal(SproutOperation.Describe, r.Operation);
         Assert.Null(r.Errors);
@@ -146,9 +146,9 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeAll_EmptyDatabase()
     {
-        _engine.Execute("create database", "emptydb");
+        _engine.ExecuteOne("create database", "emptydb");
 
-        var r = _engine.Execute("describe", "emptydb");
+        var r = _engine.ExecuteOne("describe", "emptydb");
 
         Assert.Equal(SproutOperation.Describe, r.Operation);
         Assert.NotNull(r.Schema?.Tables);
@@ -158,10 +158,10 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeAll_Sorted()
     {
-        _engine.Execute("create table zebra (x ubyte)", "testdb");
-        _engine.Execute("create table alpha (x ubyte)", "testdb");
+        _engine.ExecuteOne("create table zebra (x ubyte)", "testdb");
+        _engine.ExecuteOne("create table alpha (x ubyte)", "testdb");
 
-        var r = _engine.Execute("describe", "testdb");
+        var r = _engine.ExecuteOne("describe", "testdb");
         var tables = r.Schema?.Tables;
 
         Assert.NotNull(tables);
@@ -174,7 +174,7 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeAll_UnknownDatabase_Error()
     {
-        var r = _engine.Execute("describe", "nope");
+        var r = _engine.ExecuteOne("describe", "nope");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("UNKNOWN_DATABASE", r.Errors?[0].Code);
@@ -185,9 +185,9 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeTable_AfterAddColumn()
     {
-        _engine.Execute("add column users.active bool", "testdb");
+        _engine.ExecuteOne("add column users.active bool", "testdb");
 
-        var r = _engine.Execute("describe users", "testdb");
+        var r = _engine.ExecuteOne("describe users", "testdb");
         var active = r.Schema?.Columns?.Find(c => c.Name == "active");
 
         Assert.NotNull(active);
@@ -197,9 +197,9 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeTable_AfterPurgeColumn()
     {
-        _engine.Execute("purge column users.age", "testdb");
+        _engine.ExecuteOne("purge column users.age", "testdb");
 
-        var r = _engine.Execute("describe users", "testdb");
+        var r = _engine.ExecuteOne("describe users", "testdb");
         Assert.Null(r.Schema?.Columns?.Find(c => c.Name == "age"));
         Assert.Equal(3, r.Schema?.Columns?.Count); // _id + name + email
     }
@@ -207,9 +207,9 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeTable_AfterRenameColumn()
     {
-        _engine.Execute("rename column users.name to username", "testdb");
+        _engine.ExecuteOne("rename column users.name to username", "testdb");
 
-        var r = _engine.Execute("describe users", "testdb");
+        var r = _engine.ExecuteOne("describe users", "testdb");
         Assert.Null(r.Schema?.Columns?.Find(c => c.Name == "name"));
         Assert.NotNull(r.Schema?.Columns?.Find(c => c.Name == "username"));
     }
@@ -217,9 +217,9 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeTable_AfterAlterColumn()
     {
-        _engine.Execute("alter column users.name string 500", "testdb");
+        _engine.ExecuteOne("alter column users.name string 500", "testdb");
 
-        var r = _engine.Execute("describe users", "testdb");
+        var r = _engine.ExecuteOne("describe users", "testdb");
         var name = r.Schema?.Columns?.Find(c => c.Name == "name");
 
         Assert.NotNull(name);
@@ -229,9 +229,9 @@ public class DescribeTests : IDisposable
     [Fact]
     public void DescribeAll_AfterPurgeTable()
     {
-        _engine.Execute("purge table users", "testdb");
+        _engine.ExecuteOne("purge table users", "testdb");
 
-        var r = _engine.Execute("describe", "testdb");
+        var r = _engine.ExecuteOne("describe", "testdb");
         Assert.NotNull(r.Schema?.Tables);
         Assert.Empty(r.Schema.Tables);
     }

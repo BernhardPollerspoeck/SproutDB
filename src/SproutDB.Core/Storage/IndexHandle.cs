@@ -53,8 +53,9 @@ internal sealed class IndexHandle : IDisposable
 
     public ulong ReadNextId() => (ulong)_nextId;
 
-    public void WriteNextId(ulong nextId)
+    public void WriteNextId(ulong nextId, TransactionJournal? journal = null)
     {
+        journal?.RecordIndexWriteNextId(this);
         _nextId = (long)nextId;
         _view.Write(4, _nextId);
     }
@@ -83,8 +84,9 @@ internal sealed class IndexHandle : IDisposable
     /// <summary>
     /// Writes an ID into a specific slot. Increments count.
     /// </summary>
-    public void WritePlace(ulong id, long place)
+    public void WritePlace(ulong id, long place, TransactionJournal? journal = null)
     {
+        journal?.RecordIndexWritePlace(this, place);
         var slot = (int)place;
         WriteSlotId(slot, (long)id);
         _count++;
@@ -111,8 +113,9 @@ internal sealed class IndexHandle : IDisposable
     /// Frees a slot directly (write 0, decrement count).
     /// Use when you already have the place from iteration.
     /// </summary>
-    public void FreeSlot(long place)
+    public void FreeSlot(long place, TransactionJournal? journal = null)
     {
+        journal?.RecordIndexFreeSlot(this, place);
         WriteSlotId((int)place, 0);
         _count--;
         WriteCount();
@@ -193,6 +196,28 @@ internal sealed class IndexHandle : IDisposable
             found++;
             action((ulong)id, slot);
         }
+    }
+
+    // ── Transaction rollback helpers ─────────────────────────
+
+    /// <summary>
+    /// Restores count and nextId to previous values (used by TransactionJournal).
+    /// </summary>
+    internal void RestoreState(long count, ulong nextId)
+    {
+        _count = (int)count;
+        WriteCount();
+        _nextId = (long)nextId;
+        _view.Write(4, _nextId);
+    }
+
+    /// <summary>
+    /// Restores count to a previous value (used by TransactionJournal).
+    /// </summary>
+    internal void RestoreCount(long count)
+    {
+        _count = (int)count;
+        WriteCount();
     }
 
     // ── File management ──────────────────────────────────────

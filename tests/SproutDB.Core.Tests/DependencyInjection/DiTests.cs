@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using SproutDB.Core.Auth;
 using SproutDB.Core.DependencyInjection;
+using SproutDB.Core.Tests;
 
 namespace SproutDB.Core.Tests.DependencyInjection;
 
@@ -97,7 +98,7 @@ public class DiTests : IDisposable
         using var provider = services.BuildServiceProvider();
         var engine = provider.GetRequiredService<SproutEngine>();
 
-        var result = engine.Execute("create database", "testdb");
+        var result = engine.ExecuteOne("create database", "testdb");
         Assert.Equal(SproutOperation.CreateDatabase, result.Operation);
     }
 
@@ -225,7 +226,7 @@ public class DiTests : IDisposable
         using var provider = services.BuildServiceProvider();
         var engine = provider.GetRequiredService<SproutEngine>();
 
-        var result = engine.Execute("create database", "testdb");
+        var result = engine.ExecuteOne("create database", "testdb");
         Assert.Equal(SproutOperation.CreateDatabase, result.Operation);
     }
 

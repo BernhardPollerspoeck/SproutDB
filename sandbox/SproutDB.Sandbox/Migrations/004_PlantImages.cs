@@ -40,7 +40,7 @@ public sealed class PlantImages : IMigration
         http.Timeout = TimeSpan.FromSeconds(5);
 
         // Get all plants
-        var plants = db.Query("get plants select _id, species");
+        var plants = db.Query("get plants select _id, species")[0];
         if (plants.Data is null) return;
 
         foreach (var row in plants.Data)

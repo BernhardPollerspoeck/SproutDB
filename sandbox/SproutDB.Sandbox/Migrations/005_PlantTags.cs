@@ -11,7 +11,7 @@ public sealed class PlantTags : IMigration
         db.Query("add column plants.tags array string 30");
 
         // Tag plants by category + properties
-        var plants = db.Query("get plants select _id, name, category, price");
+        var plants = db.Query("get plants select _id, name, category, price")[0];
         if (plants.Data is null) return;
 
         foreach (var row in plants.Data)

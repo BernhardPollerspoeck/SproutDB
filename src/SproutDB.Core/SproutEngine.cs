@@ -136,27 +136,58 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     internal SproutChangeNotifier ChangeNotifier => _changeNotifier;
 
     /// <summary>
-    /// Executes a query against the specified database.
+    /// Executes one or more queries (semicolon-separated) against the specified database.
+    /// Returns one SproutResponse per query/transaction.
     /// </summary>
-    public SproutResponse Execute(string query, string database)
+    public List<SproutResponse> Execute(string query, string database)
     {
         var dbName = LowercaseName(database);
 
         if (!IsValidName(dbName))
-            return ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR,
-                $"invalid database name '{database}'");
+            return [ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR,
+                $"invalid database name '{database}'")];
 
         var dbPath = Path.Combine(_dataDirectory, dbName);
 
-        // Parse on caller thread (stateless)
-        var parseResult = QueryParser.Parse(query);
-        if (!parseResult.Success)
-            return ResponseHelper.ParseError(parseResult);
+        // Parse all queries on caller thread (stateless)
+        var parseResults = QueryParser.ParseMulti(query);
+        var responses = new List<SproutResponse>(parseResults.Count);
 
-        var parsedQuery = parseResult.Query;
-        if (parsedQuery is null)
-            return ResponseHelper.ParseError(parseResult);
+        foreach (var parseResult in parseResults)
+        {
+            if (!parseResult.Success)
+            {
+                responses.Add(ResponseHelper.ParseError(parseResult));
+                continue;
+            }
 
+            var parsedQuery = parseResult.Query;
+            if (parsedQuery is null)
+            {
+                responses.Add(ResponseHelper.ParseError(parseResult));
+                continue;
+            }
+
+            // Transaction returns multiple responses
+            if (parsedQuery is TransactionQuery txQuery)
+            {
+                var txResponses = PostWriteList(() => ExecuteTransaction(query, dbName, dbPath, txQuery));
+                responses.AddRange(txResponses);
+            }
+            else
+            {
+                responses.Add(ExecuteSingle(query, dbName, dbPath, parsedQuery));
+            }
+        }
+
+        return responses;
+    }
+
+    /// <summary>
+    /// Routes and executes a single parsed query (or transaction block).
+    /// </summary>
+    private SproutResponse ExecuteSingle(string query, string dbName, string dbPath, IQuery parsedQuery)
+    {
         // Auth queries bypass normal routing and write protection
         if (SproutAuthService.IsAuthQuery(parsedQuery))
             return PostWrite(() => ExecuteAuthQuery(query, parsedQuery));
@@ -220,6 +251,24 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             return ResponseHelper.Error("", ErrorCodes.SYNTAX_ERROR, "engine is shutting down");
 
         return tcs.Task.GetAwaiter().GetResult();
+    }
+
+    private List<SproutResponse> PostWriteList(Func<List<SproutResponse>> work)
+    {
+        var tcs = new TaskCompletionSource<SproutResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        List<SproutResponse>? listResult = null;
+
+        var action = new Action(tcs, () =>
+        {
+            listResult = work();
+            return new SproutResponse { Operation = SproutOperation.Transaction }; // dummy
+        });
+
+        if (!_writeChannel.Writer.TryWrite(action))
+            return [ResponseHelper.Error("", ErrorCodes.SYNTAX_ERROR, "engine is shutting down")];
+
+        tcs.Task.GetAwaiter().GetResult();
+        return listResult ?? [];
     }
 
     private async Task RunWriterLoop()
@@ -323,6 +372,130 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Executes an atomic transaction block on the writer thread.
+    /// All writes succeed or all are rolled back (MMF evict + reopen).
+    /// </summary>
+    private List<SproutResponse> ExecuteTransaction(string query, string dbName, string dbPath, TransactionQuery txQuery)
+    {
+        if (!_tableCache.DatabaseExists(dbPath))
+            return [ResponseHelper.Error(query, ErrorCodes.UNKNOWN_DATABASE,
+                $"database '{dbName}' does not exist")];
+
+        var wal = _walManager.GetOrOpen(dbPath);
+        var groupId = wal.NextGroupId();
+        var totalAffected = 0;
+        var pendingNotifications = new List<(string Table, SproutResponse Response)>();
+        var journal = new Storage.TransactionJournal();
+        var results = new List<SproutResponse>(txQuery.Queries.Count + 1);
+
+        // 1. Write protection check for write queries
+        foreach (var innerQuery in txQuery.Queries)
+        {
+            if (innerQuery is GetQuery or DescribeQuery)
+                continue;
+            var protectionError = CheckWriteProtection(query, innerQuery, dbName);
+            if (protectionError is not null)
+                return [protectionError];
+        }
+
+        // 2. WAL append write queries with shared groupId (reads skip WAL)
+        for (var idx = 0; idx < txQuery.Queries.Count; idx++)
+        {
+            var innerQuery = txQuery.Queries[idx];
+            if (innerQuery is GetQuery or DescribeQuery)
+                continue;
+            var innerQueryText = txQuery.QueryTexts[idx];
+            ulong resolvedId = ResolveIdForWal(innerQuery, dbPath);
+            wal.Append(innerQueryText, resolvedId, groupId);
+        }
+
+        // 3. Execute all queries sequentially
+        try
+        {
+            for (var idx = 0; idx < txQuery.Queries.Count; idx++)
+            {
+                var innerQuery = txQuery.Queries[idx];
+                var innerQueryText = txQuery.QueryTexts[idx];
+
+                // Reads execute directly (no journal needed, they don't mutate)
+                SproutResponse result;
+                if (innerQuery is GetQuery gq)
+                {
+                    result = ExecuteGet(innerQueryText, dbName, dbPath, gq);
+                    Interlocked.Increment(ref _totalReads);
+                }
+                else if (innerQuery is DescribeQuery dq)
+                {
+                    result = ExecuteDescribe(innerQueryText, dbName, dbPath, dq);
+                    Interlocked.Increment(ref _totalReads);
+                }
+                else
+                {
+                    result = Dispatch(innerQueryText, dbName, dbPath, innerQuery, journal);
+                }
+
+                if (result.Errors is not null && result.Errors.Count > 0)
+                {
+                    // Rollback: undo all MMF changes via journal, mark WAL group
+                    journal.Rollback();
+                    wal.MarkGroupRolledBack(groupId);
+                    return [ResponseHelper.Error(query, result.Errors[0].Code,
+                        $"transaction rolled back: {result.Errors[0].Message}")];
+                }
+
+                results.Add(result);
+                totalAffected += result.Affected;
+
+                // Collect notifications for dispatch after commit
+                var tableName = GetTableNameForNotify(innerQuery);
+                if (tableName is not null)
+                    pendingNotifications.Add((tableName, result));
+
+                // Track write metrics
+                if (innerQuery is not (GetQuery or DescribeQuery))
+                {
+                    Interlocked.Increment(ref _totalWrites);
+                    if (innerQuery is UpsertQuery uq)
+                    {
+                        var tablePath = Path.Combine(dbPath, uq.Table);
+                        foreach (var rec in uq.Records)
+                            foreach (var f in rec)
+                                _indexMetrics.RecordWrite(tablePath, f.Name);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // Unexpected error — rollback via journal
+            journal.Rollback();
+            wal.MarkGroupRolledBack(groupId);
+            return [ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR,
+                $"transaction rolled back: {ex.Message}")];
+        }
+
+        // 4. Success — flush WAL
+        if (_walSyncInterval == TimeSpan.Zero)
+            wal.SyncToDisk();
+
+        // 5. Dispatch change notifications
+        foreach (var (table, response) in pendingNotifications)
+            _changeNotifier.Enqueue(dbName, table, response);
+
+        // 6. Audit log
+        LogAudit(dbName, query, "transaction");
+
+        // 7. Append Transaction marker as last entry
+        results.Add(new SproutResponse
+        {
+            Operation = SproutOperation.Transaction,
+            Affected = totalAffected,
+        });
+
+        return results;
     }
 
     // ── Startup replay ──────────────────────────────────────
@@ -673,8 +846,34 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         if (entries.Count == 0)
             return;
 
+        // Determine which group IDs are rolled back (negative groupId)
+        // and which are incomplete (groupId > 0 but no corresponding entries
+        // that would indicate a commit — incomplete groups are also skipped)
+        var rolledBackGroups = new HashSet<long>();
+        var groupEntries = new Dictionary<long, List<WalEntry>>();
+
         foreach (var entry in entries)
         {
+            if (entry.GroupId < 0)
+            {
+                rolledBackGroups.Add(-entry.GroupId);
+            }
+            else if (entry.GroupId > 0)
+            {
+                if (!groupEntries.ContainsKey(entry.GroupId))
+                    groupEntries[entry.GroupId] = [];
+                groupEntries[entry.GroupId].Add(entry);
+            }
+        }
+
+        foreach (var entry in entries)
+        {
+            // Skip rolled-back transaction entries
+            if (entry.GroupId < 0)
+                continue;
+            if (entry.GroupId > 0 && rolledBackGroups.Contains(entry.GroupId))
+                continue;
+
             var parseResult = QueryParser.Parse(entry.Query);
             if (!parseResult.Success || parseResult.Query is null)
                 continue;
@@ -1063,21 +1262,22 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             });
     }
 
-    private SproutResponse Dispatch(string query, string dbName, string dbPath, IQuery parsedQuery)
+    private SproutResponse Dispatch(string query, string dbName, string dbPath, IQuery parsedQuery,
+        Storage.TransactionJournal? journal = null)
     {
         return parsedQuery switch
         {
             CreateDatabaseQuery q => ExecuteCreateDatabase(query, dbName, dbPath, q),
             CreateTableQuery q => ExecuteCreateTable(query, dbName, dbPath, q),
             GetQuery q => ExecuteWithTable(query, dbPath, q.Table, table => GetExecutor.Execute(query, table, q, _settings.DefaultPageSize, q.Follow is not null ? name => ResolveTable(dbPath, name) : null)),
-            UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table, table => UpsertExecutor.Execute(query, table, q, _settings.BulkLimit)),
+            UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table, table => UpsertExecutor.Execute(query, table, q, _settings.BulkLimit, journal)),
             AddColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => AddColumnExecutor.Execute(query, table, q)),
             PurgeColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => PurgeColumnExecutor.Execute(query, table, q)),
             PurgeTableQuery q => ExecutePurgeTable(query, dbPath, q),
             PurgeDatabaseQuery => ExecutePurgeDatabase(query, dbName, dbPath),
             RenameColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => RenameColumnExecutor.Execute(query, table, q)),
             AlterColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => AlterColumnExecutor.Execute(query, table, q)),
-            DeleteQuery q => ExecuteWithTable(query, dbPath, q.Table, table => DeleteExecutor.Execute(query, table, q)),
+            DeleteQuery q => ExecuteWithTable(query, dbPath, q.Table, table => DeleteExecutor.Execute(query, table, q, journal)),
             CreateIndexQuery q => ExecuteWithTable(query, dbPath, q.Table, table => CreateIndexExecutor.Execute(query, table, q)),
             PurgeIndexQuery q => ExecuteWithTable(query, dbPath, q.Table, table => PurgeIndexExecutor.Execute(query, table, q)),
             PurgeTtlQuery q => ExecuteWithTable(query, dbPath, q.Table, table => ExecutePurgeTtl(query, table, q)),

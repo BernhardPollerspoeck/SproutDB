@@ -9,33 +9,33 @@ public class FollowTests : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-{Guid.NewGuid()}");
         _engine = new SproutEngine(_tempDir);
-        _engine.Execute("create database", "testdb");
+        _engine.ExecuteOne("create database", "testdb");
 
         // Users table
-        _engine.Execute(
+        _engine.ExecuteOne(
             "create table users (name string 100, email string 200, active bool)",
             "testdb");
-        _engine.Execute("upsert users {name: 'Alice', email: 'alice@test.com', active: true}", "testdb");
-        _engine.Execute("upsert users {name: 'Bob', email: 'bob@test.com', active: true}", "testdb");
-        _engine.Execute("upsert users {name: 'Charlie', email: 'charlie@test.com', active: false}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Alice', email: 'alice@test.com', active: true}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Bob', email: 'bob@test.com', active: true}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Charlie', email: 'charlie@test.com', active: false}", "testdb");
 
         // Orders table with user_id foreign key
-        _engine.Execute(
+        _engine.ExecuteOne(
             "create table orders (user_id ulong, product string 100, amount double, status string 50)",
             "testdb");
-        _engine.Execute("upsert orders {user_id: 1, product: 'Widget', amount: 25.50, status: 'completed'}", "testdb");
-        _engine.Execute("upsert orders {user_id: 1, product: 'Gadget', amount: 75.00, status: 'pending'}", "testdb");
-        _engine.Execute("upsert orders {user_id: 2, product: 'Doohickey', amount: 12.25, status: 'completed'}", "testdb");
-        _engine.Execute("upsert orders {user_id: 3, product: 'Thingamajig', amount: 50.00, status: 'completed'}", "testdb");
+        _engine.ExecuteOne("upsert orders {user_id: 1, product: 'Widget', amount: 25.50, status: 'completed'}", "testdb");
+        _engine.ExecuteOne("upsert orders {user_id: 1, product: 'Gadget', amount: 75.00, status: 'pending'}", "testdb");
+        _engine.ExecuteOne("upsert orders {user_id: 2, product: 'Doohickey', amount: 12.25, status: 'completed'}", "testdb");
+        _engine.ExecuteOne("upsert orders {user_id: 3, product: 'Thingamajig', amount: 50.00, status: 'completed'}", "testdb");
 
         // Products table for chained joins
-        _engine.Execute(
+        _engine.ExecuteOne(
             "create table products (name string 100, price double)",
             "testdb");
-        _engine.Execute("upsert products {name: 'Widget', price: 9.99}", "testdb");
-        _engine.Execute("upsert products {name: 'Gadget', price: 19.99}", "testdb");
-        _engine.Execute("upsert products {name: 'Doohickey', price: 4.99}", "testdb");
-        _engine.Execute("upsert products {name: 'Thingamajig', price: 14.99}", "testdb");
+        _engine.ExecuteOne("upsert products {name: 'Widget', price: 9.99}", "testdb");
+        _engine.ExecuteOne("upsert products {name: 'Gadget', price: 19.99}", "testdb");
+        _engine.ExecuteOne("upsert products {name: 'Doohickey', price: 4.99}", "testdb");
+        _engine.ExecuteOne("upsert products {name: 'Thingamajig', price: 14.99}", "testdb");
     }
 
     public void Dispose()
@@ -50,7 +50,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_Basic_JoinById()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users follow users._id -> orders.user_id as orders",
             "testdb");
 
@@ -80,9 +80,9 @@ public class FollowTests : IDisposable
     public void Follow_NoMatchingRows_Dropped()
     {
         // Add user with no orders
-        _engine.Execute("upsert users {name: 'Diana', email: 'diana@test.com', active: true}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Diana', email: 'diana@test.com', active: true}", "testdb");
 
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users where name = 'Diana' follow users._id -> orders.user_id as orders",
             "testdb");
 
@@ -94,7 +94,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_FlatRowsContainAllColumns()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users where name = 'Bob' follow users._id -> orders.user_id as orders",
             "testdb");
 
@@ -118,7 +118,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_WithMainWhere()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users where active = true follow users._id -> orders.user_id as orders",
             "testdb");
 
@@ -133,7 +133,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_WithFollowWhere()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users follow users._id -> orders.user_id as orders where status = 'completed'",
             "testdb");
 
@@ -148,7 +148,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_WithBothWheres()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users where active = true follow users._id -> orders.user_id as orders where status = 'completed'",
             "testdb");
 
@@ -166,7 +166,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_WhereFiltersAllTarget_Dropped()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users where name = 'Alice' follow users._id -> orders.user_id as orders where status = 'cancelled'",
             "testdb");
 
@@ -180,20 +180,20 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_Multiple_ChainedJoins()
     {
-        _engine.Execute(
+        _engine.ExecuteOne(
             "create table items (code uint, label string 50)",
             "testdb");
-        _engine.Execute("upsert items {code: 100, label: 'Alpha'}", "testdb");
-        _engine.Execute("upsert items {code: 200, label: 'Beta'}", "testdb");
+        _engine.ExecuteOne("upsert items {code: 100, label: 'Alpha'}", "testdb");
+        _engine.ExecuteOne("upsert items {code: 200, label: 'Beta'}", "testdb");
 
-        _engine.Execute(
+        _engine.ExecuteOne(
             "create table shipments (item_code uint, destination string 50, order_ref ulong)",
             "testdb");
-        _engine.Execute("upsert shipments {item_code: 100, destination: 'Berlin', order_ref: 1}", "testdb");
-        _engine.Execute("upsert shipments {item_code: 100, destination: 'Munich', order_ref: 2}", "testdb");
-        _engine.Execute("upsert shipments {item_code: 200, destination: 'Hamburg', order_ref: 3}", "testdb");
+        _engine.ExecuteOne("upsert shipments {item_code: 100, destination: 'Berlin', order_ref: 1}", "testdb");
+        _engine.ExecuteOne("upsert shipments {item_code: 100, destination: 'Munich', order_ref: 2}", "testdb");
+        _engine.ExecuteOne("upsert shipments {item_code: 200, destination: 'Hamburg', order_ref: 3}", "testdb");
 
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get items follow items.code -> shipments.item_code as shipments follow items._id -> orders.user_id as user_orders",
             "testdb");
 
@@ -211,15 +211,15 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_Multiple_EachWithWhere()
     {
-        _engine.Execute(
+        _engine.ExecuteOne(
             "create table tags (order_id ulong, tag string 50)",
             "testdb");
-        _engine.Execute("upsert tags {order_id: 1, tag: 'urgent'}", "testdb");
-        _engine.Execute("upsert tags {order_id: 1, tag: 'fragile'}", "testdb");
-        _engine.Execute("upsert tags {order_id: 2, tag: 'standard'}", "testdb");
-        _engine.Execute("upsert tags {order_id: 3, tag: 'urgent'}", "testdb");
+        _engine.ExecuteOne("upsert tags {order_id: 1, tag: 'urgent'}", "testdb");
+        _engine.ExecuteOne("upsert tags {order_id: 1, tag: 'fragile'}", "testdb");
+        _engine.ExecuteOne("upsert tags {order_id: 2, tag: 'standard'}", "testdb");
+        _engine.ExecuteOne("upsert tags {order_id: 3, tag: 'urgent'}", "testdb");
 
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users where name = 'Alice' follow users._id -> orders.user_id as orders where status = 'completed' follow users._id -> tags.order_id as tags where tag = 'urgent'",
             "testdb");
 
@@ -238,14 +238,14 @@ public class FollowTests : IDisposable
     public void Follow_Chained_SecondFollowUsesFirstResult()
     {
         // users -> orders -> tags (chained: second follow on orders._id)
-        _engine.Execute(
+        _engine.ExecuteOne(
             "create table tags (order_id ulong, tag string 50)",
             "testdb");
-        _engine.Execute("upsert tags {order_id: 1, tag: 'urgent'}", "testdb");
-        _engine.Execute("upsert tags {order_id: 1, tag: 'fragile'}", "testdb");
-        _engine.Execute("upsert tags {order_id: 3, tag: 'priority'}", "testdb");
+        _engine.ExecuteOne("upsert tags {order_id: 1, tag: 'urgent'}", "testdb");
+        _engine.ExecuteOne("upsert tags {order_id: 1, tag: 'fragile'}", "testdb");
+        _engine.ExecuteOne("upsert tags {order_id: 3, tag: 'priority'}", "testdb");
 
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users where name = 'Alice' follow users._id -> orders.user_id as orders follow orders._id -> tags.order_id as tags",
             "testdb");
 
@@ -265,12 +265,12 @@ public class FollowTests : IDisposable
     public void Follow_Chained_WithSelectWithoutId()
     {
         // The exact bug scenario: select without _id + chained follows
-        _engine.Execute(
+        _engine.ExecuteOne(
             "create table tags (order_id ulong, tag string 50)",
             "testdb");
-        _engine.Execute("upsert tags {order_id: 1, tag: 'rush'}", "testdb");
+        _engine.ExecuteOne("upsert tags {order_id: 1, tag: 'rush'}", "testdb");
 
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users select name where name = 'Alice' follow users._id -> orders.user_id as orders follow orders._id -> tags.order_id as tags",
             "testdb");
 
@@ -287,9 +287,9 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_LeftJoin_KeepsUnmatchedSource()
     {
-        _engine.Execute("upsert users {name: 'Diana', email: 'diana@test.com', active: true}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Diana', email: 'diana@test.com', active: true}", "testdb");
 
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users where name = 'Diana' or name = 'Alice' follow users._id ->? orders.user_id as orders",
             "testdb");
 
@@ -308,9 +308,9 @@ public class FollowTests : IDisposable
     public void Follow_RightJoin_KeepsUnmatchedTarget()
     {
         // Add an order with user_id that doesn't exist
-        _engine.Execute("upsert orders {user_id: 999, product: 'Orphan', amount: 1.0, status: 'lost'}", "testdb");
+        _engine.ExecuteOne("upsert orders {user_id: 999, product: 'Orphan', amount: 1.0, status: 'lost'}", "testdb");
 
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users where name = 'Alice' follow users._id ?-> orders.user_id as orders",
             "testdb");
 
@@ -324,10 +324,10 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_OuterJoin_KeepsBothUnmatched()
     {
-        _engine.Execute("upsert users {name: 'Eve', email: 'eve@test.com', active: true}", "testdb");
-        _engine.Execute("upsert orders {user_id: 888, product: 'Ghost', amount: 0.0, status: 'phantom'}", "testdb");
+        _engine.ExecuteOne("upsert users {name: 'Eve', email: 'eve@test.com', active: true}", "testdb");
+        _engine.ExecuteOne("upsert orders {user_id: 888, product: 'Ghost', amount: 0.0, status: 'phantom'}", "testdb");
 
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users where name = 'Eve' or name = 'Alice' follow users._id ?->? orders.user_id as orders",
             "testdb");
 
@@ -347,7 +347,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_LeftJoin_WithFollowWhere_UnmatchedKept()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users where name = 'Alice' follow users._id ->? orders.user_id as orders where status = 'cancelled'",
             "testdb");
 
@@ -363,7 +363,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_UnknownTargetTable_Error()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users follow users._id -> nonexistent.user_id as stuff",
             "testdb");
 
@@ -375,7 +375,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_UnknownTargetColumn_Error()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users follow users._id -> orders.nonexistent as orders",
             "testdb");
 
@@ -387,7 +387,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_UnknownSourceColumn_Error()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users follow users.nonexistent -> orders.user_id as orders",
             "testdb");
 
@@ -399,7 +399,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_UnknownWhereColumn_Error()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users follow users._id -> orders.user_id as orders where nonexistent = 'x'",
             "testdb");
 
@@ -413,7 +413,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_WithSelect()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users select name follow users._id -> orders.user_id as orders",
             "testdb");
 
@@ -428,7 +428,7 @@ public class FollowTests : IDisposable
     public void Follow_WithSelect_WithoutId_StillJoins()
     {
         // select without _id — follow uses _id as source, must still work
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users select name, email follow users._id -> orders.user_id as orders",
             "testdb");
 
@@ -449,7 +449,7 @@ public class FollowTests : IDisposable
     public void Follow_WithSelect_FullComplexQuery()
     {
         // The exact pattern from the bug: select without _id + where + order by + follow
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users select name, email where active = true order by name asc follow users._id -> orders.user_id as orders where status = 'completed'",
             "testdb");
 
@@ -467,7 +467,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_WithOrderByAndLimit()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users order by name limit 2 follow users._id -> orders.user_id as orders",
             "testdb");
 
@@ -482,7 +482,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_WithFollowSelect_ProjectsColumns()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users where name = 'Alice' follow users._id -> orders.user_id as orders select product, status",
             "testdb");
 
@@ -503,7 +503,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_WithFollowSelect_AndWhere()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users where name = 'Alice' follow users._id -> orders.user_id as orders select product where status = 'completed'",
             "testdb");
 
@@ -518,10 +518,10 @@ public class FollowTests : IDisposable
     [Fact]
     public void Follow_WithFollowSelect_ChainedFollows()
     {
-        _engine.Execute("create table tags (order_id ulong, tag string 50, priority sint)", "testdb");
-        _engine.Execute("upsert tags {order_id: 1, tag: 'urgent', priority: 1}", "testdb");
+        _engine.ExecuteOne("create table tags (order_id ulong, tag string 50, priority sint)", "testdb");
+        _engine.ExecuteOne("upsert tags {order_id: 1, tag: 'urgent', priority: 1}", "testdb");
 
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users where name = 'Alice' follow users._id -> orders.user_id as orders select product where status = 'completed' follow orders._id -> tags.order_id as tags select tag",
             "testdb");
 
@@ -544,7 +544,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void PostFollow_Select_FiltersFlatResult()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users follow users._id -> orders.user_id as orders select name, orders.product",
             "testdb");
 
@@ -564,7 +564,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void PostFollow_Select_WithAlias()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users follow users._id -> orders.user_id as orders select name, orders.product as item",
             "testdb");
 
@@ -578,7 +578,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void PostFollow_ExcludeSelect_RemovesColumns()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users follow users._id -> orders.user_id as orders -select email, orders.status",
             "testdb");
 
@@ -596,7 +596,7 @@ public class FollowTests : IDisposable
     [Fact]
     public void PostFollow_Select_DotNotation_Id()
     {
-        var r = _engine.Execute(
+        var r = _engine.ExecuteOne(
             "get users follow users._id -> orders.user_id as orders select _id, orders._id",
             "testdb");
 

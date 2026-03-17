@@ -31,11 +31,32 @@ internal sealed class ColumnHandle : IDisposable
         (_mmf, _view) = CreateMapping(_fs, _capacity);
     }
 
-    // ── Write ───────────────────────────────────────────────
+    // ── Raw entry access (for TransactionJournal snapshots) ─
 
-    public void WriteNull(long place)
+    internal void ReadRawEntry(long place, byte[] buffer)
+    {
+        var offset = place * Schema.EntrySize;
+        if (offset + Schema.EntrySize > _capacity)
+        {
+            Array.Clear(buffer);
+            return;
+        }
+        _view.ReadArray(offset, buffer, 0, buffer.Length);
+    }
+
+    internal void WriteRawEntry(long place, byte[] buffer)
     {
         EnsureCapacity(place + 1);
+        var offset = place * Schema.EntrySize;
+        _view.WriteArray(offset, buffer, 0, buffer.Length);
+    }
+
+    // ── Write ───────────────────────────────────────────────
+
+    public void WriteNull(long place, TransactionJournal? journal = null)
+    {
+        EnsureCapacity(place + 1);
+        journal?.RecordColumnWrite(this, place);
         var offset = place * Schema.EntrySize;
 
         // Flag = 0x00, zero the value bytes
@@ -44,9 +65,10 @@ internal sealed class ColumnHandle : IDisposable
         _view.WriteArray(offset + 1, valueBuf, 0, valueBuf.Length);
     }
 
-    public object WriteValue(long place, string raw)
+    public object WriteValue(long place, string raw, TransactionJournal? journal = null)
     {
         EnsureCapacity(place + 1);
+        journal?.RecordColumnWrite(this, place);
         var offset = place * Schema.EntrySize;
 
         _view.Write(offset, StorageConstants.FLAG_VALUE);

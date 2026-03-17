@@ -68,7 +68,7 @@ public sealed class SproutTable<T> where T : class, ISproutEntity, new()
     public SproutResponse Run()
     {
         var query = BuildGetQuery();
-        return _db.Query(query);
+        return _db.Query(query)[0];
     }
 
     public List<T> ToList()
@@ -119,20 +119,20 @@ public sealed class SproutTable<T> where T : class, ISproutEntity, new()
     public SproutResponse Upsert(T record)
     {
         var fields = TypeMapper.SerializeToUpsertFields(record);
-        return _db.Query($"upsert {_tableName} {fields}");
+        return _db.Query($"upsert {_tableName} {fields}")[0];
     }
 
     public SproutResponse Upsert(object record)
     {
         var fields = TypeMapper.SerializeToUpsertFields(record);
-        return _db.Query($"upsert {_tableName} {fields}");
+        return _db.Query($"upsert {_tableName} {fields}")[0];
     }
 
     public SproutResponse Upsert(T record, Expression<Func<T, object>> on)
     {
         var fields = TypeMapper.SerializeToUpsertFields(record);
         var onColumn = SproutExpressionVisitor.ConvertMemberName<T, object>(on);
-        return _db.Query($"upsert {_tableName} {fields} on {onColumn}");
+        return _db.Query($"upsert {_tableName} {fields} on {onColumn}")[0];
     }
 
     public SproutResponse Upsert(IEnumerable<T> records, Expression<Func<T, object>> on)
@@ -148,7 +148,7 @@ public sealed class SproutTable<T> where T : class, ISproutEntity, new()
         }
         sb.Append(']');
         sb.Append($" on {SproutExpressionVisitor.ConvertMemberName<T, object>(on)}");
-        return _db.Query(sb.ToString());
+        return _db.Query(sb.ToString())[0];
     }
 
     public SproutResponse Upsert(IEnumerable<T> records)
@@ -163,7 +163,7 @@ public sealed class SproutTable<T> where T : class, ISproutEntity, new()
             sb.Append(TypeMapper.SerializeToUpsertFields(record));
         }
         sb.Append(']');
-        return _db.Query(sb.ToString());
+        return _db.Query(sb.ToString())[0];
     }
 
     // ── Delete ──────────────────────────────────────────────────
@@ -171,7 +171,7 @@ public sealed class SproutTable<T> where T : class, ISproutEntity, new()
     public SproutResponse Delete(Expression<Func<T, bool>> predicate)
     {
         var whereClause = SproutExpressionVisitor.ConvertWhere(predicate);
-        return _db.Query($"delete {_tableName} where {whereClause}");
+        return _db.Query($"delete {_tableName} where {whereClause}")[0];
     }
 
     // ── Query string builder ────────────────────────────────────

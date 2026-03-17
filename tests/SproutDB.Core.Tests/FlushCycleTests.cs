@@ -27,9 +27,9 @@ public class FlushCycleTests : IDisposable
             FlushInterval = Timeout.InfiniteTimeSpan, // disable periodic flush
         }))
         {
-            engine.Execute("create database", "testdb");
-            engine.Execute("create table users (name string 100)", "testdb");
-            engine.Execute("upsert users {name: 'Alice'}", "testdb");
+            engine.ExecuteOne("create database", "testdb");
+            engine.ExecuteOne("create table users (name string 100)", "testdb");
+            engine.ExecuteOne("upsert users {name: 'Alice'}", "testdb");
         }
         // Dispose triggers final FlushAll: MMFs flushed + WAL truncated
 
@@ -44,7 +44,7 @@ public class FlushCycleTests : IDisposable
             DataDirectory = dataDir,
             FlushInterval = Timeout.InfiniteTimeSpan,
         });
-        var r = engine2.Execute("get users", "testdb");
+        var r = engine2.ExecuteOne("get users", "testdb");
         Assert.Equal(1, r.Data?.Count);
         Assert.Equal("Alice", r.Data?[0]["name"]);
     }
@@ -60,9 +60,9 @@ public class FlushCycleTests : IDisposable
             FlushInterval = TimeSpan.FromMilliseconds(100),
         });
 
-        engine.Execute("create database", "testdb");
-        engine.Execute("create table users (name string 100)", "testdb");
-        engine.Execute("upsert users {name: 'Alice'}", "testdb");
+        engine.ExecuteOne("create database", "testdb");
+        engine.ExecuteOne("create table users (name string 100)", "testdb");
+        engine.ExecuteOne("upsert users {name: 'Alice'}", "testdb");
 
         var walPath = Path.Combine(dataDir, "testdb", "_wal");
 
@@ -76,7 +76,7 @@ public class FlushCycleTests : IDisposable
         Assert.Equal(0, new FileInfo(walPath).Length);
 
         // Data should still be readable
-        var r = engine.Execute("get users", "testdb");
+        var r = engine.ExecuteOne("get users", "testdb");
         Assert.Equal(1, r.Data?.Count);
     }
 
@@ -91,9 +91,9 @@ public class FlushCycleTests : IDisposable
             FlushInterval = Timeout.InfiniteTimeSpan,
         });
 
-        engine.Execute("create database", "testdb");
-        engine.Execute("create table users (name string 100)", "testdb");
-        engine.Execute("upsert users {name: 'Alice'}", "testdb");
+        engine.ExecuteOne("create database", "testdb");
+        engine.ExecuteOne("create table users (name string 100)", "testdb");
+        engine.ExecuteOne("upsert users {name: 'Alice'}", "testdb");
 
         Thread.Sleep(200);
 
@@ -115,7 +115,7 @@ public class FlushCycleTests : IDisposable
         var dataDir = Path.Combine(_tempDir, "data");
         using var engine = new SproutEngine(dataDir);
 
-        var r = engine.Execute("create database", "testdb");
+        var r = engine.ExecuteOne("create database", "testdb");
         Assert.Equal(SproutOperation.CreateDatabase, r.Operation);
     }
 
@@ -130,10 +130,10 @@ public class FlushCycleTests : IDisposable
             FlushInterval = TimeSpan.FromMilliseconds(100),
         }))
         {
-            engine.Execute("create database", "testdb");
-            engine.Execute("create table users (name string 100, score sint)", "testdb");
-            engine.Execute("upsert users {name: 'Alice', score: 100}", "testdb");
-            engine.Execute("upsert users {name: 'Bob', score: 200}", "testdb");
+            engine.ExecuteOne("create database", "testdb");
+            engine.ExecuteOne("create table users (name string 100, score sint)", "testdb");
+            engine.ExecuteOne("upsert users {name: 'Alice', score: 100}", "testdb");
+            engine.ExecuteOne("upsert users {name: 'Bob', score: 200}", "testdb");
 
             // Wait for flush cycle
             Thread.Sleep(300);
@@ -146,7 +146,7 @@ public class FlushCycleTests : IDisposable
             FlushInterval = Timeout.InfiniteTimeSpan,
         });
 
-        var r = engine2.Execute("get users select name, score", "testdb");
+        var r = engine2.ExecuteOne("get users select name, score", "testdb");
         Assert.Equal(2, r.Data?.Count);
         Assert.Equal("Alice", r.Data?[0]["name"]);
         Assert.Equal(200, r.Data?[1]["score"]);

@@ -47,7 +47,7 @@ public class SystemDatabaseTests : IDisposable
     [Fact]
     public void SystemDatabase_AuditLog_Queryable()
     {
-        var r = _engine.Execute("get audit_log", "_system");
+        var r = _engine.ExecuteOne("get audit_log", "_system");
 
         Assert.NotEqual(SproutOperation.Error, r.Operation);
     }
@@ -55,7 +55,7 @@ public class SystemDatabaseTests : IDisposable
     [Fact]
     public void SystemDatabase_IndexMetrics_Queryable()
     {
-        var r = _engine.Execute("get index_metrics", "_system");
+        var r = _engine.ExecuteOne("get index_metrics", "_system");
 
         Assert.NotEqual(SproutOperation.Error, r.Operation);
     }
@@ -63,7 +63,7 @@ public class SystemDatabaseTests : IDisposable
     [Fact]
     public void SystemDatabase_AuditLog_Describable()
     {
-        var r = _engine.Execute("describe audit_log", "_system");
+        var r = _engine.ExecuteOne("describe audit_log", "_system");
 
         Assert.Equal(SproutOperation.Describe, r.Operation);
         Assert.NotNull(r.Schema?.Columns);
@@ -78,7 +78,7 @@ public class SystemDatabaseTests : IDisposable
     [Fact]
     public void SystemDatabase_IndexMetrics_Describable()
     {
-        var r = _engine.Execute("describe index_metrics", "_system");
+        var r = _engine.ExecuteOne("describe index_metrics", "_system");
 
         Assert.Equal(SproutOperation.Describe, r.Operation);
         Assert.NotNull(r.Schema?.Columns);
@@ -94,7 +94,7 @@ public class SystemDatabaseTests : IDisposable
     [Fact]
     public void SystemDatabase_WriteProtected_Upsert()
     {
-        var r = _engine.Execute("upsert audit_log {operation: 'test', query: 'test', timestamp: '2024-01-01 00:00:00'}", "_system");
+        var r = _engine.ExecuteOne("upsert audit_log {operation: 'test', query: 'test', timestamp: '2024-01-01 00:00:00'}", "_system");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("PROTECTED_NAME", r.Errors?[0].Code);
@@ -103,7 +103,7 @@ public class SystemDatabaseTests : IDisposable
     [Fact]
     public void SystemDatabase_WriteProtected_CreateTable()
     {
-        var r = _engine.Execute("create table foo (name string 100)", "_system");
+        var r = _engine.ExecuteOne("create table foo (name string 100)", "_system");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("PROTECTED_NAME", r.Errors?[0].Code);
@@ -112,7 +112,7 @@ public class SystemDatabaseTests : IDisposable
     [Fact]
     public void SystemDatabase_WriteProtected_Delete()
     {
-        var r = _engine.Execute("delete audit_log where _id = 1", "_system");
+        var r = _engine.ExecuteOne("delete audit_log where _id = 1", "_system");
 
         Assert.Equal(SproutOperation.Error, r.Operation);
         Assert.Equal("PROTECTED_NAME", r.Errors?[0].Code);
@@ -128,13 +128,13 @@ public class SystemDatabaseTests : IDisposable
             using (var engine1 = new SproutEngine(dir))
             {
                 // _system should exist
-                var r1 = engine1.Execute("get audit_log", "_system");
+                var r1 = engine1.ExecuteOne("get audit_log", "_system");
                 Assert.NotEqual(SproutOperation.Error, r1.Operation);
             }
 
             // Re-open engine — should not crash, _system should still exist
             using var engine2 = new SproutEngine(dir);
-            var r2 = engine2.Execute("get audit_log", "_system");
+            var r2 = engine2.ExecuteOne("get audit_log", "_system");
             Assert.NotEqual(SproutOperation.Error, r2.Operation);
         }
         finally
