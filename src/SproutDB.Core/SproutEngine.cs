@@ -92,6 +92,9 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         // ── Startup replay: discover all databases, replay WALs ──
         ReplayAllDatabases();
 
+        // ── Repair B-Trees that may have duplicate entries (one-time) ──
+        RepairBTreesIfNeeded();
+
         // ── Ensure _system database exists ────────────────────────
         EnsureSystemDatabase();
         LoadIndexMetrics();
@@ -516,6 +519,32 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             // Replay WAL if present
             ReplayWal(dbDir, dbName);
         }
+    }
+
+    /// <summary>
+    /// One-time repair: rebuild all B-Trees to remove duplicate entries
+    /// caused by a bug in BTreeHandle.Remove with duplicate keys.
+    /// Uses a version marker file so this only runs once per data directory.
+    /// </summary>
+    private void RepairBTreesIfNeeded()
+    {
+        var versionFile = Path.Combine(_dataDirectory, "_btree_version");
+        const int requiredVersion = 2;
+
+        if (File.Exists(versionFile))
+        {
+            var content = File.ReadAllText(versionFile).Trim();
+            if (int.TryParse(content, out var version) && version >= requiredVersion)
+                return;
+        }
+
+        foreach (var (_, table) in _tableCache.GetAllOpened())
+        {
+            if (table.IndexCount > 0)
+                table.RebuildAllBTrees();
+        }
+
+        File.WriteAllText(versionFile, requiredVersion.ToString());
     }
 
     // ── System database ────────────────────────────────────

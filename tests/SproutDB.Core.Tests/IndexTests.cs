@@ -377,6 +377,92 @@ public class IndexTests : IDisposable
         Assert.Equal("UNIQUE_VIOLATION", result.Errors[0].Code);
     }
 
+    // ── Duplicate key B-Tree regression ─────────────────────
+
+    [Fact]
+    public void BTreeRemove_DuplicateKeys_NoGhostRows()
+    {
+        // Regression: BTreeHandle.Remove failed to find entries with duplicate keys
+        // (e.g. bool columns) causing stale entries to accumulate on each upsert.
+        // WHERE queries via B-Tree then returned the same row multiple times.
+
+        _engine.ExecuteOne(
+            "create table tenants (slug string 100, name string 100, active bool default 'true')",
+            "testdb");
+        _engine.ExecuteOne("create index tenants.active", "testdb");
+
+        // Insert two rows
+        _engine.ExecuteOne("upsert tenants {slug: 'demo', name: 'Demo'}", "testdb");
+        _engine.ExecuteOne("upsert tenants {slug: 'qsp', name: 'QSP GmbH'}", "testdb");
+
+        // Update row _id=1 many times (same value — triggers Remove+Insert on B-Tree each time)
+        for (int i = 0; i < 15; i++)
+            _engine.ExecuteOne($"upsert tenants {{_id: 1, name: 'Demo v{i}'}}", "testdb");
+
+        // Without the fix, this returned 16+ rows (15x _id=1 + 1x _id=2)
+        var result = _engine.ExecuteOne("get tenants where active = true", "testdb");
+
+        Assert.Null(result.Errors);
+        Assert.NotNull(result.Data);
+        Assert.Equal(2, result.Data.Count);
+    }
+
+    [Fact]
+    public void BTreeRemove_DuplicateKeys_ValueChange_NoGhostRows()
+    {
+        // Same regression but with value changes (true → false → true)
+        _engine.ExecuteOne(
+            "create table flags (name string 100, enabled bool default 'true')",
+            "testdb");
+        _engine.ExecuteOne("create index flags.enabled", "testdb");
+
+        _engine.ExecuteOne("upsert flags {name: 'feature_a'}", "testdb");
+        _engine.ExecuteOne("upsert flags {name: 'feature_b'}", "testdb");
+
+        // Toggle feature_a enabled back and forth
+        for (int i = 0; i < 10; i++)
+        {
+            _engine.ExecuteOne($"upsert flags {{_id: 1, enabled: false}}", "testdb");
+            _engine.ExecuteOne($"upsert flags {{_id: 1, enabled: true}}", "testdb");
+        }
+
+        var trueResult = _engine.ExecuteOne("get flags where enabled = true", "testdb");
+        var falseResult = _engine.ExecuteOne("get flags where enabled = false", "testdb");
+
+        Assert.Equal(2, trueResult.Data?.Count);
+        Assert.Equal(0, falseResult.Data?.Count);
+    }
+
+    [Fact]
+    public void BTreeRepair_OnRestart_FixesCorruptedBTrees()
+    {
+        // Verify that the startup repair rebuilds corrupted B-Trees
+        _engine.ExecuteOne(
+            "create table items (category string 50, active bool default 'true')",
+            "testdb");
+        _engine.ExecuteOne("create index items.active", "testdb");
+
+        _engine.ExecuteOne("upsert items {category: 'A'}", "testdb");
+        _engine.ExecuteOne("upsert items {category: 'B'}", "testdb");
+
+        // Multiple updates
+        for (int i = 0; i < 10; i++)
+            _engine.ExecuteOne($"upsert items {{_id: 1, category: 'A{i}'}}", "testdb");
+
+        // Simulate a restart by deleting the version marker so repair runs again
+        var versionFile = Path.Combine(_tempDir, "_btree_version");
+        if (File.Exists(versionFile))
+            File.Delete(versionFile);
+
+        _engine.Dispose();
+        _disposed = true;
+        _engine = new SproutEngine(_tempDir);
+        _disposed = false;
+
+        var result = _engine.ExecuteOne("get items where active = true", "testdb");
+        Assert.Equal(2, result.Data?.Count);
+    }
+
     // ── Helpers ───────────────────────────────────────────
 
     private void SeedUsers(int count)

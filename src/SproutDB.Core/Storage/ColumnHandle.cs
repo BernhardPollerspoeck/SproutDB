@@ -260,7 +260,7 @@ internal sealed class ColumnHandle : IDisposable
         switch (Type)
         {
             case ColumnType.Bool:
-                buf[0] = (byte)(raw == "true" ? 1 : 0);
+                buf[0] = (byte)(raw.Equals("true", StringComparison.OrdinalIgnoreCase) ? 1 : 0);
                 break;
             case ColumnType.SByte:
                 buf[0] = (byte)sbyte.Parse(raw, CultureInfo.InvariantCulture);

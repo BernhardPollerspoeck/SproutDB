@@ -170,22 +170,37 @@ internal sealed class BTreeHandle : IDisposable
             var cmp = CompareKeyAt(keysStart + (long)i * _keyEntrySize, key);
             if (cmp == 0)
             {
-                // Found — collect this and check for duplicates
-                results.Add(_view.ReadInt64(keysStart + (long)i * _keyEntrySize + _keySize));
-                // Continue scanning for more entries with same key
-                for (int j = i + 1; j < keyCount; j++)
-                {
-                    if (CompareKeyAt(keysStart + (long)j * _keyEntrySize, key) == 0)
-                        results.Add(_view.ReadInt64(keysStart + (long)j * _keyEntrySize + _keySize));
-                    else
-                        break;
-                }
-                // Also check left subtree for duplicates in internal nodes
+                // Check left subtree before collecting matches (duplicates can live there)
                 if (!isLeaf)
                 {
-                    var childOffset = ReadChildOffset(nodeOffset, keyCount, i);
-                    if (childOffset > 0)
-                        LookupInNode(childOffset, key, results);
+                    var leftChild = ReadChildOffset(nodeOffset, keyCount, i);
+                    if (leftChild > 0)
+                        LookupInNode(leftChild, key, results);
+                }
+
+                // Collect this entry
+                results.Add(_view.ReadInt64(keysStart + (long)i * _keyEntrySize + _keySize));
+                i++;
+
+                // Collect remaining entries with same key, checking children in between
+                while (i < keyCount && CompareKeyAt(keysStart + (long)i * _keyEntrySize, key) == 0)
+                {
+                    if (!isLeaf)
+                    {
+                        var midChild = ReadChildOffset(nodeOffset, keyCount, i);
+                        if (midChild > 0)
+                            LookupInNode(midChild, key, results);
+                    }
+                    results.Add(_view.ReadInt64(keysStart + (long)i * _keyEntrySize + _keySize));
+                    i++;
+                }
+
+                // Check right subtree after last matching key
+                if (!isLeaf)
+                {
+                    var rightChild = ReadChildOffset(nodeOffset, keyCount, i);
+                    if (rightChild > 0)
+                        LookupInNode(rightChild, key, results);
                 }
                 return;
             }
@@ -403,6 +418,16 @@ internal sealed class BTreeHandle : IDisposable
             {
                 foundAt = i;
                 break;
+            }
+            // Duplicate key with different place: entry may be in the left child
+            if (cmp == 0 && !isLeaf)
+            {
+                var leftChild = ReadChildOffset(nodeOffset, keyCount, i);
+                if (RemoveFromNode(leftChild, key, place))
+                {
+                    RebalanceChild(nodeOffset, i);
+                    return true;
+                }
             }
             if (cmp > 0)
             {
@@ -652,14 +677,14 @@ internal sealed class BTreeHandle : IDisposable
                 i * _keyEntrySize, _keyEntrySize);
         _view.Write(nodeOffset + 1, (ushort)mid);
 
-        // Write right half to new node
-        var rightCount = totalKeys - mid;
+        // Write right half to new node (skip promoted key — it goes to parent only)
+        var rightCount = totalKeys - mid - 1;
         for (int i = 0; i < rightCount; i++)
             _view.WriteArray(newKeysStart + (long)i * _keyEntrySize, allKeys,
-                (mid + i) * _keyEntrySize, _keyEntrySize);
+                (mid + 1 + i) * _keyEntrySize, _keyEntrySize);
         _view.Write(newNode + 1, (ushort)rightCount);
 
-        // Promoted key is the first key of the right half
+        // Promoted key is the middle entry
         var promotedKey = new byte[_keySize];
         Array.Copy(allKeys, mid * _keyEntrySize, promotedKey, 0, _keySize);
         var promotedPlace = BinaryPrimitives.ReadInt64LittleEndian(

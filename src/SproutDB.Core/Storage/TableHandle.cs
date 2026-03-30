@@ -94,6 +94,27 @@ internal sealed class TableHandle : IDisposable
     }
 
     /// <summary>
+    /// Rebuilds all B-Trees from source column data.
+    /// Used to repair B-Trees that may have accumulated duplicate entries.
+    /// </summary>
+    public void RebuildAllBTrees()
+    {
+        foreach (var colName in _btrees.Keys.ToList())
+        {
+            var col = _columns[colName];
+            var schema = col.Schema;
+            ColumnTypes.TryParse(schema.Type, out var colType);
+
+            _btrees[colName].Dispose();
+
+            var btreePath = Path.Combine(_tablePath, $"{colName}.btree");
+            File.Delete(btreePath);
+
+            _btrees[colName] = BTreeHandle.BuildFromColumn(btreePath, col, Index, colType, schema.Size);
+        }
+    }
+
+    /// <summary>
     /// Adds a new column to this table (creates .col file, opens handle, updates schema).
     /// </summary>
     public void AddColumn(ColumnSchemaEntry entry)

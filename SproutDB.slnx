@@ -1,14 +1,14 @@
 <Solution>
   <Folder Name="/src/">
-    <Project Path="src/SproutDB.Core/SproutDB.Core.csproj" />
     <Project Path="src/SproutDB.Analyzers/SproutDB.Analyzers.csproj" />
+    <Project Path="src/SproutDB.Core/SproutDB.Core.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SproutDB.Core.Tests/SproutDB.Core.Tests.csproj" />
     <Project Path="tests/TestMigrations.Failing/TestMigrations.Failing.csproj" />
     <Project Path="tests/TestMigrations.Schema/TestMigrations.Schema.csproj" />
-    <Project Path="tests/TestMigrations.Startup/TestMigrations.Startup.csproj" />
     <Project Path="tests/TestMigrations.SilentFailing/TestMigrations.SilentFailing.csproj" />
+    <Project Path="tests/TestMigrations.Startup/TestMigrations.Startup.csproj" />
   </Folder>
   <Folder Name="/01_Files/">
     <File Path="sproutdb-api-reference.md" />
@@ -19,6 +19,8 @@
     <File Path="sproutdb-inprocess-design.md" />
     <File Path="sproutdb-persistence-design.md" />
     <File Path="sproutdb-query-design.md" />
+    <File Path="sproutdb-reference.md" />
+    <File Path="todo.md" />
   </Folder>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/SproutDB.Benchmarks/SproutDB.Benchmarks.csproj" />
