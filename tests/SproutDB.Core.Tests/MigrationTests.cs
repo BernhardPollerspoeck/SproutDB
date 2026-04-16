@@ -171,6 +171,42 @@ public class MigrationTests : IDisposable
             _engine.SelectDatabase("nonexistent"));
     }
 
+    [Theory]
+    [InlineData("foo-bar")]       // hyphen not allowed
+    [InlineData("1leading_digit")] // must start with letter or underscore
+    [InlineData("has space")]
+    [InlineData("has.dot")]
+    [InlineData("")]
+    public void GetOrCreateDatabase_ThrowsOnInvalidName(string badName)
+    {
+        var ex = Assert.Throws<InvalidDatabaseNameException>(() =>
+            _engine.GetOrCreateDatabase(badName));
+
+        Assert.Equal(badName, ex.DatabaseName);
+        Assert.Equal("name", ex.ParamName);
+    }
+
+    [Theory]
+    [InlineData("foo-bar")]
+    [InlineData("1leading_digit")]
+    [InlineData("has space")]
+    public void SelectDatabase_ThrowsOnInvalidName(string badName)
+    {
+        var ex = Assert.Throws<InvalidDatabaseNameException>(() =>
+            _engine.SelectDatabase(badName));
+
+        Assert.Equal(badName, ex.DatabaseName);
+    }
+
+    [Fact]
+    public void InvalidDatabaseNameException_IsArgumentException()
+    {
+        // Callers should be able to catch as ArgumentException to distinguish
+        // client input errors (400) from server-state errors (500).
+        Assert.ThrowsAny<ArgumentException>(() =>
+            _engine.GetOrCreateDatabase("foo-bar"));
+    }
+
     [Fact]
     public void GetDatabases_ReturnsAll()
     {

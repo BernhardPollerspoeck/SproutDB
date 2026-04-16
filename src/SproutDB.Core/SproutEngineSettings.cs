@@ -72,4 +72,40 @@ public sealed class SproutEngineSettings
     /// Default: 1000.
     /// </summary>
     public int TtlCleanupBatchSize { get; set; } = 1000;
+
+    /// <summary>
+    /// Idle-evict threshold: a database that has had no query for this many
+    /// seconds is flushed and closed (its WAL + TableHandles are released).
+    /// The next query re-opens it. Default: 300 (5 minutes).
+    /// </summary>
+    public int IdleEvictAfterSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// Safety-net cap on the number of simultaneously open databases.
+    /// When the cap is reached, a new Acquire evicts the least-recently-used
+    /// non-busy database. If all are busy, the cap is softly exceeded
+    /// (never blocks). Default: 128.
+    /// </summary>
+    public int MaxOpenDatabases { get; set; } = 128;
+
+    /// <summary>
+    /// Enables Gen2-GC-driven eviction when the process is under memory
+    /// pressure (<see cref="MemoryPressureThresholdPercent"/> of the GC's
+    /// high-memory-load threshold). When triggered, halves the number of
+    /// open non-pinned non-busy databases. Default: true.
+    /// </summary>
+    public bool EnableMemoryPressureEviction { get; set; } = true;
+
+    /// <summary>
+    /// Memory-load percentage above which memory-pressure eviction triggers.
+    /// Compared against <c>GCMemoryInfo.MemoryLoadBytes / HighMemoryLoadThresholdBytes</c>.
+    /// Default: 80.
+    /// </summary>
+    public int MemoryPressureThresholdPercent { get; set; } = 80;
+
+    /// <summary>
+    /// Interval for the background idle-evict sweep. Default: 30 seconds.
+    /// Set to <see cref="Timeout.InfiniteTimeSpan"/> to disable idle eviction.
+    /// </summary>
+    public TimeSpan IdleEvictInterval { get; set; } = TimeSpan.FromSeconds(30);
 }

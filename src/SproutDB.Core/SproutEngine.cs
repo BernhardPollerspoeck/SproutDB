@@ -21,6 +21,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     private readonly SproutEngineSettings _settings;
     private readonly TableCache _tableCache;
     private readonly WalManager _walManager = new();
+    private readonly DatabaseScopeManager _scopes;
     private readonly IndexMetricsStore _indexMetrics = new();
     private readonly SproutAuthService? _authService;
     private readonly SproutChangeNotifier _changeNotifier = new();
@@ -79,12 +80,18 @@ public sealed class SproutEngine : ISproutServer, IDisposable
                 MasterKey = authOptions.MasterKey,
                 TtlCleanupInterval = settings.TtlCleanupInterval,
                 TtlCleanupBatchSize = settings.TtlCleanupBatchSize,
+                IdleEvictAfterSeconds = settings.IdleEvictAfterSeconds,
+                MaxOpenDatabases = settings.MaxOpenDatabases,
+                EnableMemoryPressureEviction = settings.EnableMemoryPressureEviction,
+                MemoryPressureThresholdPercent = settings.MemoryPressureThresholdPercent,
+                IdleEvictInterval = settings.IdleEvictInterval,
             };
         }
 
         _settings = settings;
         _dataDirectory = Path.GetFullPath(settings.DataDirectory);
         _tableCache = new TableCache(settings.ChunkSize);
+        _scopes = new DatabaseScopeManager(_walManager, _tableCache, settings);
         Directory.CreateDirectory(_dataDirectory);
 
         _walSyncInterval = settings.WalSyncInterval;
@@ -97,6 +104,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
         // ── Ensure _system database exists ────────────────────────
         EnsureSystemDatabase();
+        _scopes.Pin(Path.Combine(_dataDirectory, "_system"));
         LoadIndexMetrics();
 
         // ── Initialize auth if configured ────────────────────────
@@ -155,6 +163,10 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         // Parse all queries on caller thread (stateless)
         var parseResults = QueryParser.ParseMulti(query);
         var responses = new List<SproutResponse>(parseResults.Count);
+
+        // One lease covers the whole call — blocks eviction of this DB while
+        // any of these queries (incl. queued writes) are in flight.
+        using var lease = _scopes.Acquire(dbPath);
 
         foreach (var parseResult in parseResults)
         {
@@ -224,6 +236,8 @@ public sealed class SproutEngine : ISproutServer, IDisposable
                 $"invalid database name '{database}'");
 
         var dbPath = Path.Combine(_dataDirectory, dbName);
+
+        using var lease = _scopes.Acquire(dbPath);
 
         var parseResult = QueryParser.Parse(query);
         if (!parseResult.Success)
@@ -1527,6 +1541,9 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     public ISproutDatabase GetOrCreateDatabase(string name)
     {
         var dbName = LowercaseName(name);
+        if (!IsValidName(dbName))
+            throw new InvalidDatabaseNameException(name, nameof(name));
+
         var dbPath = Path.Combine(_dataDirectory, dbName);
 
         if (!_tableCache.DatabaseExists(dbPath))
@@ -1541,6 +1558,9 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     public ISproutDatabase SelectDatabase(string name)
     {
         var dbName = LowercaseName(name);
+        if (!IsValidName(dbName))
+            throw new InvalidDatabaseNameException(name, nameof(name));
+
         var dbPath = Path.Combine(_dataDirectory, dbName);
 
         if (!_tableCache.DatabaseExists(dbPath))
@@ -1682,6 +1702,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         FlushAll();
 
         // 5. Dispose handles
+        _scopes.Dispose();
         _changeNotifier.Dispose();
         _tableCache.Dispose();
         _walManager.Dispose();
