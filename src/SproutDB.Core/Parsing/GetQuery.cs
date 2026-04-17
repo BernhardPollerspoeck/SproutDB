@@ -79,6 +79,15 @@ internal sealed class GetQuery : IQuery
     public string? AggregateAlias { get; init; }
 
     /// <summary>
+    /// Additional aggregate specs beyond the first one, for queries like
+    /// <c>get plants sum stock as total, min stock as lowest, max stock as highest</c>.
+    /// The first aggregate lives in <see cref="Aggregate"/>/<see cref="AggregateColumn"/>/
+    /// <see cref="AggregateAlias"/>; extras here. All contribute keys to the single
+    /// result row.
+    /// </summary>
+    public List<AggregateSpec>? AdditionalAggregates { get; init; }
+
+    /// <summary>
     /// Optional GROUP BY columns. Null means no grouping.
     /// </summary>
     public List<SelectColumn>? GroupBy { get; init; }
@@ -98,6 +107,13 @@ internal sealed class GetQuery : IQuery
     /// When true, <see cref="PostFollowSelect"/> lists columns to exclude.
     /// </summary>
     public bool PostFollowExclude { get; init; }
+
+    /// <summary>
+    /// Computed columns (e.g. <c>quantity * unit_price as total</c>) declared
+    /// in a post-follow SELECT. Evaluated after the join so they can reference
+    /// base-table values that survived the join projection.
+    /// </summary>
+    public List<ComputedColumn>? PostFollowComputedSelect { get; init; }
 }
 
 internal enum AggregateFunction
@@ -107,6 +123,15 @@ internal enum AggregateFunction
     Min,
     Max,
     Count,
+}
+
+internal sealed class AggregateSpec
+{
+    public required AggregateFunction Function { get; init; }
+    public required string Column { get; init; }
+    public int ColumnPosition { get; init; }
+    public int ColumnLength { get; init; }
+    public string? Alias { get; init; }
 }
 
 internal readonly struct SelectColumn(string name, int position, int length, string? alias = null)

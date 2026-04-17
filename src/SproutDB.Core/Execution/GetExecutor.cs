@@ -59,9 +59,21 @@ internal static class GetExecutor
                 foreach (var comp in q.ComputedSelect)
                     computedAliases.Add(comp.Alias);
             }
+            if (q.PostFollowComputedSelect is not null)
+            {
+                computedAliases ??= new HashSet<string>(q.PostFollowComputedSelect.Count);
+                foreach (var comp in q.PostFollowComputedSelect)
+                    computedAliases.Add(comp.Alias);
+            }
 
             foreach (var col in q.OrderBy)
             {
+                // alias.column references a followed table — the projection
+                // produces rows keyed by "alias.column", so the sort key will
+                // exist on the row even though the base table doesn't have it.
+                if (q.Follow is not null && col.Name.Contains('.'))
+                    continue;
+
                 if (!IsVirtualColumn(col.Name) && !table.HasColumn(col.Name)
                     && (computedAliases is null || !computedAliases.Contains(col.Name)))
                 {
@@ -71,7 +83,7 @@ internal static class GetExecutor
             }
         }
 
-        // Validate aggregate column
+        // Validate aggregate column (first + additional)
         if (q.Aggregate.HasValue && q.AggregateColumn is not null)
         {
             if (!IsVirtualColumn(q.AggregateColumn) && !table.HasColumn(q.AggregateColumn))
@@ -86,10 +98,32 @@ internal static class GetExecutor
                 validationErrors.Add(new SproutError { Code = ErrorCodes.TYPE_MISMATCH, Message = $"'{AggregateName(q.Aggregate.Value)}' can only be used on numeric columns", Position = q.AggregateColumnPosition, Length = q.AggregateColumnLength });
             }
         }
+        if (q.AdditionalAggregates is not null)
+        {
+            foreach (var spec in q.AdditionalAggregates)
+            {
+                if (!IsVirtualColumn(spec.Column) && !table.HasColumn(spec.Column))
+                {
+                    validationErrors ??= [];
+                    validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{spec.Column}' does not exist", Position = spec.ColumnPosition, Length = spec.ColumnLength });
+                }
+                else if (spec.Function is AggregateFunction.Sum or AggregateFunction.Avg
+                         && !IsVirtualColumn(spec.Column) && !IsNumericColumn(table, spec.Column))
+                {
+                    validationErrors ??= [];
+                    validationErrors.Add(new SproutError { Code = ErrorCodes.TYPE_MISMATCH, Message = $"'{AggregateName(spec.Function)}' can only be used on numeric columns", Position = spec.ColumnPosition, Length = spec.ColumnLength });
+                }
+            }
+        }
 
         // Validate follow clauses
         if (q.Follow is not null && tableResolver is not null)
         {
+            // Track previous-follow aliases so a later follow can use them as
+            // its source table: `follow ord._id -> order_items.order_id as item`
+            // where `ord` is the alias of the preceding follow.
+            var aliasToTable = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var follow in q.Follow)
             {
                 var targetTable = tableResolver(follow.TargetTable);
@@ -101,7 +135,14 @@ internal static class GetExecutor
                 }
 
                 // Validate source column exists on appropriate table
-                var sourceTable = follow.SourceTable == q.Table ? table : tableResolver(follow.SourceTable);
+                TableHandle? sourceTable;
+                if (follow.SourceTable == q.Table)
+                    sourceTable = table;
+                else if (aliasToTable.TryGetValue(follow.SourceTable, out var resolvedFromAlias))
+                    sourceTable = tableResolver(resolvedFromAlias);
+                else
+                    sourceTable = tableResolver(follow.SourceTable);
+
                 if (!IsVirtualColumn(follow.SourceColumn) && (sourceTable is null || !sourceTable.HasColumn(follow.SourceColumn)))
                 {
                     validationErrors ??= [];
@@ -114,6 +155,9 @@ internal static class GetExecutor
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{follow.TargetColumn}' does not exist on '{follow.TargetTable}'", Position = follow.TargetColumnPosition, Length = follow.TargetColumnLength });
                 }
+
+                // Record this follow's alias for subsequent follows
+                aliasToTable[follow.Alias] = follow.TargetTable;
 
                 // Validate follow where columns
                 if (follow.Where is not null)
@@ -253,6 +297,13 @@ internal static class GetExecutor
             }
         }
 
+        // Post-follow computed columns: evaluate before projection so the
+        // aliases are available both for projection and for ORDER BY.
+        if (q.PostFollowComputedSelect is not null && data.Count > 0)
+        {
+            ApplyComputedColumns(data, q.PostFollowComputedSelect, table);
+        }
+
         // Post-follow select/exclude: filter keys on the flat joined result
         if (q.PostFollowSelect is not null && data.Count > 0)
         {
@@ -287,6 +338,16 @@ internal static class GetExecutor
                     {
                         if (row.TryGetValue(col.Name, out var val))
                             projected[col.OutputName] = val;
+                    }
+                    // Computed aliases travel with the row — explicit select
+                    // doesn't need to mention them again.
+                    if (q.PostFollowComputedSelect is not null)
+                    {
+                        foreach (var comp in q.PostFollowComputedSelect)
+                        {
+                            if (row.TryGetValue(comp.Alias, out var cval))
+                                projected[comp.Alias] = cval;
+                        }
                     }
                     data[i] = projected;
                 }
@@ -408,11 +469,34 @@ internal static class GetExecutor
     {
         var filter = WhereEngine.PrepareFilter(table, q.Where);
         var nowMs = table.HasTtl ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : 0L;
-        var colName = q.AggregateColumn!; // validated non-null before call
-        var fn = q.Aggregate!.Value;
-        var alias = q.AggregateAlias ?? AggregateName(fn);
 
-        // Read values for the aggregate column, applying where filter
+        var row = new Dictionary<string, object?>();
+
+        // First aggregate (always present here)
+        AddAggregateToRow(row, table, q.AggregateColumn!, q.Aggregate!.Value, q.AggregateAlias, filter, nowMs);
+
+        // Additional aggregates — all share the same WHERE filter so each one
+        // only needs its own column read.
+        if (q.AdditionalAggregates is not null)
+        {
+            foreach (var spec in q.AdditionalAggregates)
+                AddAggregateToRow(row, table, spec.Column, spec.Function, spec.Alias, filter, nowMs);
+        }
+
+        return new SproutResponse
+        {
+            Operation = SproutOperation.Get,
+            Data = [row],
+            Affected = 1,
+        };
+    }
+
+    private static void AddAggregateToRow(
+        Dictionary<string, object?> row, TableHandle table,
+        string colName, AggregateFunction fn, string? explicitAlias,
+        WhereEngine.FilterNode? filter, long nowMs)
+    {
+        var alias = explicitAlias ?? AggregateName(fn);
         var values = ReadAggregateValues(table, colName, filter, nowMs);
 
         object? result = fn switch
@@ -425,14 +509,7 @@ internal static class GetExecutor
             _ => null,
         };
 
-        var row = new Dictionary<string, object?> { [alias] = result };
-
-        return new SproutResponse
-        {
-            Operation = SproutOperation.Get,
-            Data = [row],
-            Affected = 1,
-        };
+        row[alias] = result;
     }
 
     // ── Grouped (group by) ─────────────────────────────────────

@@ -1,24 +1,37 @@
+using System.Collections.Concurrent;
 using SproutDB.Core.Storage;
 
 namespace SproutDB.Core;
 
 internal sealed class WalManager : IDisposable
 {
-    private readonly Dictionary<string, WalFile> _wals = [];
+    private readonly ConcurrentDictionary<string, WalFile> _wals = new();
+    private readonly ConcurrentDictionary<string, object> _locks = new();
+
+    private object GetLock(string dbPath) => _locks.GetOrAdd(dbPath, _ => new object());
 
     public WalFile GetOrOpen(string dbPath)
     {
-        if (!_wals.TryGetValue(dbPath, out var wal))
+        if (_wals.TryGetValue(dbPath, out var existing))
+            return existing;
+
+        // Serialize open vs evict for this path so an in-flight Dispose
+        // cannot race an Open on the same underlying _wal file.
+        lock (GetLock(dbPath))
         {
-            var walPath = Path.Combine(dbPath, "_wal");
-            wal = new WalFile(walPath);
+            if (_wals.TryGetValue(dbPath, out existing))
+                return existing;
+
+            var wal = new WalFile(Path.Combine(dbPath, "_wal"));
             _wals[dbPath] = wal;
+            return wal;
         }
-        return wal;
     }
 
     public void SyncAll()
     {
+        // ConcurrentDictionary.Values returns a snapshot; WalFile.SyncToDisk
+        // is disposed-safe, so a concurrent Evict is harmless here.
         foreach (var wal in _wals.Values)
             wal.SyncToDisk();
     }
@@ -42,10 +55,10 @@ internal sealed class WalManager : IDisposable
 
     public void Evict(string dbPath)
     {
-        if (_wals.TryGetValue(dbPath, out var wal))
+        lock (GetLock(dbPath))
         {
-            wal.Dispose();
-            _wals.Remove(dbPath);
+            if (_wals.TryRemove(dbPath, out var wal))
+                wal.Dispose();
         }
     }
 
@@ -54,5 +67,6 @@ internal sealed class WalManager : IDisposable
         foreach (var wal in _wals.Values)
             wal.Dispose();
         _wals.Clear();
+        _locks.Clear();
     }
 }

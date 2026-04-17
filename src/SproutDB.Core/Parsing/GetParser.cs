@@ -12,12 +12,17 @@ internal static class GetParser
         var tableName = ctx.GetLowercaseText(nameToken);
         ctx.Advance();
 
-        // Optional: aggregate (sum/avg/min/max column [as alias])
+        // Optional: aggregate (sum/avg/min/max column [as alias]) — the first
+        // one goes into the scalar Aggregate/AggregateColumn/AggregateAlias
+        // fields; additional aggregates after a comma go into the list. This
+        // lets one query produce multiple stats in a single row, e.g.
+        // "sum stock as total, min stock as lowest, max stock as highest".
         AggregateFunction? aggregate = null;
         string? aggregateColumn = null;
         int aggregateColumnPosition = 0;
         int aggregateColumnLength = 0;
         string? aggregateAlias = null;
+        List<AggregateSpec>? additionalAggregates = null;
 
         if (ctx.Peek().Type != TokenType.Eof)
         {
@@ -33,7 +38,6 @@ internal static class GetParser
                 aggregateColumnLength = colToken.Length;
                 ctx.Advance();
 
-                // Optional: as <alias>
                 if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("as"))
                 {
                     var aliasToken = ctx.Peek();
@@ -41,6 +45,43 @@ internal static class GetParser
                         return ctx.Error(aliasToken, ErrorCodes.SYNTAX_ERROR, "expected alias name after 'as'");
                     aggregateAlias = ctx.GetLowercaseText(aliasToken);
                     ctx.Advance();
+                }
+
+                // Additional aggregates separated by commas
+                while (ctx.Peek().Type == TokenType.Comma)
+                {
+                    ctx.Advance(); // consume comma
+
+                    var nextFn = TryMatchAggregate(ctx);
+                    if (!nextFn.HasValue)
+                        return ctx.Error(ctx.Peek(), ErrorCodes.SYNTAX_ERROR,
+                            "expected aggregate function ('sum', 'avg', 'min', 'max', 'count') after comma");
+
+                    var extraColToken = ctx.Peek();
+                    if (extraColToken.Type != TokenType.Identifier)
+                        return ctx.Error(extraColToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLUMN_NAME);
+                    var extraCol = ctx.GetLowercaseText(extraColToken);
+                    ctx.Advance();
+
+                    string? extraAlias = null;
+                    if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("as"))
+                    {
+                        var extraAliasToken = ctx.Peek();
+                        if (extraAliasToken.Type != TokenType.Identifier)
+                            return ctx.Error(extraAliasToken, ErrorCodes.SYNTAX_ERROR, "expected alias name after 'as'");
+                        extraAlias = ctx.GetLowercaseText(extraAliasToken);
+                        ctx.Advance();
+                    }
+
+                    additionalAggregates ??= [];
+                    additionalAggregates.Add(new AggregateSpec
+                    {
+                        Function = nextFn.Value,
+                        Column = extraCol,
+                        ColumnPosition = extraColToken.Start,
+                        ColumnLength = extraColToken.Length,
+                        Alias = extraAlias,
+                    });
                 }
             }
         }
@@ -90,89 +131,21 @@ internal static class GetParser
             isDistinct = true;
         }
 
-        // Optional: where <column> <op> <value>
+        // ── Trailing clauses (pre-follow) ─────────────────────────
+        // These may appear in any order (each at most once). After the
+        // follow+postFollowSelect block we parse them again — saved queries
+        // routinely put order/limit *after* follow+select, which is natural
+        // but didn't fit the old strict sequence.
         WhereNode? where = null;
-
-        if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("where"))
-        {
-            where = ParseWhere(ctx);
-            if (ctx.HasErrors) return ctx.Fail();
-        }
-
-        // Optional: count
         var isCount = false;
-        if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("count"))
-        {
-            isCount = true;
-        }
-
-        // Optional: group by col1, col2
         List<SelectColumn>? groupBy = null;
-
-        if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("group"))
-        {
-            if (!ctx.MatchKeyword("by"))
-            {
-                return ctx.Error(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected 'by' after 'group'");
-            }
-            groupBy = ParseGroupByList(ctx);
-            if (ctx.HasErrors) return ctx.Fail();
-        }
-
-        // Optional: order by col [desc], col2 [desc]
         List<OrderByColumn>? orderBy = null;
-
-        if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("order"))
-        {
-            if (!ctx.MatchKeyword("by"))
-            {
-                return ctx.Error(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected 'by' after 'order'");
-            }
-            orderBy = ParseOrderByList(ctx);
-            if (ctx.HasErrors) return ctx.Fail();
-        }
-
-        // Optional: limit N
         int? limit = null;
-
-        if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("limit"))
-        {
-            var limitToken = ctx.Peek();
-            if (limitToken.Type != TokenType.IntegerLiteral)
-            {
-                return ctx.Error(limitToken, ErrorCodes.SYNTAX_ERROR, "expected integer after 'limit'");
-            }
-            limit = int.Parse(ctx.GetText(limitToken));
-            ctx.Advance();
-        }
-
-        // Optional: page N size M
         int? page = null;
         int? size = null;
 
-        if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("page"))
-        {
-            var pageToken = ctx.Peek();
-            if (pageToken.Type != TokenType.IntegerLiteral)
-            {
-                return ctx.Error(pageToken, ErrorCodes.SYNTAX_ERROR, "expected integer after 'page'");
-            }
-            page = int.Parse(ctx.GetText(pageToken));
-            ctx.Advance();
-
-            if (!ctx.MatchKeyword("size"))
-            {
-                return ctx.Error(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected 'size' after page number");
-            }
-
-            var sizeToken = ctx.Peek();
-            if (sizeToken.Type != TokenType.IntegerLiteral)
-            {
-                return ctx.Error(sizeToken, ErrorCodes.SYNTAX_ERROR, "expected integer after 'size'");
-            }
-            size = int.Parse(ctx.GetText(sizeToken));
-            ctx.Advance();
-        }
+        if (!ParseTrailingClauses(ctx, ref where, ref isCount, ref groupBy, ref orderBy, ref limit, ref page, ref size))
+            return ctx.Fail();
 
         // Optional: follow (join) clauses — zero or more
         List<FollowClause>? followClauses = null;
@@ -190,13 +163,14 @@ internal static class GetParser
 
         // Optional: select / -select after follow (shapes the final joined result)
         List<SelectColumn>? postFollowSelect = null;
+        List<ComputedColumn>? postFollowComputed = null;
         var postFollowExclude = false;
 
         if (followClauses is not null && aggregate is null && ctx.Peek().Type != TokenType.Eof)
         {
             if (ctx.MatchKeyword("select"))
             {
-                (postFollowSelect, _) = ParseSelectList(ctx);
+                (postFollowSelect, postFollowComputed) = ParseSelectList(ctx);
                 if (ctx.HasErrors) return ctx.Fail();
             }
             else if (ctx.Peek().Type == TokenType.Minus)
@@ -206,7 +180,7 @@ internal static class GetParser
                 if (ctx.MatchKeyword("select"))
                 {
                     postFollowExclude = true;
-                    (postFollowSelect, _) = ParseSelectList(ctx);
+                    (postFollowSelect, postFollowComputed) = ParseSelectList(ctx);
                     if (ctx.HasErrors) return ctx.Fail();
                 }
                 else
@@ -216,6 +190,12 @@ internal static class GetParser
                 }
             }
         }
+
+        // ── Trailing clauses (post-follow) ────────────────────────
+        // Same clauses again so users can write e.g.
+        // "follow ... select ... where ... order by ... limit 50".
+        if (!ParseTrailingClauses(ctx, ref where, ref isCount, ref groupBy, ref orderBy, ref limit, ref page, ref size))
+            return ctx.Fail();
 
         ctx.ExpectEof();
         if (ctx.HasErrors) return ctx.Fail();
@@ -238,10 +218,12 @@ internal static class GetParser
             AggregateColumnPosition = aggregateColumnPosition,
             AggregateColumnLength = aggregateColumnLength,
             AggregateAlias = aggregateAlias,
+            AdditionalAggregates = additionalAggregates,
             GroupBy = groupBy,
             Follow = followClauses,
             PostFollowSelect = postFollowSelect,
             PostFollowExclude = postFollowExclude,
+            PostFollowComputedSelect = postFollowComputed,
         });
     }
 
@@ -342,7 +324,27 @@ internal static class GetParser
 
     private static WhereNode? ParseComparison(ParserContext ctx)
     {
-        // Column name
+        // Parenthesized sub-expression: "(a = 1 or b = 2)"
+        // Lets callers write e.g. "not (a = 1 or b = 2)" or
+        // "(x < 5) and y > 0". Treated at this level so any comparison /
+        // NOT / AND / OR can be wrapped.
+        if (ctx.Peek().Type == TokenType.LeftParen)
+        {
+            ctx.Advance(); // consume '('
+            var inner = ParseOrExpr(ctx);
+            if (inner is null || ctx.HasErrors) return null;
+
+            if (ctx.Peek().Type != TokenType.RightParen)
+            {
+                ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected ')'");
+                return null;
+            }
+            ctx.Advance(); // consume ')'
+            return inner;
+        }
+
+        // Column name — may be a bare identifier or alias.column (for
+        // follow-where and post-follow where). The executor strips the alias.
         var colToken = ctx.Peek();
         if (colToken.Type != TokenType.Identifier)
         {
@@ -351,6 +353,19 @@ internal static class GetParser
         }
         var colName = ctx.GetLowercaseText(colToken);
         ctx.Advance();
+
+        if (ctx.Peek().Type == TokenType.Dot)
+        {
+            ctx.Advance(); // consume dot
+            var subToken = ctx.Peek();
+            if (subToken.Type != TokenType.Identifier)
+            {
+                ctx.AddError(subToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLUMN_NAME);
+                return null;
+            }
+            colName = $"{colName}.{ctx.GetLowercaseText(subToken)}";
+            ctx.Advance();
+        }
 
         // Check for 'is null' / 'is not null'
         var opToken = ctx.Peek();
@@ -641,21 +656,38 @@ internal static class GetParser
                 colName = $"{colName}.{ctx.GetLowercaseText(subToken)}";
                 ctx.Advance();
 
-                // Check for optional alias
-                string? dotAlias = null;
-                if (ctx.MatchKeyword("as"))
-                {
-                    var aliasToken = ctx.Peek();
-                    if (aliasToken.Type != TokenType.Identifier)
-                    {
-                        ctx.AddError(aliasToken, ErrorCodes.SYNTAX_ERROR, "expected alias name after 'as'");
-                        return (columns, computed);
-                    }
-                    dotAlias = ctx.GetLowercaseText(aliasToken);
-                    ctx.Advance();
-                }
+                var leftLen = subToken.Start + subToken.Length - token.Start;
 
-                columns.Add(new SelectColumn(colName, token.Start, subToken.Start + subToken.Length - token.Start, dotAlias));
+                // alias.column followed by arithmetic → computed column
+                // (e.g. "item.quantity * item.unit_price as line_total")
+                if (IsArithmeticOp(ctx.Peek().Type))
+                {
+                    var comp = ParseComputedColumnTail(ctx, token, colName, leftLen);
+                    if (ctx.HasErrors) return (columns, computed);
+                    if (comp is not null)
+                    {
+                        computed ??= [];
+                        computed.Add(comp);
+                    }
+                }
+                else
+                {
+                    // Check for optional alias
+                    string? dotAlias = null;
+                    if (ctx.MatchKeyword("as"))
+                    {
+                        var aliasToken = ctx.Peek();
+                        if (aliasToken.Type != TokenType.Identifier)
+                        {
+                            ctx.AddError(aliasToken, ErrorCodes.SYNTAX_ERROR, "expected alias name after 'as'");
+                            return (columns, computed);
+                        }
+                        dotAlias = ctx.GetLowercaseText(aliasToken);
+                        ctx.Advance();
+                    }
+
+                    columns.Add(new SelectColumn(colName, token.Start, leftLen, dotAlias));
+                }
             }
             // Check if next token is an arithmetic operator → computed field
             else if (IsArithmeticOp(ctx.PeekAt(1).Type))
@@ -720,13 +752,23 @@ internal static class GetParser
 
     private static ComputedColumn? ParseComputedColumn(ParserContext ctx, Token leftToken, string leftCol)
     {
-        ctx.Advance(); // consume left column
+        ctx.Advance(); // consume left column (bare identifier, 1 token)
+        return ParseComputedColumnTail(ctx, leftToken, leftCol, leftToken.Length);
+    }
 
+    /// <summary>
+    /// Parses <c>op right-operand as alias</c> for a computed select column.
+    /// The left operand has already been consumed; its original token + full
+    /// text length (e.g. spanning <c>"item.quantity"</c> = 3 tokens) are
+    /// passed in so the ComputedColumn's position data covers the source text.
+    /// </summary>
+    private static ComputedColumn? ParseComputedColumnTail(
+        ParserContext ctx, Token leftToken, string leftCol, int leftLen)
+    {
         var opToken = ctx.Peek();
         var op = ToArithmeticOp(opToken.Type);
         ctx.Advance(); // consume operator
 
-        // Right operand: column name or numeric literal
         var rightToken = ctx.Peek();
         string? rightColumn = null;
         double? rightLiteral = null;
@@ -737,6 +779,21 @@ internal static class GetParser
         {
             rightColumn = ctx.GetLowercaseText(rightToken);
             ctx.Advance();
+
+            // Right operand may also be alias.column
+            if (ctx.Peek().Type == TokenType.Dot)
+            {
+                ctx.Advance();
+                var subToken = ctx.Peek();
+                if (subToken.Type != TokenType.Identifier)
+                {
+                    ctx.AddError(subToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLUMN_NAME);
+                    return null;
+                }
+                rightColumn = $"{rightColumn}.{ctx.GetLowercaseText(subToken)}";
+                rightLen = subToken.Start + subToken.Length - rightPos;
+                ctx.Advance();
+            }
         }
         else if (rightToken.Type is TokenType.IntegerLiteral or TokenType.FloatLiteral)
         {
@@ -745,7 +802,6 @@ internal static class GetParser
         }
         else if (rightToken.Type == TokenType.Minus)
         {
-            // Negative literal
             ctx.Advance();
             var numToken = ctx.Peek();
             if (numToken.Type is TokenType.IntegerLiteral or TokenType.FloatLiteral)
@@ -766,7 +822,6 @@ internal static class GetParser
             return null;
         }
 
-        // Required: as <alias>
         if (!ctx.MatchKeyword("as"))
         {
             ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "computed field requires 'as <alias>'");
@@ -786,7 +841,7 @@ internal static class GetParser
         {
             LeftColumn = leftCol,
             LeftPosition = leftToken.Start,
-            LeftLength = leftToken.Length,
+            LeftLength = leftLen,
             Operator = op,
             RightColumn = rightColumn,
             RightPosition = rightPos,
@@ -849,6 +904,122 @@ internal static class GetParser
     {
         return ctx.IsKeyword(token, "order") || ctx.IsKeyword(token, "limit")
             || ctx.IsKeyword(token, "page") || ctx.IsKeyword(token, "follow");
+    }
+
+    // ── Trailing clauses (where/count/group/order/limit/page) ──
+
+    /// <summary>
+    /// Parses any of the tail clauses (where, count, group by, order by,
+    /// limit, page N size M) in any order, each at most once. Values that are
+    /// already set (i.e. were parsed by a previous invocation) are left alone
+    /// — the parser won't consume a second occurrence. Unknown tokens simply
+    /// end the loop, leaving them for the outer parser / ExpectEof to handle.
+    ///
+    /// Returns <c>false</c> if parsing produced an error (caller should
+    /// <c>return ctx.Fail()</c>); otherwise <c>true</c>.
+    /// </summary>
+    private static bool ParseTrailingClauses(
+        ParserContext ctx,
+        ref WhereNode? where,
+        ref bool isCount,
+        ref List<SelectColumn>? groupBy,
+        ref List<OrderByColumn>? orderBy,
+        ref int? limit,
+        ref int? page,
+        ref int? size)
+    {
+        while (ctx.Peek().Type != TokenType.Eof)
+        {
+            var token = ctx.Peek();
+            if (token.Type != TokenType.Identifier) break;
+
+            if (where is null && ctx.IsKeyword(token, "where"))
+            {
+                ctx.Advance();
+                where = ParseWhere(ctx);
+                if (ctx.HasErrors) return false;
+                continue;
+            }
+
+            if (!isCount && ctx.IsKeyword(token, "count"))
+            {
+                ctx.Advance();
+                isCount = true;
+                continue;
+            }
+
+            if (groupBy is null && ctx.IsKeyword(token, "group"))
+            {
+                ctx.Advance();
+                if (!ctx.MatchKeyword("by"))
+                {
+                    ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected 'by' after 'group'");
+                    return false;
+                }
+                groupBy = ParseGroupByList(ctx);
+                if (ctx.HasErrors) return false;
+                continue;
+            }
+
+            if (orderBy is null && ctx.IsKeyword(token, "order"))
+            {
+                ctx.Advance();
+                if (!ctx.MatchKeyword("by"))
+                {
+                    ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected 'by' after 'order'");
+                    return false;
+                }
+                orderBy = ParseOrderByList(ctx);
+                if (ctx.HasErrors) return false;
+                continue;
+            }
+
+            if (limit is null && ctx.IsKeyword(token, "limit"))
+            {
+                ctx.Advance();
+                var limitToken = ctx.Peek();
+                if (limitToken.Type != TokenType.IntegerLiteral)
+                {
+                    ctx.AddError(limitToken, ErrorCodes.SYNTAX_ERROR, "expected integer after 'limit'");
+                    return false;
+                }
+                limit = int.Parse(ctx.GetText(limitToken));
+                ctx.Advance();
+                continue;
+            }
+
+            if (page is null && ctx.IsKeyword(token, "page"))
+            {
+                ctx.Advance();
+                var pageToken = ctx.Peek();
+                if (pageToken.Type != TokenType.IntegerLiteral)
+                {
+                    ctx.AddError(pageToken, ErrorCodes.SYNTAX_ERROR, "expected integer after 'page'");
+                    return false;
+                }
+                page = int.Parse(ctx.GetText(pageToken));
+                ctx.Advance();
+                if (!ctx.MatchKeyword("size"))
+                {
+                    ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected 'size' after page number");
+                    return false;
+                }
+                var sizeToken = ctx.Peek();
+                if (sizeToken.Type != TokenType.IntegerLiteral)
+                {
+                    ctx.AddError(sizeToken, ErrorCodes.SYNTAX_ERROR, "expected integer after 'size'");
+                    return false;
+                }
+                size = int.Parse(ctx.GetText(sizeToken));
+                ctx.Advance();
+                continue;
+            }
+
+            // No trailing clause matched — let the outer parser handle this token
+            break;
+        }
+
+        return true;
     }
 
     // ── Follow (join) ──────────────────────────────────────────
@@ -1154,6 +1325,20 @@ internal static class GetParser
 
             var name = ctx.GetLowercaseText(token);
             ctx.Advance();
+
+            // alias.column — same convention as SELECT / WHERE
+            if (ctx.Peek().Type == TokenType.Dot)
+            {
+                ctx.Advance();
+                var subToken = ctx.Peek();
+                if (subToken.Type != TokenType.Identifier)
+                {
+                    ctx.AddError(subToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLUMN_NAME);
+                    return columns;
+                }
+                name = $"{name}.{ctx.GetLowercaseText(subToken)}";
+                ctx.Advance();
+            }
 
             var descending = false;
             if (ctx.Peek().Type == TokenType.Identifier && ctx.IsKeyword(ctx.Peek(), "desc"))

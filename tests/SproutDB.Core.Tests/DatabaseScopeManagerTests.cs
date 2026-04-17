@@ -153,12 +153,14 @@ public class DatabaseScopeManagerTests : IDisposable
         var p3 = EnsurePath("c"); tableCache.RegisterDatabase(p3);
         var p4 = EnsurePath("d"); tableCache.RegisterDatabase(p4);
 
+        // Windows TickCount64 is coarse (~15ms); sleep well past its granularity
+        // so LastAccessTicks ordering is deterministic.
         using (scopes.Acquire(p1)) { }
-        Thread.Sleep(5);
+        Thread.Sleep(25);
         using (scopes.Acquire(p2)) { }
-        Thread.Sleep(5);
+        Thread.Sleep(25);
         using (scopes.Acquire(p3)) { }
-        Thread.Sleep(5);
+        Thread.Sleep(25);
 
         // All three held → count=3, cap=3
         Assert.Equal(3, scopes.OpenDatabaseCount);

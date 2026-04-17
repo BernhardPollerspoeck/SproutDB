@@ -108,4 +108,35 @@ public sealed class SproutEngineSettings
     /// Set to <see cref="Timeout.InfiniteTimeSpan"/> to disable idle eviction.
     /// </summary>
     public TimeSpan IdleEvictInterval { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Safety-net cap on the number of simultaneously open table handles across
+    /// all databases. When the cap is reached, opening a new table evicts the
+    /// least-recently-used table from a database that is currently not under
+    /// an active lease (no query in flight). Tables in busy databases are
+    /// never evicted mid-query. Set to 0 to disable. Default: 512.
+    /// </summary>
+    public int MaxOpenTables { get; set; } = 512;
+
+    /// <summary>
+    /// When true, the engine inspects the OS resource limits at startup
+    /// (<c>RLIMIT_NOFILE</c>) and lowers <see cref="MaxOpenDatabases"/> and
+    /// <see cref="MaxOpenTables"/> if the configured caps would exceed the
+    /// FD budget. The caller's values are never raised — auto-tune only
+    /// protects against EMFILE on constrained hosts. Default: true.
+    /// </summary>
+    public bool AutoTuneCaps { get; set; } = true;
+
+    /// <summary>
+    /// Used by auto-tune to size the FD budget. Set this to your workload's
+    /// rough average: how many tables a typical tenant/database has.
+    /// Default: 30.
+    /// </summary>
+    public int AutoTuneAvgTablesPerDatabase { get; set; } = 30;
+
+    /// <summary>
+    /// Used by auto-tune to size the FD budget. Rough average of column +
+    /// btree handles opened per table under regular load. Default: 8.
+    /// </summary>
+    public int AutoTuneAvgHandlesPerTable { get; set; } = 8;
 }

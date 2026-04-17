@@ -5,8 +5,8 @@ internal sealed class TableHandle : IDisposable
     private readonly string _tablePath;
     private readonly string _schemaPath;
     private readonly int _chunkSize;
-    private readonly Dictionary<string, ColumnHandle> _columns = [];
-    private readonly Dictionary<string, BTreeHandle> _btrees = [];
+    private readonly Dictionary<string, Lazy<ColumnHandle>> _columns = [];
+    private readonly Dictionary<string, Lazy<BTreeHandle>> _btrees = [];
 
     public string TablePath => _tablePath;
     public TableSchema Schema { get; private set; }
@@ -46,24 +46,35 @@ internal sealed class TableHandle : IDisposable
 
         var handle = new TableHandle(tablePath, schema, index, ttl, chunkSize);
 
-        // Open all column handles + B-Trees
+        // Register columns + B-Trees lazily — each handle opens its MMF only
+        // when first accessed. Keeps a cold table at ~2 FDs (index + optional
+        // ttl) regardless of column/index count.
         foreach (var col in schema.Columns)
-        {
-            var colPath = Path.Combine(tablePath, $"{col.Name}.col");
-            handle._columns[col.Name] = new ColumnHandle(colPath, col, chunkSize);
-
-            var btreePath = Path.Combine(tablePath, $"{col.Name}.btree");
-            if (File.Exists(btreePath))
-            {
-                ColumnTypes.TryParse(col.Type, out var colType);
-                handle._btrees[col.Name] = BTreeHandle.Open(btreePath, colType, col.Size);
-            }
-        }
+            handle.RegisterColumn(col);
 
         return handle;
     }
 
-    public ColumnHandle GetColumn(string name) => _columns[name];
+    private void RegisterColumn(ColumnSchemaEntry col)
+    {
+        var colPath = Path.Combine(_tablePath, $"{col.Name}.col");
+        var colEntry = col;
+        var chunkSize = _chunkSize;
+        _columns[col.Name] = new Lazy<ColumnHandle>(
+            () => new ColumnHandle(colPath, colEntry, chunkSize));
+
+        var btreePath = Path.Combine(_tablePath, $"{col.Name}.btree");
+        if (File.Exists(btreePath))
+        {
+            _btrees[col.Name] = new Lazy<BTreeHandle>(() =>
+            {
+                ColumnTypes.TryParse(colEntry.Type, out var colType);
+                return BTreeHandle.Open(btreePath, colType, colEntry.Size);
+            });
+        }
+    }
+
+    public ColumnHandle GetColumn(string name) => _columns[name].Value;
 
     public bool HasColumn(string name) => _columns.ContainsKey(name);
 
@@ -73,18 +84,25 @@ internal sealed class TableHandle : IDisposable
 
     public bool HasBTree(string colName) => _btrees.ContainsKey(colName);
 
-    public BTreeHandle GetBTree(string colName) => _btrees[colName];
+    public BTreeHandle GetBTree(string colName) => _btrees[colName].Value;
 
     public void AddBTree(string colName, BTreeHandle handle)
     {
-        _btrees[colName] = handle;
+        // The caller hands us an already-open handle. Wrap it in a Lazy that is
+        // immediately materialized so Dispose/Flush see IsValueCreated == true
+        // and actually close the file.
+        var captured = handle;
+        var lazy = new Lazy<BTreeHandle>(() => captured);
+        _ = lazy.Value;
+        _btrees[colName] = lazy;
     }
 
     public void RemoveBTree(string colName)
     {
-        if (_btrees.TryGetValue(colName, out var handle))
+        if (_btrees.TryGetValue(colName, out var lazy))
         {
-            handle.Dispose();
+            if (lazy.IsValueCreated)
+                lazy.Value.Dispose();
             _btrees.Remove(colName);
         }
 
@@ -94,28 +112,7 @@ internal sealed class TableHandle : IDisposable
     }
 
     /// <summary>
-    /// Rebuilds all B-Trees from source column data.
-    /// Used to repair B-Trees that may have accumulated duplicate entries.
-    /// </summary>
-    public void RebuildAllBTrees()
-    {
-        foreach (var colName in _btrees.Keys.ToList())
-        {
-            var col = _columns[colName];
-            var schema = col.Schema;
-            ColumnTypes.TryParse(schema.Type, out var colType);
-
-            _btrees[colName].Dispose();
-
-            var btreePath = Path.Combine(_tablePath, $"{colName}.btree");
-            File.Delete(btreePath);
-
-            _btrees[colName] = BTreeHandle.BuildFromColumn(btreePath, col, Index, colType, schema.Size);
-        }
-    }
-
-    /// <summary>
-    /// Adds a new column to this table (creates .col file, opens handle, updates schema).
+    /// Adds a new column to this table (creates .col file, registers handle, updates schema).
     /// </summary>
     public void AddColumn(ColumnSchemaEntry entry)
     {
@@ -128,37 +125,41 @@ internal sealed class TableHandle : IDisposable
             fs.SetLength((long)_chunkSize * entry.EntrySize);
         }
 
-        // Open handle
-        _columns[entry.Name] = new ColumnHandle(colPath, entry, _chunkSize);
+        RegisterColumn(entry);
     }
 
     /// <summary>
     /// Replaces the schema entry for an existing column (type expansion).
-    /// Reopens the column handle if entry size changed.
+    /// Re-registers the column handle if entry size changed.
     /// </summary>
     public void UpdateColumnSchema(ColumnSchemaEntry updated)
     {
         var idx = Schema.Columns.FindIndex(c => c.Name == updated.Name);
         Schema.Columns[idx] = updated;
 
-        // If entry size changed, reopen handle
-        if (_columns.TryGetValue(updated.Name, out var existing) &&
-            existing.Schema.EntrySize != updated.EntrySize)
+        // If entry size changed, re-register (existing handle becomes stale)
+        if (_columns.TryGetValue(updated.Name, out var existing)
+            && existing.IsValueCreated
+            && existing.Value.Schema.EntrySize != updated.EntrySize)
         {
-            existing.Dispose();
-            var colPath = Path.Combine(_tablePath, $"{updated.Name}.col");
-            _columns[updated.Name] = new ColumnHandle(colPath, updated);
+            existing.Value.Dispose();
         }
+
+        // Rebuild the Lazy factory with the new schema entry
+        var colPath = Path.Combine(_tablePath, $"{updated.Name}.col");
+        _columns[updated.Name] = new Lazy<ColumnHandle>(
+            () => new ColumnHandle(colPath, updated));
     }
 
     /// <summary>
-    /// Removes a column: disposes handle, deletes .col file, updates schema.
+    /// Removes a column: disposes handle if opened, deletes .col file, updates schema.
     /// </summary>
     public void RemoveColumn(string name)
     {
-        if (_columns.TryGetValue(name, out var handle))
+        if (_columns.TryGetValue(name, out var lazy))
         {
-            handle.Dispose();
+            if (lazy.IsValueCreated)
+                lazy.Value.Dispose();
             _columns.Remove(name);
         }
 
@@ -174,38 +175,41 @@ internal sealed class TableHandle : IDisposable
     }
 
     /// <summary>
-    /// Renames a column: disposes old handle, renames .col file, reopens handle, updates schema.
+    /// Renames a column: disposes old handle if open, renames .col file,
+    /// re-registers handle, updates schema.
     /// </summary>
     public void RenameColumn(string oldName, string newName)
     {
         var oldPath = Path.Combine(_tablePath, $"{oldName}.col");
         var newPath = Path.Combine(_tablePath, $"{newName}.col");
 
-        // Dispose old handle so file is released
-        if (_columns.TryGetValue(oldName, out var handle))
+        if (_columns.TryGetValue(oldName, out var lazy))
         {
-            handle.Dispose();
+            if (lazy.IsValueCreated)
+                lazy.Value.Dispose();
             _columns.Remove(oldName);
         }
 
-        // Rename file on disk
         File.Move(oldPath, newPath);
 
-        // Update schema entry
         var entry = Schema.Columns.Find(c => c.Name == oldName);
         if (entry is not null)
             entry.Name = newName;
 
         SaveSchema();
 
-        // Reopen handle with new name
         if (entry is not null)
-            _columns[newName] = new ColumnHandle(newPath, entry);
+        {
+            var capturedEntry = entry;
+            _columns[newName] = new Lazy<ColumnHandle>(
+                () => new ColumnHandle(newPath, capturedEntry));
+        }
 
         // Rename B-Tree if exists
-        if (_btrees.TryGetValue(oldName, out var btree))
+        if (_btrees.TryGetValue(oldName, out var btreeLazy))
         {
-            btree.Dispose();
+            if (btreeLazy.IsValueCreated)
+                btreeLazy.Value.Dispose();
             _btrees.Remove(oldName);
 
             var oldBtreePath = Path.Combine(_tablePath, $"{oldName}.btree");
@@ -215,8 +219,12 @@ internal sealed class TableHandle : IDisposable
                 File.Move(oldBtreePath, newBtreePath);
                 if (entry is not null)
                 {
-                    ColumnTypes.TryParse(entry.Type, out var colType);
-                    _btrees[newName] = BTreeHandle.Open(newBtreePath, colType, entry.Size);
+                    var capturedEntry = entry;
+                    _btrees[newName] = new Lazy<BTreeHandle>(() =>
+                    {
+                        ColumnTypes.TryParse(capturedEntry.Type, out var colType);
+                        return BTreeHandle.Open(newBtreePath, colType, capturedEntry.Size);
+                    });
                 }
             }
         }
@@ -239,15 +247,17 @@ internal sealed class TableHandle : IDisposable
         var colPath = Path.Combine(_tablePath, $"{name}.col");
         var tmpPath = colPath + ".tmp";
 
-        // Dispose old handle so file is released for reading
-        if (_columns.TryGetValue(name, out var oldHandle))
+        // Dispose old handle if it had been opened
+        if (_columns.TryGetValue(name, out var lazy))
         {
-            oldHandle.Flush();
-            oldHandle.Dispose();
+            if (lazy.IsValueCreated)
+            {
+                lazy.Value.Flush();
+                lazy.Value.Dispose();
+            }
             _columns.Remove(name);
         }
 
-        // Build new file: read old file raw, write entries with new size
         using (var oldFs = new FileStream(colPath, FileMode.Open, FileAccess.Read, FileShare.Read))
         using (var newFs = File.Create(tmpPath))
         {
@@ -262,27 +272,22 @@ internal sealed class TableHandle : IDisposable
                 oldFs.ReadExactly(oldBuf);
                 Array.Clear(newBuf);
 
-                // Copy flag byte
                 newBuf[0] = oldBuf[0];
-
-                // Copy value bytes (truncate if shrinking)
                 Buffer.BlockCopy(oldBuf, 1, newBuf, 1, copySize);
 
                 newFs.Write(newBuf);
             }
         }
 
-        // Swap: delete old, rename tmp
         File.Delete(colPath);
         File.Move(tmpPath, colPath);
 
-        // Update schema
         entry.Size = newSize;
         entry.EntrySize = newEntrySize;
         SaveSchema();
 
-        // Reopen handle
-        _columns[name] = new ColumnHandle(colPath, entry);
+        var capturedEntry = entry;
+        _columns[name] = new Lazy<ColumnHandle>(() => new ColumnHandle(colPath, capturedEntry));
     }
 
     /// <summary>
@@ -296,20 +301,20 @@ internal sealed class TableHandle : IDisposable
         var colPath = Path.Combine(_tablePath, $"{entry.Name}.col");
         var tmpPath = colPath + ".tmp";
 
-        // Dispose old handle so file is released
-        if (_columns.TryGetValue(entry.Name, out var oldHandle))
+        if (_columns.TryGetValue(entry.Name, out var lazy))
         {
-            oldHandle.Flush();
-            oldHandle.Dispose();
+            if (lazy.IsValueCreated)
+            {
+                lazy.Value.Flush();
+                lazy.Value.Dispose();
+            }
             _columns.Remove(entry.Name);
         }
 
-        // Determine entry count from old file
         var oldEntrySize = entry.EntrySize;
         var oldFileLength = new FileInfo(colPath).Length;
         var entryCount = oldFileLength / oldEntrySize;
 
-        // Create temporary schema entry for new handle
         var tmpEntry = new ColumnSchemaEntry
         {
             Name = entry.Name,
@@ -322,13 +327,12 @@ internal sealed class TableHandle : IDisposable
             IsUnique = entry.IsUnique,
         };
 
-        // Create new .tmp file with correct capacity
         using (var fs = File.Create(tmpPath))
         {
             fs.SetLength(entryCount * newEntrySize);
         }
 
-        // Open handle on .tmp with new type, write all values
+        // Temporarily open a handle on .tmp to write migrated values
         var tmpHandle = new ColumnHandle(tmpPath, tmpEntry, _chunkSize);
         foreach (var (place, raw) in values)
         {
@@ -337,11 +341,9 @@ internal sealed class TableHandle : IDisposable
         tmpHandle.Flush();
         tmpHandle.Dispose();
 
-        // Safe swap: delete old, rename tmp
         File.Delete(colPath);
         File.Move(tmpPath, colPath);
 
-        // Update schema entry in-place
         entry.Type = tmpEntry.Type;
         entry.Size = newSize;
         entry.EntrySize = newEntrySize;
@@ -349,8 +351,10 @@ internal sealed class TableHandle : IDisposable
         // Remove B-Tree if exists (encoded values changed size)
         RemoveBTree(entry.Name);
 
-        // Reopen handle on final file
-        _columns[entry.Name] = new ColumnHandle(colPath, entry, _chunkSize);
+        var capturedEntry = entry;
+        var chunkSize = _chunkSize;
+        _columns[entry.Name] = new Lazy<ColumnHandle>(
+            () => new ColumnHandle(colPath, capturedEntry, chunkSize));
     }
 
     // ── Blob file helpers ────────────────────────────────────
@@ -424,10 +428,16 @@ internal sealed class TableHandle : IDisposable
     {
         Index.Flush();
         Ttl?.Flush();
-        foreach (var col in _columns.Values)
-            col.Flush();
-        foreach (var btree in _btrees.Values)
-            btree.Flush();
+        foreach (var lazy in _columns.Values)
+        {
+            if (lazy.IsValueCreated)
+                lazy.Value.Flush();
+        }
+        foreach (var lazy in _btrees.Values)
+        {
+            if (lazy.IsValueCreated)
+                lazy.Value.Flush();
+        }
     }
 
     public void SaveSchema()
@@ -439,11 +449,17 @@ internal sealed class TableHandle : IDisposable
     {
         Index.Dispose();
         Ttl?.Dispose();
-        foreach (var col in _columns.Values)
-            col.Dispose();
+        foreach (var lazy in _columns.Values)
+        {
+            if (lazy.IsValueCreated)
+                lazy.Value.Dispose();
+        }
         _columns.Clear();
-        foreach (var btree in _btrees.Values)
-            btree.Dispose();
+        foreach (var lazy in _btrees.Values)
+        {
+            if (lazy.IsValueCreated)
+                lazy.Value.Dispose();
+        }
         _btrees.Clear();
     }
 }

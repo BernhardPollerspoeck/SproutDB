@@ -4,21 +4,25 @@
 @implements IDisposable
 
 <!-- Query Tabs -->
-<div class="query-tabs">
-    @for (var idx = 0; idx < Workspace.Tabs.Count; idx++)
-    {
-        var i = idx;
-        var tab = Workspace.Tabs[i];
-        var isActive = i == Workspace.ActiveTabIndex;
-        <button class="query-tab @(isActive ? "active" : "")" @onclick="() => SwitchTab(i)">
-            @if (tab.HasChanges)
-            {
-                <span class="query-tab-dot">●</span>
-            }
-            @tab.Title
-            <span class="query-tab-close" @onclick="() => CloseTab(i)" @onclick:stopPropagation="true">×</span>
-        </button>
-    }
+<div class="query-tabs-bar">
+    <button class="query-tab-chevron" @onclick="() => ScrollTabs(-240)" title="Scroll left">‹</button>
+    <div class="query-tabs" @ref="_tabsRef">
+        @for (var idx = 0; idx < Workspace.Tabs.Count; idx++)
+        {
+            var i = idx;
+            var tab = Workspace.Tabs[i];
+            var isActive = i == Workspace.ActiveTabIndex;
+            <button class="query-tab @(isActive ? "active" : "")" @onclick="() => SwitchTab(i)">
+                @if (tab.HasChanges)
+                {
+                    <span class="query-tab-dot">●</span>
+                }
+                @tab.Title
+                <span class="query-tab-close" @onclick="() => CloseTab(i)" @onclick:stopPropagation="true">×</span>
+            </button>
+        }
+    </div>
+    <button class="query-tab-chevron" @onclick="() => ScrollTabs(240)" title="Scroll right">›</button>
     <button class="query-tab-add" @onclick="AddTab" title="New tab">+</button>
 </div>
 
@@ -471,6 +475,10 @@
     private ElementReference _editorWrapRef;
     private bool _editorInitialized;
 
+    // Tabs bar (for chevron scroll + auto-scroll-to-active)
+    private ElementReference _tabsRef;
+    private bool _pendingActiveTabScroll;
+
     // Autocomplete
     private DotNetObjectReference<QueryPage>? _dotnetRef;
     private string _lastSchemaDb = string.Empty;
@@ -566,6 +574,12 @@
             _shouldFocusEdit = false;
             try { await _editInputRef.FocusAsync(); } catch { }
         }
+
+        if (_pendingActiveTabScroll)
+        {
+            _pendingActiveTabScroll = false;
+            await JS.InvokeVoidAsync("sproutAdmin.scrollActiveTabIntoView", _tabsRef);
+        }
     }
 
     // --- Tabs ---
@@ -582,6 +596,7 @@
         CancelEdit();
 
         Workspace.ActiveTabIndex = index;
+        _pendingActiveTabScroll = true;
 
         // Sync local state with new tab
         _highlightedQuery = SyntaxHighlighter.Highlight(Tab.QueryText);
@@ -595,12 +610,18 @@
     {
         Workspace.AddTab(title: Workspace.NextTitle());
         _highlightedQuery = SyntaxHighlighter.Highlight(Tab.QueryText);
+        _pendingActiveTabScroll = true;
 
         // Auto-select database if only one
         if (string.IsNullOrEmpty(Tab.Database) && databases.Count == 1)
             Tab.Database = databases[0].Name;
 
         _ = PushSchemaAsync();
+    }
+
+    private async Task ScrollTabs(int delta)
+    {
+        await JS.InvokeVoidAsync("sproutAdmin.scrollTabs", _tabsRef, delta);
     }
 
     private void CloseTab(int index)

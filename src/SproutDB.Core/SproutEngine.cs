@@ -43,6 +43,11 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     private long _totalReads;
     private long _totalWrites;
 
+    // Lazy WAL replay — databases with non-empty WAL at startup are replayed
+    // on first access rather than eagerly opening every table at boot.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _pendingReplays = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, object> _replayLocks = new();
+
     /// <summary>
     /// Creates a new SproutDB engine with default settings.
     /// </summary>
@@ -88,23 +93,34 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             };
         }
 
+        if (settings.AutoTuneCaps)
+            ApplyAutoTune(settings);
+
         _settings = settings;
         _dataDirectory = Path.GetFullPath(settings.DataDirectory);
         _tableCache = new TableCache(settings.ChunkSize);
         _scopes = new DatabaseScopeManager(_walManager, _tableCache, settings);
+        _tableCache.ConfigureEviction(
+            settings.MaxOpenTables,
+            dbPath => _scopes.GetRefCount(dbPath) > 0);
         Directory.CreateDirectory(_dataDirectory);
 
         _walSyncInterval = settings.WalSyncInterval;
 
-        // ── Startup replay: discover all databases, replay WALs ──
-        ReplayAllDatabases();
-
-        // ── Repair B-Trees that may have duplicate entries (one-time) ──
-        RepairBTreesIfNeeded();
+        // ── Startup scan: discover databases, mark non-empty WALs for
+        //    lazy replay on first access. Does NOT open any tables. ──
+        ScanDatabasesForPendingReplay();
 
         // ── Ensure _system database exists ────────────────────────
         EnsureSystemDatabase();
-        _scopes.Pin(Path.Combine(_dataDirectory, "_system"));
+
+        // _system must be fully consistent before Pin + LoadIndexMetrics.
+        // Writer channel hasn't started yet, so replay directly.
+        var systemDbPath = Path.Combine(_dataDirectory, "_system");
+        if (_pendingReplays.TryRemove(systemDbPath, out _))
+            ReplayWal(systemDbPath, "_system");
+
+        _scopes.Pin(systemDbPath);
         LoadIndexMetrics();
 
         // ── Initialize auth if configured ────────────────────────
@@ -147,6 +163,17 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     internal SproutChangeNotifier ChangeNotifier => _changeNotifier;
 
     /// <summary>
+    /// Number of tables whose storage handles (MMFs) are currently open.
+    /// Useful for monitoring and for tests that exercise the LRU cap.
+    /// </summary>
+    public int OpenedTableCount => _tableCache.OpenedCount;
+
+    /// <summary>
+    /// Number of databases the scope manager currently tracks as open.
+    /// </summary>
+    public int OpenedDatabaseCount => _scopes.OpenDatabaseCount;
+
+    /// <summary>
     /// Executes one or more queries (semicolon-separated) against the specified database.
     /// Returns one SproutResponse per query/transaction.
     /// </summary>
@@ -167,6 +194,11 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         // One lease covers the whole call — blocks eviction of this DB while
         // any of these queries (incl. queued writes) are in flight.
         using var lease = _scopes.Acquire(dbPath);
+
+        // If this DB has a pending WAL replay from startup, run it now
+        // (serialized through the writer channel). Fast-path is a single
+        // dictionary lookup once replay has completed.
+        EnsureReplayed(dbPath, dbName);
 
         foreach (var parseResult in parseResults)
         {
@@ -238,6 +270,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         var dbPath = Path.Combine(_dataDirectory, dbName);
 
         using var lease = _scopes.Acquire(dbPath);
+        EnsureReplayed(dbPath, dbName);
 
         var parseResult = QueryParser.Parse(query);
         if (!parseResult.Success)
@@ -515,50 +548,71 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         return results;
     }
 
-    // ── Startup replay ──────────────────────────────────────
+    /// <summary>
+    /// Lowers <see cref="SproutEngineSettings.MaxOpenDatabases"/> and
+    /// <see cref="SproutEngineSettings.MaxOpenTables"/> so the worst-case FD
+    /// load never exceeds the process ulimit. Never raises caps — the
+    /// caller's configuration is always an upper bound.
+    /// </summary>
+    private static void ApplyAutoTune(SproutEngineSettings s)
+    {
+        var (recDbs, recTables) = SproutSystemLimits.RecommendCaps(
+            s.AutoTuneAvgTablesPerDatabase,
+            s.AutoTuneAvgHandlesPerTable);
 
-    private void ReplayAllDatabases()
+        if (s.MaxOpenDatabases > recDbs)
+            s.MaxOpenDatabases = recDbs;
+        if (s.MaxOpenTables > 0 && s.MaxOpenTables > recTables)
+            s.MaxOpenTables = recTables;
+    }
+
+    // ── Startup scan ────────────────────────────────────────
+
+    /// <summary>
+    /// Scans the data directory and registers every existing database.
+    /// Databases whose _wal file is non-empty are marked for lazy replay on
+    /// first access — no tables are opened at startup. This keeps startup
+    /// O(databases) in directory entries rather than O(files) in open handles,
+    /// which matters once tenant count grows.
+    /// </summary>
+    private void ScanDatabasesForPendingReplay()
     {
         if (!Directory.Exists(_dataDirectory))
             return;
 
         foreach (var dbDir in Directory.GetDirectories(_dataDirectory))
         {
-            var dbName = Path.GetFileName(dbDir);
             _tableCache.RegisterDatabase(dbDir);
 
-            // Open all existing tables for this database
-            _tableCache.OpenTablesForDatabase(dbDir);
-
-            // Replay WAL if present
-            ReplayWal(dbDir, dbName);
+            var walPath = Path.Combine(dbDir, "_wal");
+            if (File.Exists(walPath) && new FileInfo(walPath).Length > 0)
+                _pendingReplays[dbDir] = 0;
         }
     }
 
     /// <summary>
-    /// One-time repair: rebuild all B-Trees to remove duplicate entries
-    /// caused by a bug in BTreeHandle.Remove with duplicate keys.
-    /// Uses a version marker file so this only runs once per data directory.
+    /// If <paramref name="dbPath"/> has a pending WAL replay from startup,
+    /// runs it now. Fast-path (no replay pending) is a single dictionary
+    /// lookup. Replay runs through the writer channel so it serializes with
+    /// concurrent writes on the same database.
     /// </summary>
-    private void RepairBTreesIfNeeded()
+    private void EnsureReplayed(string dbPath, string dbName)
     {
-        var versionFile = Path.Combine(_dataDirectory, "_btree_version");
-        const int requiredVersion = 2;
+        if (!_pendingReplays.ContainsKey(dbPath))
+            return;
 
-        if (File.Exists(versionFile))
+        var lockObj = _replayLocks.GetOrAdd(dbPath, _ => new object());
+        lock (lockObj)
         {
-            var content = File.ReadAllText(versionFile).Trim();
-            if (int.TryParse(content, out var version) && version >= requiredVersion)
+            if (!_pendingReplays.TryRemove(dbPath, out _))
                 return;
-        }
 
-        foreach (var (_, table) in _tableCache.GetAllOpened())
-        {
-            if (table.IndexCount > 0)
-                table.RebuildAllBTrees();
+            PostWrite(() =>
+            {
+                ReplayWal(dbPath, dbName);
+                return new SproutResponse { Operation = SproutOperation.Get };
+            });
         }
-
-        File.WriteAllText(versionFile, requiredVersion.ToString());
     }
 
     // ── System database ────────────────────────────────────
@@ -1384,13 +1438,18 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         _tableCache.EvictTablesForDatabase(dbPath);
         _walManager.Evict(dbPath);
         _tableCache.UnregisterDatabase(dbPath);
+        _pendingReplays.TryRemove(dbPath, out _);
 
         var result = RestoreExecutor.Execute(query, dbName, dbPath, q.FilePath);
         if (result.Errors is null)
         {
-            // Re-register and open restored tables
             _tableCache.RegisterDatabase(dbPath);
-            _tableCache.OpenTablesForDatabase(dbPath);
+
+            // A restored backup may contain a non-empty WAL (crash backup).
+            // Tables stay lazy — next access will replay + open what it needs.
+            var walPath = Path.Combine(dbPath, "_wal");
+            if (File.Exists(walPath) && new FileInfo(walPath).Length > 0)
+                _pendingReplays[dbPath] = 0;
         }
         return result;
     }
@@ -1400,6 +1459,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         _tableCache.EvictTablesForDatabase(dbPath);
         _walManager.Evict(dbPath);
         _tableCache.UnregisterDatabase(dbPath);
+        _pendingReplays.TryRemove(dbPath, out _);
 
         return PurgeDatabaseExecutor.Execute(query, dbName, dbPath);
     }

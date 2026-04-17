@@ -6,9 +6,11 @@ namespace SproutDB.Core.Storage;
 internal sealed class WalFile : IDisposable
 {
     private const int HeaderSize = 28; // int64 + uint64 + int32 + int64
+    private readonly object _lock = new();
     private readonly FileStream _fs;
     private long _nextSequence;
     private bool _dirty;
+    private bool _disposed;
 
     public WalFile(string path)
     {
@@ -23,33 +25,45 @@ internal sealed class WalFile : IDisposable
     /// </summary>
     public long Append(string query, ulong resolvedId = 0, long groupId = 0)
     {
-        var seq = _nextSequence++;
-        var queryBytes = Encoding.UTF8.GetBytes(query);
+        lock (_lock)
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(WalFile));
 
-        Span<byte> header = stackalloc byte[HeaderSize];
-        BinaryPrimitives.WriteInt64LittleEndian(header, seq);
-        BinaryPrimitives.WriteUInt64LittleEndian(header[8..], resolvedId);
-        BinaryPrimitives.WriteInt32LittleEndian(header[16..], queryBytes.Length);
-        BinaryPrimitives.WriteInt64LittleEndian(header[20..], groupId);
+            var seq = _nextSequence++;
+            var queryBytes = Encoding.UTF8.GetBytes(query);
 
-        _fs.Seek(0, SeekOrigin.End);
-        _fs.Write(header);
-        _fs.Write(queryBytes);
-        _fs.Flush(flushToDisk: false);
-        _dirty = true;
+            Span<byte> header = stackalloc byte[HeaderSize];
+            BinaryPrimitives.WriteInt64LittleEndian(header, seq);
+            BinaryPrimitives.WriteUInt64LittleEndian(header[8..], resolvedId);
+            BinaryPrimitives.WriteInt32LittleEndian(header[16..], queryBytes.Length);
+            BinaryPrimitives.WriteInt64LittleEndian(header[20..], groupId);
 
-        return seq;
+            _fs.Seek(0, SeekOrigin.End);
+            _fs.Write(header);
+            _fs.Write(queryBytes);
+            _fs.Flush(flushToDisk: false);
+            _dirty = true;
+
+            return seq;
+        }
     }
 
     /// <summary>
     /// Flushes pending WAL data to durable storage (fsync).
     /// Called periodically by the engine's WAL sync cycle.
+    /// Safe to call after Dispose — becomes a no-op so the background timer
+    /// doesn't blow up on evicted databases.
     /// </summary>
     public void SyncToDisk()
     {
-        if (!_dirty) return;
-        _fs.Flush(flushToDisk: true);
-        _dirty = false;
+        lock (_lock)
+        {
+            if (_disposed) return;
+            if (!_dirty) return;
+            _fs.Flush(flushToDisk: true);
+            _dirty = false;
+        }
     }
 
     /// <summary>
@@ -57,32 +71,38 @@ internal sealed class WalFile : IDisposable
     /// </summary>
     public List<WalEntry> ReadAll()
     {
-        var entries = new List<WalEntry>();
-        _fs.Seek(0, SeekOrigin.Begin);
-        var headerBuf = new byte[HeaderSize];
-
-        while (_fs.Position < _fs.Length)
+        lock (_lock)
         {
-            if (_fs.Read(headerBuf, 0, HeaderSize) != HeaderSize) break;
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(WalFile));
 
-            var seq = BinaryPrimitives.ReadInt64LittleEndian(headerBuf);
-            var resolvedId = BinaryPrimitives.ReadUInt64LittleEndian(headerBuf.AsSpan(8));
-            var len = BinaryPrimitives.ReadInt32LittleEndian(headerBuf.AsSpan(16));
-            var groupId = BinaryPrimitives.ReadInt64LittleEndian(headerBuf.AsSpan(20));
+            var entries = new List<WalEntry>();
+            _fs.Seek(0, SeekOrigin.Begin);
+            var headerBuf = new byte[HeaderSize];
 
-            var queryBuf = new byte[len];
-            if (_fs.Read(queryBuf, 0, len) != len) break;
-
-            entries.Add(new WalEntry
+            while (_fs.Position < _fs.Length)
             {
-                Sequence = seq,
-                ResolvedId = resolvedId,
-                Query = Encoding.UTF8.GetString(queryBuf),
-                GroupId = groupId,
-            });
-        }
+                if (_fs.Read(headerBuf, 0, HeaderSize) != HeaderSize) break;
 
-        return entries;
+                var seq = BinaryPrimitives.ReadInt64LittleEndian(headerBuf);
+                var resolvedId = BinaryPrimitives.ReadUInt64LittleEndian(headerBuf.AsSpan(8));
+                var len = BinaryPrimitives.ReadInt32LittleEndian(headerBuf.AsSpan(16));
+                var groupId = BinaryPrimitives.ReadInt64LittleEndian(headerBuf.AsSpan(20));
+
+                var queryBuf = new byte[len];
+                if (_fs.Read(queryBuf, 0, len) != len) break;
+
+                entries.Add(new WalEntry
+                {
+                    Sequence = seq,
+                    ResolvedId = resolvedId,
+                    Query = Encoding.UTF8.GetString(queryBuf),
+                    GroupId = groupId,
+                });
+            }
+
+            return entries;
+        }
     }
 
     /// <summary>
@@ -93,34 +113,39 @@ internal sealed class WalFile : IDisposable
     {
         if (groupId <= 0) return;
 
-        _fs.Seek(0, SeekOrigin.Begin);
-        var headerBuf = new byte[HeaderSize];
-
-        while (_fs.Position < _fs.Length)
+        lock (_lock)
         {
-            var entryStart = _fs.Position;
-            if (_fs.Read(headerBuf, 0, HeaderSize) != HeaderSize) break;
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(WalFile));
 
-            var len = BinaryPrimitives.ReadInt32LittleEndian(headerBuf.AsSpan(16));
-            var entryGroupId = BinaryPrimitives.ReadInt64LittleEndian(headerBuf.AsSpan(20));
+            _fs.Seek(0, SeekOrigin.Begin);
+            var headerBuf = new byte[HeaderSize];
 
-            if (entryGroupId == groupId)
+            while (_fs.Position < _fs.Length)
             {
-                // Overwrite groupId to negative (rolled back marker)
-                var negGroupBuf = new byte[8];
-                BinaryPrimitives.WriteInt64LittleEndian(negGroupBuf, -groupId);
-                _fs.Seek(entryStart + 20, SeekOrigin.Begin);
-                _fs.Write(negGroupBuf);
-                _fs.Seek(entryStart + HeaderSize + len, SeekOrigin.Begin);
+                var entryStart = _fs.Position;
+                if (_fs.Read(headerBuf, 0, HeaderSize) != HeaderSize) break;
+
+                var len = BinaryPrimitives.ReadInt32LittleEndian(headerBuf.AsSpan(16));
+                var entryGroupId = BinaryPrimitives.ReadInt64LittleEndian(headerBuf.AsSpan(20));
+
+                if (entryGroupId == groupId)
+                {
+                    var negGroupBuf = new byte[8];
+                    BinaryPrimitives.WriteInt64LittleEndian(negGroupBuf, -groupId);
+                    _fs.Seek(entryStart + 20, SeekOrigin.Begin);
+                    _fs.Write(negGroupBuf);
+                    _fs.Seek(entryStart + HeaderSize + len, SeekOrigin.Begin);
+                }
+                else
+                {
+                    _fs.Seek(len, SeekOrigin.Current);
+                }
             }
-            else
-            {
-                _fs.Seek(len, SeekOrigin.Current);
-            }
+
+            _fs.Flush(flushToDisk: false);
+            _dirty = true;
         }
-
-        _fs.Flush(flushToDisk: false);
-        _dirty = true;
     }
 
     /// <summary>
@@ -128,19 +153,47 @@ internal sealed class WalFile : IDisposable
     /// </summary>
     public void Truncate()
     {
-        _fs.SetLength(0);
-        _fs.Flush(flushToDisk: true);
-        _nextSequence = 1;
+        lock (_lock)
+        {
+            if (_disposed) return;
+            _fs.SetLength(0);
+            _fs.Flush(flushToDisk: true);
+            _nextSequence = 1;
+        }
     }
 
-    public bool IsEmpty => _fs.Length == 0;
+    public bool IsEmpty
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _disposed || _fs.Length == 0;
+            }
+        }
+    }
 
-    public long SizeBytes => _fs.Length;
+    public long SizeBytes
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _disposed ? 0 : _fs.Length;
+            }
+        }
+    }
 
     /// <summary>
     /// Returns the next groupId for transaction grouping.
     /// </summary>
-    public long NextGroupId() => _nextSequence;
+    public long NextGroupId()
+    {
+        lock (_lock)
+        {
+            return _nextSequence;
+        }
+    }
 
     private long ScanLastSequence()
     {
@@ -163,6 +216,11 @@ internal sealed class WalFile : IDisposable
 
     public void Dispose()
     {
-        _fs.Dispose();
+        lock (_lock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _fs.Dispose();
+        }
     }
 }

@@ -2384,17 +2384,31 @@ body {
 
 /* ─── Query Tabs ─── */
 
+.query-tabs-bar {
+    display: flex;
+    align-items: stretch;
+    padding: 0 8px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+}
+
 .query-tabs {
     display: flex;
     align-items: stretch;
     gap: 0;
-    padding: 0 8px;
-    background: var(--bg-1);
-    border-bottom: 1px solid var(--border);
+    flex: 1 1 auto;
+    min-width: 0; /* required so overflow-x actually triggers inside the flex row */
     overflow-x: auto;
-    scrollbar-width: none;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
 }
-.query-tabs::-webkit-scrollbar { display: none; }
+.query-tabs::-webkit-scrollbar { height: 6px; }
+.query-tabs::-webkit-scrollbar-track { background: transparent; }
+.query-tabs::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
+.query-tabs::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
 
 .query-tab {
     display: flex;
@@ -2449,8 +2463,29 @@ body {
     border: none;
     cursor: pointer;
     transition: color 0.15s;
+    flex-shrink: 0; /* never scrolled, always visible */
 }
 .query-tab-add:hover { color: var(--text-1); }
+
+.query-tab-chevron {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    padding: 0;
+    font-size: 18px;
+    line-height: 1;
+    color: var(--text-3);
+    background: none;
+    border: none;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 0.15s, background 0.15s;
+}
+.query-tab-chevron:hover {
+    color: var(--text-1);
+    background: var(--bg-2);
+}
 
 /* ─── Saved Queries Dropdown ─── */
 

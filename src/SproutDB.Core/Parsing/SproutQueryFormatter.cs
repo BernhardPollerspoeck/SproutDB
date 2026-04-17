@@ -491,8 +491,7 @@ public static class SproutQueryFormatter
             var text = TokenText(tokens, i, input);
             if (tokens[i].Type == TokenType.Identifier && IsGetClause(text.ToLowerInvariant()))
                 break;
-            sb.Append(' ');
-            sb.Append(text);
+            AppendWithDotAwareness(sb, tokens, i, text);
             i++;
         }
     }
@@ -508,8 +507,7 @@ public static class SproutQueryFormatter
                 if (lower is "where" or "follow" || IsGetClause(lower))
                     break;
             }
-            sb.Append(' ');
-            sb.Append(text);
+            AppendWithDotAwareness(sb, tokens, i, text);
             i++;
         }
     }

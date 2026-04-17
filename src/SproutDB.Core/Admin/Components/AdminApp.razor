@@ -74,6 +74,27 @@
                     window.open(url, '_blank');
                 },
 
+                // ── Query tabs scroll ──
+                scrollTabs: function(containerEl, delta) {
+                    if (!containerEl) return;
+                    containerEl.scrollBy({ left: delta, behavior: 'smooth' });
+                },
+                scrollActiveTabIntoView: function(containerEl) {
+                    if (!containerEl) return;
+                    var active = containerEl.querySelector('.query-tab.active');
+                    if (!active) return;
+                    // Compute whether the active tab is outside the visible
+                    // range, and scroll only if needed — avoids jitter when
+                    // the tab is already on-screen.
+                    var cl = containerEl.getBoundingClientRect();
+                    var al = active.getBoundingClientRect();
+                    if (al.left < cl.left) {
+                        containerEl.scrollBy({ left: al.left - cl.left - 16, behavior: 'smooth' });
+                    } else if (al.right > cl.right) {
+                        containerEl.scrollBy({ left: al.right - cl.right + 16, behavior: 'smooth' });
+                    }
+                },
+
                 // ── Insert text at textarea cursor ──
                 insertAtCursor: function(wrapEl, text) {
                     var ta = wrapEl ? wrapEl.querySelector('textarea') : null;

@@ -433,36 +433,6 @@ public class IndexTests : IDisposable
         Assert.Equal(0, falseResult.Data?.Count);
     }
 
-    [Fact]
-    public void BTreeRepair_OnRestart_FixesCorruptedBTrees()
-    {
-        // Verify that the startup repair rebuilds corrupted B-Trees
-        _engine.ExecuteOne(
-            "create table items (category string 50, active bool default 'true')",
-            "testdb");
-        _engine.ExecuteOne("create index items.active", "testdb");
-
-        _engine.ExecuteOne("upsert items {category: 'A'}", "testdb");
-        _engine.ExecuteOne("upsert items {category: 'B'}", "testdb");
-
-        // Multiple updates
-        for (int i = 0; i < 10; i++)
-            _engine.ExecuteOne($"upsert items {{_id: 1, category: 'A{i}'}}", "testdb");
-
-        // Simulate a restart by deleting the version marker so repair runs again
-        var versionFile = Path.Combine(_tempDir, "_btree_version");
-        if (File.Exists(versionFile))
-            File.Delete(versionFile);
-
-        _engine.Dispose();
-        _disposed = true;
-        _engine = new SproutEngine(_tempDir);
-        _disposed = false;
-
-        var result = _engine.ExecuteOne("get items where active = true", "testdb");
-        Assert.Equal(2, result.Data?.Count);
-    }
-
     // ── Helpers ───────────────────────────────────────────
 
     private void SeedUsers(int count)

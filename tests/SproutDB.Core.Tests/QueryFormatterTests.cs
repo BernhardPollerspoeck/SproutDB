@@ -265,4 +265,28 @@ public class QueryFormatterTests
             "get users\n    follow users._id -> orders.user_id as orders\n        select product\n        where status = 'completed'",
             result);
     }
+
+    // ── Regression: alias.column in SELECT must not get spaces around the dot ──
+
+    [Fact]
+    public void Get_TopLevelSelect_AliasColumn_NoSpaceAroundDot()
+    {
+        var result = SproutQueryFormatter.Format(
+            "get orders follow orders.customer_id -> customers._id as c select c.name, order_date, status");
+
+        Assert.Contains("select c.name", result);
+        Assert.DoesNotContain("c . name", result);
+    }
+
+    [Fact]
+    public void Get_FollowSelect_AliasColumn_NoSpaceAroundDot()
+    {
+        var result = SproutQueryFormatter.Format(
+            "get users follow users._id -> orders.user_id as o select o.total, o.date");
+
+        Assert.Contains("select o.total", result);
+        Assert.Contains("o.date", result);
+        Assert.DoesNotContain("o . total", result);
+        Assert.DoesNotContain("o . date", result);
+    }
 }

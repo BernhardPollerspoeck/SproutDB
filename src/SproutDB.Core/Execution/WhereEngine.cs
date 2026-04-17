@@ -52,6 +52,18 @@ internal static class WhereEngine
 
     // ── Prepare ────────────────────────────────────────────────
 
+    /// <summary>
+    /// Returns the bare column name from an <c>alias.column</c> reference.
+    /// For follow-where clauses the parser stores the fully-qualified name
+    /// (e.g. <c>"ord.total"</c>) so the original appears verbatim in errors,
+    /// but table lookups need the bare name (<c>"total"</c>).
+    /// </summary>
+    private static string StripAlias(string column)
+    {
+        var dot = column.LastIndexOf('.');
+        return dot < 0 ? column : column[(dot + 1)..];
+    }
+
     internal static FilterNode? PrepareFilter(TableHandle table, WhereNode? node)
     {
         if (node is null) return null;
@@ -63,7 +75,8 @@ internal static class WhereEngine
 
             case NullCheckNode n:
             {
-                ColumnHandle? handle = n.Column == "_id" ? null : table.GetColumn(n.Column);
+                var nCol = StripAlias(n.Column);
+                ColumnHandle? handle = nCol == "_id" ? null : table.GetColumn(nCol);
                 return new NullFilter { Handle = handle, IsNot = n.IsNot };
             }
 
@@ -92,7 +105,8 @@ internal static class WhereEngine
 
     private static InFilter PrepareInFilter(TableHandle table, InNode i)
     {
-        if (i.Column == "_id")
+        var iCol = StripAlias(i.Column);
+        if (iCol == "_id")
         {
             var idValues = new List<ulong>(i.Values.Count);
             foreach (var v in i.Values)
@@ -100,7 +114,7 @@ internal static class WhereEngine
             return new InFilter { Handle = null, EncodedValues = [], IdValues = idValues, IsNot = i.IsNot };
         }
 
-        var handle = table.GetColumn(i.Column);
+        var handle = table.GetColumn(iCol);
         var encodedValues = new List<byte[]>(i.Values.Count);
         foreach (var v in i.Values)
             encodedValues.Add(handle.EncodeValueToBytes(v));
@@ -109,7 +123,8 @@ internal static class WhereEngine
 
     private static CompareFilter PrepareCompareFilter(TableHandle table, CompareNode c)
     {
-        if (c.Column == "_id")
+        var cCol = StripAlias(c.Column);
+        if (cCol == "_id")
         {
             var idValue = ulong.Parse(c.Value);
             ulong idValue2 = IsBetweenOp(c.Operator) && c.Value2 is not null
@@ -117,7 +132,7 @@ internal static class WhereEngine
             return new CompareFilter { Handle = null, Encoded = null, Op = c.Operator, IdValue = idValue, IdValue2 = idValue2 };
         }
 
-        var handle = table.GetColumn(c.Column);
+        var handle = table.GetColumn(cCol);
 
         // Array contains: read .array file and check element membership
         if (c.Operator == CompareOp.Contains && handle.Type == ColumnType.Array)
@@ -125,7 +140,7 @@ internal static class WhereEngine
             return new CompareFilter
             {
                 Handle = handle, Encoded = null, Op = c.Operator, IdValue = 0,
-                Table = table, ColumnName = c.Column, SearchValue = c.Value,
+                Table = table, ColumnName = cCol, SearchValue = c.Value,
             };
         }
 
@@ -298,7 +313,9 @@ internal static class WhereEngine
                 return ValidateCompare(table, c);
 
             case NullCheckNode n:
-                if (n.Column != "_id" && !table.HasColumn(n.Column))
+            {
+                var nCol = StripAlias(n.Column);
+                if (nCol != "_id" && !table.HasColumn(nCol))
                     return [new SproutError
                     {
                         Code = ErrorCodes.UNKNOWN_COLUMN,
@@ -306,6 +323,7 @@ internal static class WhereEngine
                         Position = n.ColumnPosition, Length = n.ColumnLength,
                     }];
                 return null;
+            }
 
             case LogicalNode l:
             {
@@ -318,7 +336,9 @@ internal static class WhereEngine
                 return ValidateWhereNode(table, not.Inner);
 
             case InNode i:
-                if (i.Column != "_id" && !table.HasColumn(i.Column))
+            {
+                var iCol = StripAlias(i.Column);
+                if (iCol != "_id" && !table.HasColumn(iCol))
                     return [new SproutError
                     {
                         Code = ErrorCodes.UNKNOWN_COLUMN,
@@ -326,6 +346,7 @@ internal static class WhereEngine
                         Position = i.ColumnPosition, Length = i.ColumnLength,
                     }];
                 return null;
+            }
 
             default:
                 return null;
@@ -334,7 +355,8 @@ internal static class WhereEngine
 
     private static List<SproutError>? ValidateCompare(TableHandle table, CompareNode c)
     {
-        if (c.Column != "_id" && !table.HasColumn(c.Column))
+        var cCol = StripAlias(c.Column);
+        if (cCol != "_id" && !table.HasColumn(cCol))
             return [new SproutError
             {
                 Code = ErrorCodes.UNKNOWN_COLUMN,
@@ -344,7 +366,7 @@ internal static class WhereEngine
 
         if (IsStringOp(c.Operator))
         {
-            if (c.Column == "_id")
+            if (cCol == "_id")
                 return [new SproutError
                 {
                     Code = ErrorCodes.TYPE_MISMATCH,
@@ -352,7 +374,7 @@ internal static class WhereEngine
                     Position = c.ColumnPosition, Length = c.ColumnLength,
                 }];
 
-            var colHandle = table.GetColumn(c.Column);
+            var colHandle = table.GetColumn(cCol);
             // contains is also valid on array columns
             if (c.Operator == CompareOp.Contains && colHandle.Type == ColumnType.Array)
             {
@@ -396,14 +418,18 @@ internal static class WhereEngine
         switch (node)
         {
             case CompareNode c:
-                if (c.Column != "_id")
-                    columns.Add(c.Column);
+            {
+                var col = StripAlias(c.Column);
+                if (col != "_id") columns.Add(col);
                 break;
+            }
 
             case NullCheckNode n:
-                if (n.Column != "_id")
-                    columns.Add(n.Column);
+            {
+                var col = StripAlias(n.Column);
+                if (col != "_id") columns.Add(col);
                 break;
+            }
 
             case LogicalNode l:
                 CollectColumns(l.Left, columns);
@@ -415,9 +441,11 @@ internal static class WhereEngine
                 break;
 
             case InNode i:
-                if (i.Column != "_id")
-                    columns.Add(i.Column);
+            {
+                var col = StripAlias(i.Column);
+                if (col != "_id") columns.Add(col);
                 break;
+            }
         }
     }
 
