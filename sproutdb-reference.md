@@ -72,6 +72,10 @@ void Migrate(Assembly assembly, ISproutDatabase database);
 string Name { get; }
 List<SproutResponse> Query(string query);  // always returns list (multi-query support)
 IDisposable OnChange(string table, Action<SproutResponse> callback);
+void SaveQuery(string name, string query, bool pinned = false); // seedet _saved_queries (Admin UI)
+
+// ISproutEntity (für Typed LINQ API db.Table<T>())
+ulong Id { get; set; }  // gemappt auf _id
 ```
 
 ### Response
@@ -120,7 +124,7 @@ public sealed class CreateUsers : IMigration
     public void Up(ISproutDatabase db)
     {
         db.Query("create table users (name string 100, email string 320 strict, active bool default true)");
-        db.Query("create unique index users.email");
+        db.Query("create index unique users.email");
     }
 }
 
@@ -162,12 +166,14 @@ services.AddSproutDB(options =>
 
 ### User-Klasse
 
+Entity muss `ISproutEntity` implementieren (`Table<T>` braucht `T : class, ISproutEntity, new()`). `ISproutEntity` erzwingt `ulong Id { get; set; }` (gemappt auf `_id`).
+
 ```csharp
-public class User
+public sealed class User : ISproutEntity
 {
-    public ulong Id { get; set; }
-    public string Name { get; set; }
-    public string Email { get; set; }
+    public ulong Id { get; set; }          // Pflicht via ISproutEntity, mappt auf _id
+    public string Name { get; set; } = "";
+    public string Email { get; set; } = "";
     public byte Age { get; set; }
     public bool Active { get; set; }
 }
@@ -542,13 +548,34 @@ alter column TABLE.SPALTE string NEUE_GRÖSSE
 
 ```
 create index TABLE.SPALTE
-create unique index TABLE.SPALTE
+create index unique TABLE.SPALTE
 purge index TABLE.SPALTE
 ```
 
-- Unique Index erzwingt Eindeutigkeit (NULL-Werte sind ausgenommen)
+**`unique` steht NACH `index`**, anders als in SQL (`CREATE UNIQUE INDEX`). Die SQL-Reihenfolge ist ein Syntax-Fehler: `create` akzeptiert als nächstes Token nur `database`, `table`, `index` oder `apikey`.
+
+- Ohne `unique` erzwingt ein Index KEINE Eindeutigkeit — er beschleunigt nur Lookups
 - Blob-Spalten können NICHT indexiert werden
 - Indexes beschleunigen WHERE mit Equality/Range auf der indizierten Spalte
+
+**Unique Index und NULL:** Ein Unique Index prüft ausschließlich Non-NULL-Werte. NULL wird von der Prüfung komplett übersprungen:
+
+- **Beliebig viele Zeilen dürfen NULL** in einer Unique-Spalte haben — zwei NULLs sind keine Duplikate
+- **Spalte im Upsert weglassen** überspringt die Prüfung genauso wie explizites NULL
+- `create index unique` auf einer bestehenden Spalte **schlägt fehl**, wenn dort bereits doppelte Non-NULL-Werte liegen. Vorhandene NULLs verhindern das Anlegen nie.
+
+```
+create index unique users.email
+upsert users {name: 'a', email: null}   ✓
+upsert users {name: 'b', email: null}   ✓ zweites NULL ist ok
+upsert users {name: 'c'}                ✓ Spalte weggelassen, keine Prüfung
+upsert users {name: 'd', email: 'x@y'}  ✓
+upsert users {name: 'e', email: 'x@y'}  ✗ UNIQUE_VIOLATION
+```
+
+Eine Spalte lehnt NULL nur ab, wenn sie ein `default` hat — nullable ist sie genau dann, wenn kein Default gesetzt ist. Ein `not null`-Keyword gibt es nicht, und `strict` betrifft nur Type-Widening, nicht Nullability.
+
+> **Achtung:** `default` + `unique index` garantiert KEINE distinkten Werte pro Zeile. Defaults werden erst nach der Unique-Prüfung geschrieben — zwei Records, die die Spalte weglassen, bekommen denselben Default-Wert ohne `UNIQUE_VIOLATION`. Wert explizit setzen, wenn er eindeutig sein muss.
 
 ---
 
