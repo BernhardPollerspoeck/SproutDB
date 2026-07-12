@@ -184,6 +184,11 @@ internal static class GetExecutor
         if (validationErrors is not null)
             return ResponseHelper.Errors(query, validationErrors);
 
+        // Cursor paging: 'after X' — keyset over _id, only the page rows are
+        // materialized. Incompatible clauses are rejected by the parser.
+        if (q.After.HasValue)
+            return ExecuteCursor(query, table, q, defaultPageSize);
+
         // Grouped path: aggregate or count with group by
         if (q.GroupBy is not null)
         {
@@ -210,9 +215,25 @@ internal static class GetExecutor
 
         // Try B-Tree shortcut for simple WHERE conditions
         var btreeResult = TryBTreeLookup(table, q.Where, filter);
-        var data = btreeResult is not null
-            ? ReadRowsByPlaces(table, effectiveSelect, q.ExcludeSelect, btreeResult, filter, nowMs)
-            : ReadRows(table, effectiveSelect, q.ExcludeSelect, filter, nowMs);
+
+        // Top-N fast path: 'order by _id [desc] limit N' — collect the N
+        // boundary ids via a bounded heap instead of materializing every
+        // matching row. Produces the same rows as the sort+limit slow path.
+        List<Dictionary<string, object?>> data;
+        var topNApplied = false;
+        if (q.Limit is int topN && !q.IsCount && !q.IsDistinct && q.Follow is null
+            && q.OrderBy is [{ Name: "_id" } idOrder])
+        {
+            var candidates = CollectTopNById(table, filter, btreeResult, 0, topN, idOrder.Descending, nowMs, out _);
+            data = ProjectPlaces(table, effectiveSelect, q.ExcludeSelect, candidates);
+            topNApplied = true;
+        }
+        else
+        {
+            data = btreeResult is not null
+                ? ReadRowsByPlaces(table, effectiveSelect, q.ExcludeSelect, btreeResult, filter, nowMs)
+                : ReadRows(table, effectiveSelect, q.ExcludeSelect, filter, nowMs);
+        }
 
         // Compute and add computed field values
         if (q.ComputedSelect is not null)
@@ -244,8 +265,8 @@ internal static class GetExecutor
             data = distinct;
         }
 
-        // Order by
-        if (q.OrderBy is not null && q.OrderBy.Count > 0)
+        // Order by (already satisfied when the top-N fast path produced the rows)
+        if (q.OrderBy is not null && q.OrderBy.Count > 0 && !topNApplied)
         {
             var orderColumns = q.OrderBy;
             data.Sort((a, b) =>
@@ -461,6 +482,164 @@ internal static class GetExecutor
             return $"{query[..followIdx]} page {nextPage} size {pageSize}{query[followIdx..]}";
 
         return $"{query} page {nextPage} size {pageSize}";
+    }
+
+    // ── Cursor paging (after 'X') ─────────────────────────────
+
+    /// <summary>
+    /// Keyset paging: returns the next page of rows with _id greater than the
+    /// cursor, ordered by _id ascending. Fetches one row beyond the page size
+    /// to decide whether a next cursor exists. Server cost per page is one
+    /// cheap id scan plus the projection of the page rows only.
+    /// </summary>
+    private static SproutResponse ExecuteCursor(string query, TableHandle table, GetQuery q, int defaultPageSize)
+    {
+        var filter = WhereEngine.PrepareFilter(table, q.Where);
+        var extraColumns = ResolveExtraColumnsForComputed(q);
+        var effectiveSelect = MergeSelectWithExtra(q.Select, extraColumns);
+        var nowMs = table.HasTtl ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : 0L;
+
+        var pageSize = Math.Max(q.Limit ?? defaultPageSize, 0);
+        var afterId = q.After ?? 0;
+        var fetch = pageSize == int.MaxValue ? pageSize : pageSize + 1;
+
+        var btreeResult = TryBTreeLookup(table, q.Where, filter);
+        var candidates = CollectTopNById(table, filter, btreeResult, afterId,
+            fetch, descending: false, nowMs, out var matchCount);
+
+        var hasMore = candidates.Count > pageSize;
+        if (hasMore)
+            candidates.RemoveAt(candidates.Count - 1);
+
+        var data = ProjectPlaces(table, effectiveSelect, q.ExcludeSelect, candidates);
+
+        if (q.ComputedSelect is not null)
+        {
+            ApplyComputedColumns(data, q.ComputedSelect, table);
+            if (extraColumns is not null)
+            {
+                foreach (var row in data)
+                {
+                    foreach (var extra in extraColumns)
+                        row.Remove(extra.Name);
+                }
+            }
+        }
+
+        string? nextCursor = null;
+        if (hasMore && candidates.Count > 0)
+            nextCursor = candidates[^1].Id.ToString();
+
+        return new SproutResponse
+        {
+            Operation = SproutOperation.Get,
+            Data = data,
+            Affected = data.Count,
+            Paging = new PagingInfo
+            {
+                Total = matchCount,
+                PageSize = pageSize,
+                Page = 0,
+                Next = nextCursor is not null ? BuildNextCursorQuery(query, q, nextCursor) : null,
+                NextCursor = nextCursor,
+            },
+        };
+    }
+
+    /// <summary>
+    /// Splices the next cursor over the existing after-literal using the exact
+    /// token position — immune to 'after' appearing inside other string literals.
+    /// </summary>
+    private static string BuildNextCursorQuery(string query, GetQuery q, string nextCursor)
+    {
+        var start = q.AfterCursorPosition;
+        var end = start + q.AfterCursorLength;
+        if (start <= 0 || end > query.Length)
+            return $"{query} after '{nextCursor}'"; // defensive — positions are always valid for parsed queries
+        return $"{query[..start]}'{nextCursor}'{query[end..]}";
+    }
+
+    /// <summary>
+    /// Collects the n smallest ids (largest when descending) above the cursor
+    /// bound that pass TTL and filter — without materializing any row. Uses a
+    /// bounded heap: the scan stays O(rows), memory stays O(n). The returned
+    /// list is sorted in final result order. matchCount reports every row that
+    /// passed the checks (cursor paging total), independent of n.
+    /// </summary>
+    private static List<(ulong Id, long Place)> CollectTopNById(
+        TableHandle table, WhereEngine.FilterNode? filter, List<long>? places,
+        ulong afterId, int n, bool descending, long nowMs, out int matchCount)
+    {
+        var ttl = table.Ttl;
+        var count = 0;
+
+        // Root of the heap is the current worst candidate: the largest id when
+        // ascending, the smallest when descending — so it can be evicted in O(log n).
+        var comparer = descending
+            ? Comparer<ulong>.Default
+            : Comparer<ulong>.Create((a, b) => b.CompareTo(a));
+        var heap = new PriorityQueue<(ulong Id, long Place), ulong>(comparer);
+
+        void Consider(ulong id, long place)
+        {
+            if (id <= afterId) return;
+            if (ttl is not null && nowMs > 0)
+            {
+                var expiresAt = ttl.ReadExpiresAt(place);
+                if (expiresAt > 0 && nowMs > expiresAt) return;
+            }
+            if (filter is not null && !WhereEngine.EvaluateFilter(filter, id, place)) return;
+
+            count++;
+            if (n <= 0) return;
+            if (heap.Count < n)
+            {
+                heap.Enqueue((id, place), id);
+            }
+            else if (heap.TryPeek(out _, out var worst)
+                     && (descending ? id > worst : id < worst))
+            {
+                heap.Dequeue();
+                heap.Enqueue((id, place), id);
+            }
+        }
+
+        if (places is not null)
+        {
+            foreach (var place in places)
+            {
+                var id = table.Index.FindIdForPlace(place);
+                if (id == 0) continue; // place no longer valid (deleted)
+                Consider(id, place);
+            }
+        }
+        else
+        {
+            table.Index.ForEachUsed(Consider);
+        }
+
+        matchCount = count;
+
+        var result = new List<(ulong Id, long Place)>(heap.Count);
+        while (heap.TryDequeue(out var entry, out _))
+            result.Add(entry);
+        result.Sort((a, b) => descending ? b.Id.CompareTo(a.Id) : a.Id.CompareTo(b.Id));
+        return result;
+    }
+
+    /// <summary>
+    /// Projects a pre-selected, pre-ordered list of (id, place) entries into rows.
+    /// </summary>
+    private static List<Dictionary<string, object?>> ProjectPlaces(
+        TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect,
+        List<(ulong Id, long Place)> entries)
+    {
+        var projection = ResolveProjection(table, selectColumns, excludeSelect);
+        var ttl = table.Ttl;
+        var data = new List<Dictionary<string, object?>>(entries.Count);
+        foreach (var (id, place) in entries)
+            data.Add(ProjectRow(projection, id, place, ttl, table));
+        return data;
     }
 
     // ── Aggregate ─────────────────────────────────────────────

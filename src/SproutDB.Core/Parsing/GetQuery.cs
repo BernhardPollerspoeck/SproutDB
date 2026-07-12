@@ -58,6 +58,18 @@ internal sealed class GetQuery : IQuery
     public int? Size { get; init; }
 
     /// <summary>
+    /// Keyset cursor: only rows with _id greater than this value are returned,
+    /// ordered by _id ascending. Null means no cursor paging.
+    /// </summary>
+    public ulong? After { get; init; }
+
+    /// <summary>Start of the cursor string literal (incl. quotes) in the query string.</summary>
+    public int AfterCursorPosition { get; init; }
+
+    /// <summary>Length of the cursor string literal (incl. quotes) in the query string.</summary>
+    public int AfterCursorLength { get; init; }
+
+    /// <summary>
     /// Aggregate function (sum, avg, min, max). Null means no aggregation.
     /// </summary>
     public AggregateFunction? Aggregate { get; init; }

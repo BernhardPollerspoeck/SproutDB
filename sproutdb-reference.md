@@ -91,6 +91,15 @@ public sealed class SproutResponse
     public List<SproutError>? Errors { get; init; }
     public string? AnnotatedQuery { get; init; }
 }
+
+public sealed class PagingInfo
+{
+    public int Total { get; init; }
+    public int PageSize { get; init; }
+    public int Page { get; init; }        // 0 bei Cursor-Paging
+    public string? Next { get; init; }    // fertige Folge-Query (Offset UND Cursor)
+    public string? NextCursor { get; init; } // nur bei 'after'-Queries; null = letzte Seite
+}
 ```
 
 ---
@@ -463,6 +472,7 @@ get TABLE
     [order by col1 [desc], col2 [asc]]
     [limit N]
     [page N size M]
+    [after 'CURSOR']
     [follow FOLLOW]*
     [select col1, follow_alias.col2]
 ```
@@ -489,6 +499,31 @@ get users
     follow users._id -> orders.user_id as orders
     select name, orders.total
 ```
+
+#### Cursor-Paging (`after`)
+
+Keyset-Paging über `_id` — für vollständige Tabellen-Durchläufe (z.B. Client-Hydration).
+Statt Offset (`page N size M`) trägt der Client die letzte gesehene `_id` als Cursor:
+
+```
+get orders after '0' limit 500        ## erste Seite (ids > 0)
+## Response.Paging: { next_cursor: '517', next: "get orders after '517' limit 500", ... }
+get orders after '517' limit 500      ## nächste Seite
+## ... bis next_cursor = null → fertig
+```
+
+**Verhalten:**
+- Liefert Rows mit `_id > CURSOR`, sortiert nach `_id` aufsteigend
+- `limit N` = Seitengröße; ohne `limit` gilt DefaultPageSize
+- Response-`Paging`: `next_cursor` (letzte `_id` der Seite, `null` am Ende), `next` (fertige Folge-Query), `total` (verbleibende Treffer ab Cursor), `page` = 0
+- Kombinierbar mit `where` und `select`; `order by _id` (asc) ist erlaubt (redundant)
+- **Nicht** kombinierbar mit `page`, `count`, `distinct`, `group by`, Aggregaten, `follow` oder anderem `order by` → `SYNTAX_ERROR`
+- Serveraufwand pro Seite: ein billiger ID-Scan + Projektion nur der Seitenzeilen → Voll-Durchlauf ist **linear** statt quadratisch
+- **Korrekt unter parallelen Writes**: `_id` ist monoton und wird nie recycelt — Deletes/Inserts zwischen Seiten erzeugen keine übersprungenen oder doppelten Rows (Offset-Paging kann beides)
+
+**Wann was:** `after` für vollständige Durchläufe/Hydration; `page N size M` für UI-Grids mit sichtbaren Seitenzahlen.
+
+`order by _id [desc] limit N` ohne `after` nutzt denselben schnellen Pfad (Top-N ohne Voll-Materialisierung) — Ergebnis identisch, nur schneller.
 
 ---
 
@@ -919,6 +954,7 @@ sub.Dispose(); // unsubscribe
 9. **Blob = Base64** — Blob-Daten werden als Base64 ein-/ausgegeben, auf Disk als Einzeldateien
 10. **Blob nicht indexierbar** — Create Index auf Blob-Spalten schlägt fehl
 11. **NULL bei Unique-Index erlaubt** — Nur Non-NULL Werte müssen eindeutig sein
+12. **Cursor-Paging für Voll-Durchläufe** — `after 'CURSOR'` (Keyset über `_id`) statt `page N size M`, wenn eine Tabelle komplett gelesen wird: linear, stabil unter parallelen Writes
 
 ---
 

@@ -143,8 +143,10 @@ internal static class GetParser
         int? limit = null;
         int? page = null;
         int? size = null;
+        ulong? after = null;
+        var afterCursorToken = default(Token);
 
-        if (!ParseTrailingClauses(ctx, ref where, ref isCount, ref groupBy, ref orderBy, ref limit, ref page, ref size))
+        if (!ParseTrailingClauses(ctx, ref where, ref isCount, ref groupBy, ref orderBy, ref limit, ref page, ref size, ref after, ref afterCursorToken))
             return ctx.Fail();
 
         // Optional: follow (join) clauses — zero or more
@@ -194,11 +196,36 @@ internal static class GetParser
         // ── Trailing clauses (post-follow) ────────────────────────
         // Same clauses again so users can write e.g.
         // "follow ... select ... where ... order by ... limit 50".
-        if (!ParseTrailingClauses(ctx, ref where, ref isCount, ref groupBy, ref orderBy, ref limit, ref page, ref size))
+        if (!ParseTrailingClauses(ctx, ref where, ref isCount, ref groupBy, ref orderBy, ref limit, ref page, ref size, ref after, ref afterCursorToken))
             return ctx.Fail();
 
         ctx.ExpectEof();
         if (ctx.HasErrors) return ctx.Fail();
+
+        // 'after' (keyset cursor) pages strictly by _id ascending — reject
+        // combinations that have no meaningful cursor semantics.
+        if (after is not null)
+        {
+            string? conflict = null;
+            if (page is not null)
+                conflict = "'after' cannot be combined with 'page'";
+            else if (isCount)
+                conflict = "'after' cannot be combined with 'count'";
+            else if (aggregate is not null)
+                conflict = "'after' cannot be combined with aggregate functions";
+            else if (groupBy is not null)
+                conflict = "'after' cannot be combined with 'group by'";
+            else if (isDistinct)
+                conflict = "'after' cannot be combined with 'distinct'";
+            else if (followClauses is not null)
+                conflict = "'after' cannot be combined with 'follow'";
+            else if (orderBy is not null
+                     && (orderBy.Count != 1 || orderBy[0].Name != "_id" || orderBy[0].Descending))
+                conflict = "'after' orders by _id ascending — only 'order by _id' is allowed";
+
+            if (conflict is not null)
+                return ctx.Error(afterCursorToken, ErrorCodes.SYNTAX_ERROR, conflict);
+        }
 
         return ParseResult.Ok(new GetQuery
         {
@@ -213,6 +240,9 @@ internal static class GetParser
             IsCount = isCount,
             Page = page,
             Size = size,
+            After = after,
+            AfterCursorPosition = afterCursorToken.Start,
+            AfterCursorLength = afterCursorToken.Length,
             Aggregate = aggregate,
             AggregateColumn = aggregateColumn,
             AggregateColumnPosition = aggregateColumnPosition,
@@ -248,7 +278,8 @@ internal static class GetParser
             if (next.Type == TokenType.Identifier && !ctx.IsKeyword(next, "where")
                 && !ctx.IsKeyword(next, "order") && !ctx.IsKeyword(next, "limit")
                 && !ctx.IsKeyword(next, "count") && !ctx.IsKeyword(next, "group")
-                && !ctx.IsKeyword(next, "page") && !ctx.IsKeyword(next, "follow"))
+                && !ctx.IsKeyword(next, "page") && !ctx.IsKeyword(next, "follow")
+                && !ctx.IsKeyword(next, "after"))
             {
                 ctx.Advance();
                 return fn;
@@ -620,7 +651,7 @@ internal static class GetParser
 
     // ── Select ────────────────────────────────────────────────
 
-    private static readonly string[] SelectStopKeywords = ["distinct", "where", "order", "limit", "count", "group", "page", "follow"];
+    private static readonly string[] SelectStopKeywords = ["distinct", "where", "order", "limit", "count", "group", "page", "follow", "after"];
 
     private static (List<SelectColumn> Columns, List<ComputedColumn>? Computed) ParseSelectList(ParserContext ctx)
     {
@@ -903,7 +934,8 @@ internal static class GetParser
     private static bool IsGroupByStopKeyword(ParserContext ctx, Token token)
     {
         return ctx.IsKeyword(token, "order") || ctx.IsKeyword(token, "limit")
-            || ctx.IsKeyword(token, "page") || ctx.IsKeyword(token, "follow");
+            || ctx.IsKeyword(token, "page") || ctx.IsKeyword(token, "follow")
+            || ctx.IsKeyword(token, "after");
     }
 
     // ── Trailing clauses (where/count/group/order/limit/page) ──
@@ -926,7 +958,9 @@ internal static class GetParser
         ref List<OrderByColumn>? orderBy,
         ref int? limit,
         ref int? page,
-        ref int? size)
+        ref int? size,
+        ref ulong? after,
+        ref Token afterCursorToken)
     {
         while (ctx.Peek().Type != TokenType.Eof)
         {
@@ -1011,6 +1045,27 @@ internal static class GetParser
                     return false;
                 }
                 size = int.Parse(ctx.GetText(sizeToken));
+                ctx.Advance();
+                continue;
+            }
+
+            if (after is null && ctx.IsKeyword(token, "after"))
+            {
+                ctx.Advance();
+                var cursorToken = ctx.Peek();
+                if (cursorToken.Type != TokenType.StringLiteral)
+                {
+                    ctx.AddError(cursorToken, ErrorCodes.SYNTAX_ERROR, "expected string cursor after 'after'");
+                    return false;
+                }
+                var cursorText = ctx.GetStringLiteralText(cursorToken);
+                if (!ulong.TryParse(cursorText, out var cursorValue))
+                {
+                    ctx.AddError(cursorToken, ErrorCodes.SYNTAX_ERROR, $"invalid cursor '{cursorText}'");
+                    return false;
+                }
+                after = cursorValue;
+                afterCursorToken = cursorToken;
                 ctx.Advance();
                 continue;
             }
@@ -1171,7 +1226,7 @@ internal static class GetParser
             if (t.Type == TokenType.Identifier)
             {
                 var text = ctx.GetLowercaseText(t);
-                if (text is "where" or "follow" or "order" or "limit" or "page" or "group" or "count")
+                if (text is "where" or "follow" or "order" or "limit" or "page" or "group" or "count" or "after")
                     break;
             }
             offset++;
