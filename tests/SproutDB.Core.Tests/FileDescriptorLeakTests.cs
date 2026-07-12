@@ -16,6 +16,7 @@ namespace SproutDB.Core.Tests;
 /// Suspected sources: MetaFile.Read leaking in exception paths, or MMF handles
 /// accumulating across repeated provision-calls.
 /// </summary>
+[Collection("ResourceMetrics")]
 public class FileDescriptorLeakTests : IDisposable
 {
     private readonly string _tempDir;

@@ -1,5 +1,6 @@
 namespace SproutDB.Core.Tests;
 
+[Collection("ResourceMetrics")]
 public class FlushCycleTests : IDisposable
 {
     private readonly string _tempDir;
