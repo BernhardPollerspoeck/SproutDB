@@ -464,7 +464,7 @@ upsert sessions [{token: 'a', ttl: 1h}, {token: 'b', ttl: 7d}]
 ```
 get TABLE
     [AGGREGATE column [as alias]]
-    [select col1, col2 | -select col1, col2]
+    [select col1, col2 | LITERAL as alias | -select col1, col2]
     [distinct]
     [where WHERE]
     [count]
@@ -492,6 +492,7 @@ get orders avg total as average_order
 get orders sum total as revenue group by status
 get products select name, price * quantity as line_total
 get orders select status distinct
+get routes select host, true as preserve_host, 'auto' as protocol
 get users
     follow users._id -> orders.user_id as orders
         where orders.status = 'completed'
@@ -499,6 +500,94 @@ get users
     follow users._id -> orders.user_id as orders
     select name, orders.total
 ```
+
+#### Literal-Spalten (`LITERAL as alias`)
+
+Konstante Werte projizieren — nützlich, um Result-Shapes zwischen Queries anzugleichen
+(Discriminator-Felder, Defaults für Spalten, die es in dieser Tabelle nicht gibt).
+
+```
+get routes select host, true as preserve_host        ## bool
+get routes select host, 'auto' as backend_protocol   ## string
+get routes select host, 1 as version                 ## integer → long
+get routes select host, 2.5 as factor                ## float → double
+get routes select host, -1 as offset                 ## negative Zahl
+get routes select host, null as cert_path            ## null
+get routes select 1 as x                             ## ohne echte Spalte
+```
+
+**Regeln:**
+- **Alias ist Pflicht** — `select host, 'auto'` → `SYNTAX_ERROR: literal in select requires an alias`
+- Der Wert ist in **jeder** Zeile identisch — auch auf Zeilen, die ein Right/Outer-Join ohne Source-Row erzeugt
+- Key-Reihenfolge folgt der Select-Liste: `select true as a, host` → `{ a, host }`
+- Typen: `1` → long, `2.5` → double, `'x'` → string, `true`/`false` → bool, `null` → null
+
+**`true` / `false` / `null` nur mit `as`:** diese drei sind Bezeichner-Tokens. Nur wenn ein `as`
+folgt, sind sie Literale — sonst bleiben sie Spaltennamen.
+
+```
+get routes select true as x    ## Literal true
+get routes select true         ## Spalte namens 'true' (→ UNKNOWN_COLUMN, wenn es sie nicht gibt)
+```
+
+**Nicht kombinierbar mit Aggregaten** — das Aggregat steht vor dem Select (`get t sum port as total`),
+und der Parser überspringt den Select-Block, sobald er eins sieht. `select`/`-select` und Aggregate
+schließen sich grammatikalisch aus.
+
+**In `-select` nicht erlaubt** — `-select` entfernt Spalten nach Namen, ein Literal hat dort keine
+Bedeutung → `SYNTAX_ERROR: literals are not allowed in '-select'`.
+
+**Post-Follow:** Literale gehen auch im Select nach einem `follow`. Ein Basis-Literal überlebt einen
+expliziten Post-Follow-Select nur, wenn es dort aufgelistet ist — genau wie eine Basis-Computed-Column.
+
+```
+get routes select host, 1 as v follow routes._id -> backends.route_id as b select host, b.name
+  → v ist weg
+get routes select host, 1 as v follow routes._id -> backends.route_id as b select host, b.name, v
+  → v bleibt
+```
+
+Im Select **direkt am `follow`** (also für die Target-Tabelle) gibt es keine Literale: ein Literal
+in der Liste markiert den Select als Post-Follow-Select. Das ist auch kein Verlust — eine Konstante
+hängt nicht von der gejointen Zeile ab, `follow ... select 1 as x` wäre identisch zum Post-Follow.
+
+#### Order By braucht die Spalte im Ergebnis
+
+Sortiert wird auf den projizierten Zeilen. Eine Sortier-Spalte, die es in der Tabelle gibt, aber
+nicht im Select steht, wird abgelehnt — früher lief die Query durch und sortierte still gar nicht.
+
+```
+get routes select host, port order by port desc   ## ok — port ist im Ergebnis
+get routes order by port desc                     ## ok — ohne select sind alle Spalten da
+get routes select host, port as p order by p      ## ok — Alias ist der Row-Key
+get routes select host order by port desc         ## UNKNOWN_COLUMN: 'order by port' requires 'port' in the select list
+get routes -select port order by port             ## Fehler — port wurde entfernt
+get routes select host, port as p order by port   ## Fehler — der Key heißt jetzt 'p'
+```
+
+Ausnahmen (funktionieren ohne die Spalte im Select):
+- `order by _id [desc] limit N` — eigener Top-N-Pfad, sortiert korrekt
+- `order by _id` mit `after 'CURSOR'` — Cursor-Paging sortiert konstruktionsbedingt nach `_id`
+- `count` — es kommen keine Zeilen zurück, Sortierung ist gegenstandslos
+
+> **Breaking:** Queries wie `select host order by port` liefen früher fehlerfrei durch, kamen aber
+> unsortiert zurück. Sie sind jetzt ein Fehler.
+
+#### Doppelte Output-Namen
+
+Ein Output-Name darf nur einmal vorkommen, sobald mindestens einer der kollidierenden Einträge
+einen expliziten Alias trägt:
+
+```
+get routes select host, host                  ## ok — bloße Wiederholung
+get routes select host, 1 as host             ## SYNTAX_ERROR: duplicate output name 'host'
+get routes select host as x, port as x        ## SYNTAX_ERROR: duplicate output name 'x'
+get orders select price * 2 as x, qty * 3 as x ## SYNTAX_ERROR: duplicate output name 'x'
+get routes -select host, host                 ## ok — Exclude prüft nicht
+```
+
+> **Breaking:** `select price * 2 as x, qty * 3 as x` war früher erlaubt (der letzte Schreiber
+> gewann stillschweigend) und ist jetzt ein Fehler.
 
 #### Cursor-Paging (`after`)
 

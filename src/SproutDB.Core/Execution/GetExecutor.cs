@@ -66,6 +66,33 @@ internal static class GetExecutor
                     computedAliases.Add(comp.Alias);
             }
 
+            // Select aliases rename the row key: 'select port as p order by p' sorts on a
+            // key that really exists — the whitelist has to know the output names too.
+            if (q.Select is not null && !q.ExcludeSelect)
+            {
+                foreach (var col in q.Select)
+                {
+                    if (col.Alias is null) continue;
+                    computedAliases ??= [];
+                    computedAliases.Add(col.Alias);
+                }
+            }
+
+            // Literal aliases are real result columns too. Sorting by a constant is a no-op,
+            // but rejecting it as "column does not exist" would be plainly wrong.
+            if (q.LiteralSelect is not null)
+            {
+                computedAliases ??= new HashSet<string>(q.LiteralSelect.Count);
+                foreach (var lit in q.LiteralSelect)
+                    computedAliases.Add(lit.Alias);
+            }
+            if (q.PostFollowLiteralSelect is not null)
+            {
+                computedAliases ??= new HashSet<string>(q.PostFollowLiteralSelect.Count);
+                foreach (var lit in q.PostFollowLiteralSelect)
+                    computedAliases.Add(lit.Alias);
+            }
+
             foreach (var col in q.OrderBy)
             {
                 // alias.column references a followed table — the projection
@@ -79,6 +106,33 @@ internal static class GetExecutor
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{col.Name}' does not exist", Position = col.Position, Length = col.Length });
+                    continue;
+                }
+
+                // The sort runs on the projected rows — a column that exists in the table
+                // but not in the result would silently not sort at all. Reject it instead.
+                // Exceptions where sorting is correct (or moot) without the column:
+                //  - no follow restriction here: with follow the post-follow projection has
+                //    its own keys, checked via the dot-notation skip above
+                //  - count: no rows are returned, ordering is irrelevant
+                //  - 'order by _id [desc] limit N': served by the top-N fast path
+                //  - 'after' cursor paging: orders by _id by construction
+                if (q.Follow is not null || q.IsCount)
+                    continue;
+
+                var servedByIdFastPath = col.Name == "_id" && q.OrderBy.Count == 1
+                    && (q.After.HasValue || (q.Limit.HasValue && !q.IsDistinct));
+
+                if (!servedByIdFastPath && !IsColumnInProjection(q, col.Name))
+                {
+                    validationErrors ??= [];
+                    validationErrors.Add(new SproutError
+                    {
+                        Code = ErrorCodes.UNKNOWN_COLUMN,
+                        Message = $"'order by {col.Name}' requires '{col.Name}' in the select list",
+                        Position = col.Position,
+                        Length = col.Length,
+                    });
                 }
             }
         }
@@ -225,14 +279,14 @@ internal static class GetExecutor
             && q.OrderBy is [{ Name: "_id" } idOrder])
         {
             var candidates = CollectTopNById(table, filter, btreeResult, 0, topN, idOrder.Descending, nowMs, out _);
-            data = ProjectPlaces(table, effectiveSelect, q.ExcludeSelect, candidates);
+            data = ProjectPlaces(table, effectiveSelect, q.ExcludeSelect, candidates, q.LiteralSelect);
             topNApplied = true;
         }
         else
         {
             data = btreeResult is not null
-                ? ReadRowsByPlaces(table, effectiveSelect, q.ExcludeSelect, btreeResult, filter, nowMs)
-                : ReadRows(table, effectiveSelect, q.ExcludeSelect, filter, nowMs);
+                ? ReadRowsByPlaces(table, effectiveSelect, q.ExcludeSelect, btreeResult, filter, nowMs, q.LiteralSelect)
+                : ReadRows(table, effectiveSelect, q.ExcludeSelect, filter, nowMs, q.LiteralSelect);
         }
 
         // Compute and add computed field values
@@ -286,13 +340,23 @@ internal static class GetExecutor
         // Follow (join): flat LEFT JOIN — each follow expands rows
         if (q.Follow is not null && tableResolver is not null)
         {
+            // Right/Outer joins null out every source key on unmatched target rows —
+            // literal columns must survive that. Built once, only consulted there.
+            Dictionary<string, object?>? literalValues = null;
+            if (q.LiteralSelect is not null)
+            {
+                literalValues = new Dictionary<string, object?>(q.LiteralSelect.Count);
+                foreach (var lit in q.LiteralSelect)
+                    literalValues[lit.Alias] = lit.Value;
+            }
+
             foreach (var follow in q.Follow)
             {
                 var targetTable = tableResolver(follow.TargetTable);
                 if (targetTable is null) continue;
 
                 var targetFilter = WhereEngine.PrepareFilter(targetTable, follow.Where);
-                data = ExecuteFollow(data, follow, targetTable, targetFilter, q.Table);
+                data = ExecuteFollow(data, follow, targetTable, targetFilter, q.Table, literalValues);
             }
 
             // Remove extra columns that were only needed for follow join resolution
@@ -351,14 +415,33 @@ internal static class GetExecutor
                         aliasMap[col.Name] = col.Alias;
                 }
 
+                // Merge literals into the select list by source position so the post-follow
+                // projection keeps the written order, same as ResolveProjection does.
+                var literals = q.PostFollowLiteralSelect;
+
                 for (var i = 0; i < data.Count; i++)
                 {
                     var row = data[i];
                     var projected = new Dictionary<string, object?>(q.PostFollowSelect.Count);
+                    var litIndex = 0;
+
                     foreach (var col in q.PostFollowSelect)
                     {
+                        while (literals is not null && litIndex < literals.Count
+                               && literals[litIndex].Position < col.Position)
+                        {
+                            var lit = literals[litIndex++];
+                            projected[lit.Alias] = lit.Value;
+                        }
+
                         if (row.TryGetValue(col.Name, out var val))
                             projected[col.OutputName] = val;
+                    }
+
+                    while (literals is not null && litIndex < literals.Count)
+                    {
+                        var lit = literals[litIndex++];
+                        projected[lit.Alias] = lit.Value;
                     }
                     // Computed aliases travel with the row — explicit select
                     // doesn't need to mention them again.
@@ -511,7 +594,7 @@ internal static class GetExecutor
         if (hasMore)
             candidates.RemoveAt(candidates.Count - 1);
 
-        var data = ProjectPlaces(table, effectiveSelect, q.ExcludeSelect, candidates);
+        var data = ProjectPlaces(table, effectiveSelect, q.ExcludeSelect, candidates, q.LiteralSelect);
 
         if (q.ComputedSelect is not null)
         {
@@ -632,9 +715,9 @@ internal static class GetExecutor
     /// </summary>
     private static List<Dictionary<string, object?>> ProjectPlaces(
         TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect,
-        List<(ulong Id, long Place)> entries)
+        List<(ulong Id, long Place)> entries, List<LiteralColumn>? literals = null)
     {
-        var projection = ResolveProjection(table, selectColumns, excludeSelect);
+        var projection = ResolveProjection(table, selectColumns, excludeSelect, literals);
         var ttl = table.Ttl;
         var data = new List<Dictionary<string, object?>>(entries.Count);
         foreach (var (id, place) in entries)
@@ -790,6 +873,12 @@ internal static class GetExecutor
             }
         }
 
+        // Grouped rows are built by hand and never pass through ResolveProjection, so the
+        // literals have to be added explicitly — otherwise they'd vanish without a word.
+        // No select order to interleave with here; they go last.
+        if (q.LiteralSelect is not null)
+            ApplyLiteralColumns(data, q.LiteralSelect);
+
         // Order by (on grouped results)
         if (q.OrderBy is not null && q.OrderBy.Count > 0)
         {
@@ -868,7 +957,8 @@ internal static class GetExecutor
         FollowClause follow,
         TableHandle targetTable,
         WhereEngine.FilterNode? targetFilter,
-        string baseTable)
+        string baseTable,
+        IReadOnlyDictionary<string, object?>? literalValues = null)
     {
         // Build a lookup: for each row in the target table, group by the join column value
         var targetIndex = BuildTargetIndex(targetTable, follow.TargetColumn, targetFilter);
@@ -953,7 +1043,13 @@ internal static class GetExecutor
                 {
                     var flat = new Dictionary<string, object?>();
                     foreach (var col in sourceColumns)
-                        flat[col] = null;
+                    {
+                        // A literal is constant by definition — an unmatched target row has no
+                        // source, but that must not turn "1 as v" into v = null.
+                        flat[col] = literalValues is not null && literalValues.TryGetValue(col, out var litVal)
+                            ? litVal
+                            : null;
+                    }
                     flat[$"{alias}._id"] = id;
                     foreach (var (name, hasAlias, handle) in targetColumns)
                         flat[hasAlias ? name : $"{alias}.{name}"] = ReadColumnValue(handle, place, id, name, targetTable);
@@ -1140,9 +1236,10 @@ internal static class GetExecutor
     // ── Read rows ─────────────────────────────────────────────
 
     private static List<Dictionary<string, object?>> ReadRows(
-        TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect, WhereEngine.FilterNode? filter, long nowMs = 0)
+        TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect, WhereEngine.FilterNode? filter,
+        long nowMs = 0, List<LiteralColumn>? literals = null)
     {
-        var projection = ResolveProjection(table, selectColumns, excludeSelect);
+        var projection = ResolveProjection(table, selectColumns, excludeSelect, literals);
         var data = new List<Dictionary<string, object?>>();
         var ttl = table.Ttl;
 
@@ -1163,13 +1260,17 @@ internal static class GetExecutor
         return data;
     }
 
-    private enum VirtualColumn : byte { None, Id, ExpiresAt, Ttl }
+    private enum VirtualColumn : byte { None, Id, ExpiresAt, Ttl, Literal }
 
     /// <summary>
-    /// A projection entry: a real column (Handle set) or a virtual column (_id, _expiresAt, _ttl).
+    /// A projection entry: a real column (Handle set), a virtual column (_id, _expiresAt, _ttl)
+    /// or a literal constant (Virtual = Literal, value in LiteralValue).
     /// Preserves the order from the SELECT clause.
     /// </summary>
-    private readonly record struct ProjectionEntry(string Name, ColumnHandle? Handle, VirtualColumn Virtual = VirtualColumn.None);
+    private readonly record struct ProjectionEntry(
+        string Name, ColumnHandle? Handle,
+        VirtualColumn Virtual = VirtualColumn.None,
+        object? LiteralValue = null);
 
     private static bool IsVirtualColumn(string name) => name is "_id" or "_expiresat" or "_ttl";
 
@@ -1182,11 +1283,40 @@ internal static class GetExecutor
     };
 
     /// <summary>
+    /// Whether the given column name ends up as a key in the projected rows —
+    /// i.e. whether sorting by it can see a value.
+    /// </summary>
+    private static bool IsColumnInProjection(GetQuery q, string name)
+    {
+        if (q.Select is null)
+            return true; // no select → every column is projected
+
+        if (q.ExcludeSelect)
+        {
+            // -select: everything is there except the listed columns
+            return !q.Select.Exists(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (q.Select.Exists(c => c.OutputName.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if (q.ComputedSelect is not null
+            && q.ComputedSelect.Exists(c => c.Alias.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if (q.LiteralSelect is not null
+            && q.LiteralSelect.Exists(l => l.Alias.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        return false;
+    }
+
+    /// <summary>
     /// Builds an ordered projection list that respects the SELECT column order.
     /// _id is included at the position specified in SELECT (or first if no SELECT).
+    /// Literals are interleaved at their own source position, so
+    /// <c>select true as a, host</c> really does put 'a' before 'host'.
     /// </summary>
     private static List<ProjectionEntry> ResolveProjection(
-        TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect)
+        TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect,
+        List<LiteralColumn>? literals = null)
     {
         if (selectColumns is null)
         {
@@ -1218,16 +1348,33 @@ internal static class GetExecutor
         }
 
         {
-            // Preserve SELECT order — virtual columns at their position in the list
-            var result = new List<ProjectionEntry>(selectColumns.Count);
+            // Preserve SELECT order — virtual columns and literals at their position in the list.
+            // Both lists are already in source order, so a two-pointer merge on Position suffices.
+            var result = new List<ProjectionEntry>(selectColumns.Count + (literals?.Count ?? 0));
+            var litIndex = 0;
+
             foreach (var col in selectColumns)
             {
+                while (literals is not null && litIndex < literals.Count
+                       && literals[litIndex].Position < col.Position)
+                {
+                    var lit = literals[litIndex++];
+                    result.Add(new ProjectionEntry(lit.Alias, null, VirtualColumn.Literal, lit.Value));
+                }
+
                 var virt = ToVirtual(col.Name);
                 if (virt != VirtualColumn.None)
                     result.Add(new ProjectionEntry(col.OutputName, null, virt));
                 else
                     result.Add(new ProjectionEntry(col.OutputName, table.GetColumn(col.Name)));
             }
+
+            while (literals is not null && litIndex < literals.Count)
+            {
+                var lit = literals[litIndex++];
+                result.Add(new ProjectionEntry(lit.Alias, null, VirtualColumn.Literal, lit.Value));
+            }
+
             return result;
         }
     }
@@ -1290,6 +1437,7 @@ internal static class GetExecutor
                 VirtualColumn.Id => id,
                 VirtualColumn.ExpiresAt => ttl?.ReadExpiresAt(place) ?? 0L,
                 VirtualColumn.Ttl => ttl?.ReadRowTtlDuration(place) ?? 0L,
+                VirtualColumn.Literal => entry.LiteralValue,
                 _ => null,
             };
         }
@@ -1384,6 +1532,22 @@ internal static class GetExecutor
             merged.AddRange(select);
         merged.AddRange(extras);
         return merged;
+    }
+
+    /// <summary>
+    /// Writes constant columns into rows that were not built by <see cref="ResolveProjection"/>
+    /// (currently only the grouped path — every other path gets literals via the projection,
+    /// which also preserves their position in the SELECT list).
+    /// </summary>
+    private static void ApplyLiteralColumns(
+        List<Dictionary<string, object?>> data,
+        List<LiteralColumn> literals)
+    {
+        foreach (var row in data)
+        {
+            foreach (var lit in literals)
+                row[lit.Alias] = lit.Value;
+        }
     }
 
     private static void ApplyComputedColumns(
@@ -1526,9 +1690,10 @@ internal static class GetExecutor
     /// </summary>
     private static List<Dictionary<string, object?>> ReadRowsByPlaces(
         TableHandle table, List<SelectColumn>? selectColumns, bool excludeSelect,
-        List<long> places, WhereEngine.FilterNode? filter, long nowMs = 0)
+        List<long> places, WhereEngine.FilterNode? filter, long nowMs = 0,
+        List<LiteralColumn>? literals = null)
     {
-        var projection = ResolveProjection(table, selectColumns, excludeSelect);
+        var projection = ResolveProjection(table, selectColumns, excludeSelect, literals);
         var data = new List<Dictionary<string, object?>>(places.Count);
         var ttl = table.Ttl;
 

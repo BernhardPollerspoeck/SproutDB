@@ -69,6 +69,8 @@ Umfangreiche Test-Matrix mit ~70 Szenarien. Fehlende Bereiche:
 | TTL | Table-Level + Row-Level, Background Cleanup |
 | Paging | `page N size M`, cursor-basiert |
 | Computed Columns | `select price * quantity as total` |
+| Literal Columns | `select host, true as preserve_host` — Alias Pflicht, Typen string/long/double/bool/null, auch Post-Follow. Duplikat-Aliase sind jetzt ein Fehler (**breaking**) |
+| Order-By-Projektion | `order by` Spalte muss im Ergebnis stehen — `select host order by port` ist jetzt ein Fehler statt still unsortiert (**breaking**). Select-Aliase sind sortierbar (`port as p order by p`) |
 | Aggregation | `sum`, `avg`, `min`, `max`, `count`, `group by` |
 | Unique Indexes | `create unique index table.col` |
 | Blob/Array Columns | Base64 Blobs, JSON Arrays |

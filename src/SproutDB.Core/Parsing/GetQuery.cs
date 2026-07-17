@@ -22,6 +22,12 @@ internal sealed class GetQuery : IQuery
     public List<ComputedColumn>? ComputedSelect { get; init; }
 
     /// <summary>
+    /// Constant select columns (literal with alias, e.g. <c>true as preserve_host</c>).
+    /// Null means none.
+    /// </summary>
+    public List<LiteralColumn>? LiteralSelect { get; init; }
+
+    /// <summary>
     /// When true, only distinct rows (based on projected columns) are returned.
     /// Only valid when <see cref="Select"/> is set.
     /// </summary>
@@ -126,6 +132,11 @@ internal sealed class GetQuery : IQuery
     /// base-table values that survived the join projection.
     /// </summary>
     public List<ComputedColumn>? PostFollowComputedSelect { get; init; }
+
+    /// <summary>
+    /// Constant columns declared in a post-follow SELECT.
+    /// </summary>
+    public List<LiteralColumn>? PostFollowLiteralSelect { get; init; }
 }
 
 internal enum AggregateFunction
@@ -163,6 +174,28 @@ internal readonly struct OrderByColumn(string name, int position, int length, bo
     public int Position { get; } = position;
     public int Length { get; } = length;
     public bool Descending { get; } = descending;
+}
+
+/// <summary>
+/// A constant value projected under an alias (e.g. <c>true as preserve_host</c>).
+/// The alias is mandatory — a literal has no natural output name.
+/// </summary>
+internal sealed class LiteralColumn
+{
+    /// <summary>Constant value: string, long, double, bool or null.</summary>
+    public required object? Value { get; init; }
+
+    /// <summary>Output key for the value.</summary>
+    public required string Alias { get; init; }
+
+    /// <summary>
+    /// Start of the literal token in the query string. Doubles as the sort key that
+    /// interleaves literals with <see cref="SelectColumn"/>s in the projection order.
+    /// </summary>
+    public int Position { get; init; }
+
+    /// <summary>Length of the literal token in the query string.</summary>
+    public int Length { get; init; }
 }
 
 internal enum ArithmeticOp { Add, Subtract, Multiply, Divide }

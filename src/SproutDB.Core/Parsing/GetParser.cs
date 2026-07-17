@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace SproutDB.Core.Parsing;
 
 internal static class GetParser
@@ -89,13 +91,14 @@ internal static class GetParser
         // Optional: select / -select (mutually exclusive with aggregate)
         List<SelectColumn>? selectColumns = null;
         List<ComputedColumn>? computedColumns = null;
+        List<LiteralColumn>? literalColumns = null;
         var excludeSelect = false;
 
         if (aggregate is null && ctx.Peek().Type != TokenType.Eof)
         {
             if (ctx.MatchKeyword("select"))
             {
-                (selectColumns, computedColumns) = ParseSelectList(ctx);
+                (selectColumns, computedColumns, literalColumns) = ParseSelectList(ctx, isExclude: false);
                 if (ctx.HasErrors) return ctx.Fail();
             }
             else if (ctx.Peek().Type == TokenType.Minus)
@@ -106,7 +109,7 @@ internal static class GetParser
                 if (ctx.MatchKeyword("select"))
                 {
                     excludeSelect = true;
-                    (selectColumns, computedColumns) = ParseSelectList(ctx);
+                    (selectColumns, computedColumns, literalColumns) = ParseSelectList(ctx, isExclude: true);
                     if (ctx.HasErrors) return ctx.Fail();
                 }
                 else
@@ -166,13 +169,14 @@ internal static class GetParser
         // Optional: select / -select after follow (shapes the final joined result)
         List<SelectColumn>? postFollowSelect = null;
         List<ComputedColumn>? postFollowComputed = null;
+        List<LiteralColumn>? postFollowLiterals = null;
         var postFollowExclude = false;
 
         if (followClauses is not null && aggregate is null && ctx.Peek().Type != TokenType.Eof)
         {
             if (ctx.MatchKeyword("select"))
             {
-                (postFollowSelect, postFollowComputed) = ParseSelectList(ctx);
+                (postFollowSelect, postFollowComputed, postFollowLiterals) = ParseSelectList(ctx, isExclude: false);
                 if (ctx.HasErrors) return ctx.Fail();
             }
             else if (ctx.Peek().Type == TokenType.Minus)
@@ -182,7 +186,7 @@ internal static class GetParser
                 if (ctx.MatchKeyword("select"))
                 {
                     postFollowExclude = true;
-                    (postFollowSelect, postFollowComputed) = ParseSelectList(ctx);
+                    (postFollowSelect, postFollowComputed, postFollowLiterals) = ParseSelectList(ctx, isExclude: true);
                     if (ctx.HasErrors) return ctx.Fail();
                 }
                 else
@@ -233,6 +237,7 @@ internal static class GetParser
             Select = selectColumns,
             ExcludeSelect = excludeSelect,
             ComputedSelect = computedColumns,
+            LiteralSelect = literalColumns,
             IsDistinct = isDistinct,
             Where = where,
             OrderBy = orderBy,
@@ -254,6 +259,7 @@ internal static class GetParser
             PostFollowSelect = postFollowSelect,
             PostFollowExclude = postFollowExclude,
             PostFollowComputedSelect = postFollowComputed,
+            PostFollowLiteralSelect = postFollowLiterals,
         });
     }
 
@@ -653,18 +659,42 @@ internal static class GetParser
 
     private static readonly string[] SelectStopKeywords = ["distinct", "where", "order", "limit", "count", "group", "page", "follow", "after"];
 
-    private static (List<SelectColumn> Columns, List<ComputedColumn>? Computed) ParseSelectList(ParserContext ctx)
+    private static (List<SelectColumn> Columns, List<ComputedColumn>? Computed, List<LiteralColumn>? Literals)
+        ParseSelectList(ParserContext ctx, bool isExclude)
     {
         var columns = new List<SelectColumn>();
         List<ComputedColumn>? computed = null;
+        List<LiteralColumn>? literals = null;
 
         while (true)
         {
             var token = ctx.Peek();
+
+            // Literal select field: <literal> as <alias>. Checked before the identifier
+            // guard because string/number literals aren't identifiers at all, and
+            // true/false/null are identifiers that only mean "literal" before an 'as'.
+            if (IsLiteralStart(ctx, token))
+            {
+                var lit = ParseLiteralColumn(ctx, isExclude);
+                if (ctx.HasErrors) return (columns, computed, literals);
+                if (lit is not null)
+                {
+                    literals ??= [];
+                    literals.Add(lit);
+                }
+
+                if (ctx.Peek().Type == TokenType.Comma)
+                {
+                    ctx.Advance();
+                    continue;
+                }
+                break;
+            }
+
             if (token.Type != TokenType.Identifier)
             {
                 ctx.AddError(token, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLUMN_NAME);
-                return (columns, computed);
+                return (columns, computed, literals);
             }
 
             // Stop if this identifier is a clause keyword
@@ -682,7 +712,7 @@ internal static class GetParser
                 if (subToken.Type != TokenType.Identifier)
                 {
                     ctx.AddError(subToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLUMN_NAME);
-                    return (columns, computed);
+                    return (columns, computed, literals);
                 }
                 colName = $"{colName}.{ctx.GetLowercaseText(subToken)}";
                 ctx.Advance();
@@ -694,7 +724,7 @@ internal static class GetParser
                 if (IsArithmeticOp(ctx.Peek().Type))
                 {
                     var comp = ParseComputedColumnTail(ctx, token, colName, leftLen);
-                    if (ctx.HasErrors) return (columns, computed);
+                    if (ctx.HasErrors) return (columns, computed, literals);
                     if (comp is not null)
                     {
                         computed ??= [];
@@ -711,7 +741,7 @@ internal static class GetParser
                         if (aliasToken.Type != TokenType.Identifier)
                         {
                             ctx.AddError(aliasToken, ErrorCodes.SYNTAX_ERROR, "expected alias name after 'as'");
-                            return (columns, computed);
+                            return (columns, computed, literals);
                         }
                         dotAlias = ctx.GetLowercaseText(aliasToken);
                         ctx.Advance();
@@ -724,7 +754,7 @@ internal static class GetParser
             else if (IsArithmeticOp(ctx.PeekAt(1).Type))
             {
                 var comp = ParseComputedColumn(ctx, token, colName);
-                if (ctx.HasErrors) return (columns, computed);
+                if (ctx.HasErrors) return (columns, computed, literals);
                 if (comp is not null)
                 {
                     computed ??= [];
@@ -743,7 +773,7 @@ internal static class GetParser
                     if (aliasToken.Type != TokenType.Identifier)
                     {
                         ctx.AddError(aliasToken, ErrorCodes.SYNTAX_ERROR, "expected alias name after 'as'");
-                        return (columns, computed);
+                        return (columns, computed, literals);
                     }
                     alias = ctx.GetLowercaseText(aliasToken);
                     ctx.Advance();
@@ -761,12 +791,171 @@ internal static class GetParser
             break;
         }
 
-        if (columns.Count == 0 && computed is null)
+        if (columns.Count == 0 && computed is null && literals is null)
         {
             ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLUMN_NAME);
+            return (columns, computed, literals);
         }
 
-        return (columns, computed);
+        if (!isExclude)
+            CheckDuplicateOutputNames(ctx, columns, computed, literals);
+
+        return (columns, computed, literals);
+    }
+
+    /// <summary>
+    /// True if the token starts a literal select field. String/number literals are never
+    /// identifiers; true/false/null are, so they only count as literals when an 'as'
+    /// follows — otherwise they stay column references (a table may have such a column).
+    /// </summary>
+    private static bool IsLiteralStart(ParserContext ctx, Token token)
+    {
+        switch (token.Type)
+        {
+            case TokenType.StringLiteral:
+            case TokenType.IntegerLiteral:
+            case TokenType.FloatLiteral:
+                return true;
+            case TokenType.Minus:
+                return ctx.PeekAt(1).Type is TokenType.IntegerLiteral or TokenType.FloatLiteral;
+            case TokenType.Identifier:
+                return (ctx.IsKeyword(token, "true") || ctx.IsKeyword(token, "false") || ctx.IsKeyword(token, "null"))
+                    && ctx.IsKeyword(ctx.PeekAt(1), "as");
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Parses <c>&lt;literal&gt; as &lt;alias&gt;</c>. The alias is mandatory — a literal has no
+    /// natural output name to fall back on.
+    /// </summary>
+    private static LiteralColumn? ParseLiteralColumn(ParserContext ctx, bool isExclude)
+    {
+        var startToken = ctx.Peek();
+
+        if (isExclude)
+        {
+            ctx.AddError(startToken, ErrorCodes.SYNTAX_ERROR, "literals are not allowed in '-select'");
+            return null;
+        }
+
+        object? value;
+        Token endToken;
+
+        switch (startToken.Type)
+        {
+            case TokenType.StringLiteral:
+                value = ctx.GetStringLiteralText(startToken);
+                endToken = startToken;
+                ctx.Advance();
+                break;
+
+            case TokenType.IntegerLiteral:
+                value = long.Parse(ctx.GetText(startToken), CultureInfo.InvariantCulture);
+                endToken = startToken;
+                ctx.Advance();
+                break;
+
+            case TokenType.FloatLiteral:
+                value = double.Parse(ctx.GetText(startToken), CultureInfo.InvariantCulture);
+                endToken = startToken;
+                ctx.Advance();
+                break;
+
+            case TokenType.Minus:
+                ctx.Advance(); // consume '-'
+                var numToken = ctx.Peek();
+                // Assigned in separate branches on purpose: a ternary would unify long and
+                // double to double, silently turning "-1 as x" into -1.0.
+                if (numToken.Type == TokenType.IntegerLiteral)
+                    value = -long.Parse(ctx.GetText(numToken), CultureInfo.InvariantCulture);
+                else
+                    value = -double.Parse(ctx.GetText(numToken), CultureInfo.InvariantCulture);
+                endToken = numToken;
+                ctx.Advance();
+                break;
+
+            default: // true / false / null — IsLiteralStart already vetted the text
+                value = ctx.IsKeyword(startToken, "true") ? true
+                    : ctx.IsKeyword(startToken, "false") ? false
+                    : null;
+                endToken = startToken;
+                ctx.Advance();
+                break;
+        }
+
+        var length = endToken.Start + endToken.Length - startToken.Start;
+
+        if (!ctx.MatchKeyword("as"))
+        {
+            ctx.AddError(startToken, ErrorCodes.SYNTAX_ERROR, "literal in select requires an alias");
+            return null;
+        }
+
+        var aliasToken = ctx.Peek();
+        if (aliasToken.Type != TokenType.Identifier)
+        {
+            ctx.AddError(aliasToken, ErrorCodes.SYNTAX_ERROR, "expected alias name after 'as'");
+            return null;
+        }
+        var alias = ctx.GetLowercaseText(aliasToken);
+        ctx.Advance();
+
+        return new LiteralColumn
+        {
+            Value = value,
+            Alias = alias,
+            Position = startToken.Start,
+            Length = length,
+        };
+    }
+
+    /// <summary>
+    /// Rejects duplicate output names, but only when at least one of the colliding entries
+    /// carries an explicit alias. Plain repetition (<c>select host, host</c>) stays legal —
+    /// it is harmless and was always allowed.
+    /// </summary>
+    private static void CheckDuplicateOutputNames(
+        ParserContext ctx, List<SelectColumn> columns,
+        List<ComputedColumn>? computed, List<LiteralColumn>? literals)
+    {
+        // Collect every output name with its source position, then walk in source order so
+        // the reported errors stay ordered (BuildAnnotatedQuery appends them sequentially).
+        var entries = new List<(string Name, bool Aliased, int Position, int Length)>(columns.Count);
+
+        foreach (var col in columns)
+            entries.Add((col.OutputName, col.Alias is not null, col.Position, col.Length));
+
+        if (computed is not null)
+        {
+            foreach (var comp in computed)
+                entries.Add((comp.Alias, true, comp.LeftPosition, comp.LeftLength));
+        }
+
+        if (literals is not null)
+        {
+            foreach (var lit in literals)
+                entries.Add((lit.Alias, true, lit.Position, lit.Length));
+        }
+
+        entries.Sort((a, b) => a.Position.CompareTo(b.Position));
+
+        var seen = new Dictionary<string, bool>(entries.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var (name, aliased, position, length) in entries)
+        {
+            if (seen.TryGetValue(name, out var firstAliased))
+            {
+                // Plain repetition of the same bare column is harmless and always was legal.
+                if (aliased || firstAliased)
+                {
+                    ctx.AddError(new Token(TokenType.Identifier, position, length),
+                        ErrorCodes.SYNTAX_ERROR, $"duplicate output name '{name}'");
+                }
+                continue;
+            }
+            seen[name] = aliased;
+        }
     }
 
     private static bool IsArithmeticOp(TokenType type) =>
@@ -1210,8 +1399,10 @@ internal static class GetParser
 
     /// <summary>
     /// Checks whether a 'select' keyword at the current position is a post-follow select
-    /// (contains dot-notation columns like alias.col) rather than a follow-level select.
-    /// Scans ahead through the comma-separated column list looking for any dot token.
+    /// rather than a follow-level select. Scans ahead through the comma-separated column
+    /// list for anything a follow-level select cannot express: dot-notation (alias.col),
+    /// a literal, or an arithmetic operator. Any of those settles it — a follow-level
+    /// select only ever holds plain <c>column [as alias]</c> entries.
     /// </summary>
     private static bool IsPostFollowSelect(ParserContext ctx)
     {
@@ -1222,12 +1413,24 @@ internal static class GetParser
             var t = ctx.PeekAt(offset);
             if (t.Type == TokenType.Eof) break;
             if (t.Type == TokenType.Dot) return true;
+
+            // Literals and arithmetic can only belong to a post-follow list. Without this
+            // "select name, price * 2 as x" was silently routed to the follow-level parser,
+            // which bailed at the operator and left it to fail as "expected end of query".
+            if (t.Type is TokenType.StringLiteral or TokenType.IntegerLiteral or TokenType.FloatLiteral
+                or TokenType.Plus or TokenType.Minus or TokenType.Star or TokenType.Slash)
+                return true;
+
             // Stop scanning at keywords that end a column list
             if (t.Type == TokenType.Identifier)
             {
-                var text = ctx.GetLowercaseText(t);
-                if (text is "where" or "follow" or "order" or "limit" or "page" or "group" or "count" or "after")
+                if (IsSelectStopKeyword(ctx, t))
                     break;
+
+                // true/false/null right before an 'as' is a literal, not a column reference
+                var text = ctx.GetLowercaseText(t);
+                if ((text is "true" or "false" or "null") && ctx.IsKeyword(ctx.PeekAt(offset + 1), "as"))
+                    return true;
             }
             offset++;
         }
@@ -1246,11 +1449,13 @@ internal static class GetParser
             if (token.Type != TokenType.Identifier)
                 break;
 
-            var text = ctx.GetLowercaseText(token);
-            // Stop at follow-terminating keywords
-            if (text is "where" or "follow")
+            // Same terminators as everywhere else. This list used to be just where/follow,
+            // so "select name limit 5" swallowed 'limit' as a column name and then choked
+            // on the 5, and "select name count" quietly returned a column called 'count'.
+            if (IsSelectStopKeyword(ctx, token))
                 break;
 
+            var text = ctx.GetLowercaseText(token);
             ctx.Advance();
 
             // Check for optional alias: column as alias
