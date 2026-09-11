@@ -1939,11 +1939,15 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         _writeChannel.Writer.Complete();
         _writerTask.GetAwaiter().GetResult();
 
-        // 4. Final sync + flush on dispose thread (writer is done)
+        // 4. Stop idle / cap / memory-pressure eviction — it runs on timer and GC
+        //    threads and would close tables while the final flush uses them
+        _scopes.StopEviction();
+
+        // 5. Final sync + flush on dispose thread (writer is done)
         _walManager.SyncAll();
         FlushAll();
 
-        // 5. Dispose handles
+        // 6. Dispose handles
         _scopes.Dispose();
         _changeNotifier.Dispose();
         _tableCache.Dispose();

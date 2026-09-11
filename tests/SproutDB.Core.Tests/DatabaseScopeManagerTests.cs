@@ -133,6 +133,21 @@ public class DatabaseScopeManagerTests : IDisposable
         Assert.Equal(1, _scopes.OpenDatabaseCount);
     }
 
+    [Fact]
+    public void StopEviction_NoTriggerEvictsAnymore()
+    {
+        // The engine stops eviction before its final flush — a table closed
+        // during that flush made Dispose throw ObjectDisposedException
+        var dbPath = EnsureDb("db1");
+        using (_scopes.Acquire(dbPath)) { /* touch */ }
+
+        _scopes.StopEviction();
+        _scopes.EvictIdle(cutoffTicks: long.MaxValue);
+        _scopes.EvictOnMemoryPressure();
+
+        Assert.Equal(1, _scopes.OpenDatabaseCount);
+    }
+
     // ── Cap enforcement ──────────────────────────────────────
 
     [Fact]

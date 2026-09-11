@@ -205,6 +205,7 @@ internal sealed class DatabaseScopeManager : IDisposable
     {
         lock (state.Lock)
         {
+            if (_disposed) return; // see StopEviction
             if (state.Pinned) return;
             if (state.RefCount > 0) return;
 
@@ -255,11 +256,34 @@ internal sealed class DatabaseScopeManager : IDisposable
         return true; // stay registered
     }
 
+    /// <summary>
+    /// Stops all eviction triggers and waits for an eviction that is already
+    /// running (timer, cap or GC thread). Afterwards no table or WAL handle is
+    /// closed behind the caller's back — the engine calls this before its final
+    /// flush. Idempotent.
+    /// </summary>
+    public void StopEviction()
+    {
+        _disposed = true;
+
+        if (_idleTimer is not null)
+        {
+            using var callbacksDone = new ManualResetEvent(false);
+            if (_idleTimer.Dispose(callbacksDone))
+                callbacksDone.WaitOne();
+        }
+
+        // TryEvict works under the state lock and re-checks _disposed there:
+        // taking every lock once waits out evictions that are already inside
+        foreach (var state in _states.Values)
+        {
+            lock (state.Lock) { }
+        }
+    }
+
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        _idleTimer?.Dispose();
+        StopEviction();
         _states.Clear();
     }
 
