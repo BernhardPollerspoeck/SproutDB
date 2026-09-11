@@ -17,6 +17,9 @@ internal sealed class SproutDatabase : ISproutDatabase
 
     public List<SproutResponse> Query(string query) => _engine.Execute(query, Name);
 
+    public ValueTask<List<SproutResponse>> QueryAsync(string query, CancellationToken cancellationToken = default)
+        => _engine.ExecuteAsync(query, Name, parameters: null, cancellationToken);
+
     public IDisposable OnChange(string table, Action<SproutResponse> callback)
         => _engine.ChangeNotifier.Subscribe(Name, table, callback);
 
@@ -29,8 +32,8 @@ internal sealed class SproutDatabase : ISproutDatabase
         if (describe.Operation == SproutOperation.Error)
             _engine.ExecuteInternal("create table _saved_queries (name string 200, query string 4000, pinned bool)", Name);
 
-        var escapedName = name.Replace("'", "\\'");
-        var escapedQuery = query.Replace("'", "\\'");
+        var escapedName = Parsing.StringLiteral.Escape(name);
+        var escapedQuery = Parsing.StringLiteral.Escape(query);
         _engine.ExecuteInternal(
             $"upsert _saved_queries {{ name: '{escapedName}', query: '{escapedQuery}', pinned: {(pinned ? "true" : "false")} }} on name",
             Name);

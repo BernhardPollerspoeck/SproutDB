@@ -142,7 +142,7 @@ public static class SproutAdminExtensions
                 await file.CopyToAsync(fs);
             }
 
-            var response = engine.Execute($"restore '{tempPath}'", db)[0];
+            var response = engine.Execute($"restore '{Parsing.StringLiteral.Escape(tempPath)}'", db)[0];
 
             if (response.Operation == SproutOperation.Error)
             {

@@ -21,7 +21,7 @@ internal static class SyntaxHighlighter
     {
         "from", "where", "order", "by", "limit", "offset", "as",
         "select", "follow", "page", "database", "table", "column",
-        "index", "on", "to", "apikey", "set",
+        "index", "on", "to", "apikey", "set", "when", "exists", "expect",
     };
 
     private static readonly HashSet<string> Operators = new(StringComparer.OrdinalIgnoreCase)

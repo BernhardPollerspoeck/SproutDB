@@ -47,6 +47,21 @@ internal sealed class TransactionJournal
         _entries.Add(new BTreeRemoveUndoEntry(btree, key, place));
     }
 
+    public void RecordTtlWrite(TtlHandle ttl, long place)
+    {
+        _entries.Add(new TtlUndoEntry(ttl, place, ttl.ReadExpiresAt(place), ttl.ReadRowTtlDuration(place)));
+    }
+
+    /// <summary>
+    /// Snapshots a side file (.blob / .array) before it is written or deleted.
+    /// The previous content is kept in memory; null means the file did not exist.
+    /// </summary>
+    public void RecordFileChange(string path)
+    {
+        var oldContent = File.Exists(path) ? File.ReadAllBytes(path) : null;
+        _entries.Add(new FileUndoEntry(path, oldContent));
+    }
+
     /// <summary>
     /// Reverses all recorded changes in reverse order.
     /// </summary>
@@ -116,5 +131,26 @@ internal sealed class TransactionJournal
     {
         // Undo a remove = re-insert
         public void Undo() => btree.Insert(key, place);
+    }
+
+    private sealed class TtlUndoEntry(TtlHandle ttl, long place, long oldExpiresAt, long oldRowTtl) : IUndoEntry
+    {
+        public void Undo() => ttl.Write(place, oldExpiresAt, oldRowTtl);
+    }
+
+    private sealed class FileUndoEntry(string path, byte[]? oldContent) : IUndoEntry
+    {
+        public void Undo()
+        {
+            if (oldContent is null)
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            else
+            {
+                File.WriteAllBytes(path, oldContent);
+            }
+        }
     }
 }

@@ -23,6 +23,8 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.*" />
+    <!-- Remote client: OnChange over the /sproutdb/changes hub -->
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.*" />
     <ProjectReference Include="../SproutDB.Analyzers/SproutDB.Analyzers.csproj"
                       ReferenceOutputAssembly="false"
                       PrivateAssets="all" />

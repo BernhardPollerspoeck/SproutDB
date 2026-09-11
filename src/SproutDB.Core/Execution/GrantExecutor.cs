@@ -36,5 +36,5 @@ internal static class GrantExecutor
         };
     }
 
-    private static string Escape(string value) => value.Replace("'", "\\'");
+    private static string Escape(string value) => StringLiteral.Escape(value);
 }

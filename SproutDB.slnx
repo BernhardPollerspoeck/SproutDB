@@ -27,5 +27,6 @@
   </Folder>
   <Folder Name="/sandbox/">
     <Project Path="sandbox/SproutDB.Sandbox/SproutDB.Sandbox.csproj" />
+    <Project Path="sandbox/SproutDB.TestClient/SproutDB.TestClient.csproj" />
   </Folder>
 </Solution>

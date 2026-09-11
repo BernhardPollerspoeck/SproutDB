@@ -21,9 +21,12 @@ public sealed class SproutEngineSettings
 
     /// <summary>
     /// Interval for WAL group commit (fsync to durable storage).
-    /// Writes are buffered in the OS and fsynced at this interval.
-    /// Lower values = less data at risk on crash, higher values = better throughput.
-    /// Default: 50ms. Set to <see cref="TimeSpan.Zero"/> for immediate fsync per write.
+    /// Writes are appended to the WAL (OS buffer) and acknowledged immediately;
+    /// the fsync happens at this interval. A process crash loses nothing (the
+    /// OS still holds the WAL); a power loss / OS crash can lose acknowledged
+    /// writes of up to this interval.
+    /// Default: 50ms. Set to <see cref="TimeSpan.Zero"/> to fsync before every
+    /// response — durable against power loss, at a large throughput cost.
     /// </summary>
     public TimeSpan WalSyncInterval { get; set; } = TimeSpan.FromMilliseconds(50);
 

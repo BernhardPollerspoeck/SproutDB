@@ -26,6 +26,21 @@ internal static class DeleteParser
         if (where is null)
             return ctx.Error(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLUMN_NAME);
 
+        // Optional EXPECT N (number of rows that must match)
+        int? expect = null;
+        if (ctx.MatchKeyword("expect"))
+        {
+            var countToken = ctx.Peek();
+            if (countToken.Type != TokenType.IntegerLiteral
+                || !int.TryParse(ctx.GetText(countToken), out var count))
+            {
+                return ctx.Error(countToken, ErrorCodes.SYNTAX_ERROR,
+                    "expected a non-negative row count after 'expect'");
+            }
+            ctx.Advance();
+            expect = count;
+        }
+
         ctx.ExpectEof();
         if (ctx.HasErrors) return ctx.Fail();
 
@@ -33,6 +48,7 @@ internal static class DeleteParser
         {
             Table = tableName,
             Where = where,
+            Expect = expect,
         });
     }
 }

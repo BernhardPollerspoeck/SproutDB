@@ -106,7 +106,7 @@ internal static class MigrationRunner
 
     private static string EscapeString(string value)
     {
-        return value.Replace("'", "\\'");
+        return Parsing.StringLiteral.Escape(value);
     }
 
     /// <summary>

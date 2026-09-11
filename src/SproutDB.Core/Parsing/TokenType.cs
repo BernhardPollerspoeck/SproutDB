@@ -9,6 +9,7 @@ internal enum TokenType : byte
     StringLiteral,
     IntegerLiteral,
     FloatLiteral,
+    Parameter, // @name — replaced by a literal before parsing (QueryParameters)
 
     // Delimiters
     LeftParen,

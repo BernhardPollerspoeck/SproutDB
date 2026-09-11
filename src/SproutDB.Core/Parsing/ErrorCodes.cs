@@ -24,4 +24,7 @@ internal static class ErrorCodes
     public const string KEY_NOT_FOUND = "KEY_NOT_FOUND";
     public const string UNIQUE_VIOLATION = "UNIQUE_VIOLATION";
     public const string ID_NOT_FOUND = "ID_NOT_FOUND";
+    public const string CONDITION_FAILED = "CONDITION_FAILED";
+    public const string EXPECTATION_FAILED = "EXPECTATION_FAILED";
+    public const string PARAMETER_ERROR = "PARAMETER_ERROR";
 }

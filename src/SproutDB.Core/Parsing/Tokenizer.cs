@@ -37,16 +37,16 @@ internal static class Tokenizer
                 continue;
             }
 
-            // String literal: 'text' with \' escape support
+            // String literal: 'text' with \' and \\ escapes (see StringLiteral)
             if (c == '\'')
             {
                 var start = pos;
                 pos++;
                 while (pos < span.Length)
                 {
-                    if (span[pos] == '\\' && pos + 1 < span.Length && span[pos + 1] == '\'')
+                    if (span[pos] == '\\' && pos + 1 < span.Length && (span[pos + 1] == '\'' || span[pos + 1] == '\\'))
                     {
-                        pos += 2; // skip escaped quote
+                        pos += 2; // skip escape sequence
                         continue;
                     }
                     if (span[pos] == '\'')
@@ -75,6 +75,17 @@ internal static class Tokenizer
                     pos++;
                 }
                 tokens.Add(new Token(isFloat ? TokenType.FloatLiteral : TokenType.IntegerLiteral, start, pos - start));
+                continue;
+            }
+
+            // Parameter placeholder: @name (token spans '@' + name)
+            if (c == '@' && pos + 1 < span.Length && (char.IsAsciiLetter(span[pos + 1]) || span[pos + 1] == '_'))
+            {
+                var start = pos;
+                pos++;
+                while (pos < span.Length && (char.IsAsciiLetterOrDigit(span[pos]) || span[pos] == '_'))
+                    pos++;
+                tokens.Add(new Token(TokenType.Parameter, start, pos - start));
                 continue;
             }
 

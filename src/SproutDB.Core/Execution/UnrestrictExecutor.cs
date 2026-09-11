@@ -32,5 +32,5 @@ internal static class UnrestrictExecutor
         };
     }
 
-    private static string Escape(string value) => value.Replace("'", "\\'");
+    private static string Escape(string value) => StringLiteral.Escape(value);
 }

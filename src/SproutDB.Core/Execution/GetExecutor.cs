@@ -1062,6 +1062,17 @@ internal static class GetExecutor
     }
 
     /// <summary>
+    /// Reads a complete row as <c>get</c> returns it (blob as base64, array as list).
+    /// </summary>
+    internal static Dictionary<string, object?> ReadFullRow(TableHandle table, ulong id, long place)
+    {
+        var row = new Dictionary<string, object?>(table.Schema.Columns.Count + 1) { ["_id"] = id };
+        foreach (var col in table.Schema.Columns)
+            row[col.Name] = ReadColumnValue(table.GetColumn(col.Name), place, id, col.Name, table);
+        return row;
+    }
+
+    /// <summary>
     /// Reads a column value, handling blob/array columns by reading external files.
     /// </summary>
     private static object? ReadColumnValue(ColumnHandle handle, long place, ulong id, string colName, TableHandle table)

@@ -45,5 +45,5 @@ internal static class PurgeApiKeyExecutor
             DeleteExecutor.Execute(deleteQuery, table, dq);
     }
 
-    private static string Escape(string value) => value.Replace("'", "\\'");
+    private static string Escape(string value) => StringLiteral.Escape(value);
 }

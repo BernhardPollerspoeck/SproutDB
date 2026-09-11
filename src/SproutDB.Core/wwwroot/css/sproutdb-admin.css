@@ -525,12 +525,31 @@ body {
     animation: stats-pop 1.2s ease-out;
 }
 
+.stat-fail {
+    color: var(--red);
+    font-size: 13px;
+    font-weight: 700;
+}
+
 .stats-flash .stat-ok {
     opacity: 1;
 }
 
+.stats-flash.stats-error {
+    animation-name: stats-pop-error;
+}
+
+.stats-error .stat-value {
+    color: var(--text-2);
+}
+
 @keyframes stats-pop {
     0%   { background: rgba(74, 222, 128, 0.2); }
+    100% { background: transparent; }
+}
+
+@keyframes stats-pop-error {
+    0%   { background: rgba(248, 113, 113, 0.2); }
     100% { background: transparent; }
 }
 
@@ -970,6 +989,23 @@ body {
     font-size: 12px;
     color: var(--text-1);
     white-space: pre-wrap;
+    overflow-x: auto;
+}
+
+.error-rows-label {
+    margin: 0 14px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.error-rows {
+    margin: 0 14px 12px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
     overflow-x: auto;
 }
 

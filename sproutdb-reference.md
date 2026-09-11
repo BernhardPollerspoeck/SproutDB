@@ -71,7 +71,18 @@ void Migrate(Assembly assembly, ISproutDatabase database);
 // ISproutDatabase
 string Name { get; }
 List<SproutResponse> Query(string query);  // always returns list (multi-query support)
+ValueTask<List<SproutResponse>> QueryAsync(string query, CancellationToken ct = default);
 IDisposable OnChange(string table, Action<SproutResponse> callback);
+
+// Extensions (SproutDatabaseExtensions): Parameter + async
+db.Query("… where k = @key", new { key });            // bzw. IReadOnlyDictionary<string, object?>
+await db.QueryAsync("… where k = @key", new { key }, ct);
+
+// QueryAsync: blockiert keinen Thread, während Writes in der Writer-Queue warten;
+// reine Reads laufen synchron durch. Cancellation greift nur für Writes, die der
+// Writer noch nicht begonnen hat → OperationCanceledException = kein Write dieses
+// Aufrufs lief. Nach dem ersten Write läuft der Rest eines Batches durch.
+// Der HTTP-Endpoint führt intern asynchron aus (ohne Abbruch bei Client-Disconnect).
 void SaveQuery(string name, string query, bool pinned = false); // seedet _saved_queries (Admin UI)
 
 // ISproutEntity (für Typed LINQ API db.Table<T>())
@@ -222,10 +233,17 @@ users.Upsert(new User { Email = "john@test.com", Name = "John Doe" }, on: u => u
 // Bulk Upsert
 users.Upsert(new[] { user1, user2, user3 }, on: u => u.Email);
 
+// Bedingtes Upsert (→ "on email when ..."): Fehlschlag = CONDITION_FAILED, Data = aktuelle Row
+var r = users.Upsert(user, on: u => u.Email, when: u => u.Version == expectedVersion);
+users.Upsert(user, on: u => u.Email, ifNotExists: true);   // → "when not exists"
+
 // Delete
 users.Delete(u => u.Active == false);
 users.Delete(u => u.Id == 42);
+users.Delete(u => u.Email == email && u.Version == v, expect: 1);  // → EXPECTATION_FAILED bei ≠ 1
 ```
+
+Upsert/Delete werfen nicht, sondern liefern die `SproutResponse` — `CONDITION_FAILED` / `EXPECTATION_FAILED` über `response.Errors` prüfen.
 
 ---
 
@@ -266,21 +284,44 @@ users.Delete(u => u.Id == 42);
 | Typ | Größe | Beschreibung |
 |-----|-------|--------------|
 | `bool` | 1 Byte | `true` / `false` |
-| `blob` | 8 Bytes (Counter) | Binärdaten, eigene Dateien auf Disk. Base64 bei Ein-/Ausgabe |
+| `blob` | 8 Bytes (Counter) | Binärdaten, eigene Dateien auf Disk. Base64 bei Ein-/Ausgabe (`get`); die `upsert`-Antwort enthält nur die Byte-Länge (`long`) |
 | `array` | 8 Bytes (Counter) | Typisiertes Array, eigene Dateien auf Disk. Syntax: `array string 30` |
 
 ### Literal-Werte in Queries
 
 | Typ | Syntax | Beispiel |
 |-----|--------|---------|
-| String | Einfache Anführungszeichen | `'hello'`, `'it\'s'` |
+| String | Einfache Anführungszeichen | `'hello'`, `'it\'s'`, `'C:\\data\\'` |
 | Integer | Ziffern | `42`, `-7` |
 | Float | Ziffern mit Punkt | `3.14`, `-0.5` |
 | Boolean | Keyword | `true`, `false` |
-| Null | Keyword | `null` (nur in WHERE) |
+| Null | Keyword | `null` — in WHERE (`is null`) und als Upsert-Wert (`{payload: null}` leert die Spalte) |
 | Datum | String-Format | `'2025-01-15'` |
 | DateTime | String-Format | `'2025-01-15 14:30:00.0000'` |
-| Duration (TTL) | Zahl + Einheit | `7d`, `24h`, `30m` |
+| Duration (TTL) | Zahl + Einheit | `7d`, `24h`, `30m`, `45s` |
+
+**Escapes in String-Literalen:** Es gibt genau zwei — `\'` → `'` und `\\` → `\`. Jeder andere Backslash bleibt wörtlich stehen (`'C:\temp'` = `C:\temp`). Ein Wert, der auf `\` endet, muss als `\\` geschrieben werden (`'a\\'` = `a\`), sonst maskiert der Backslash das schließende Hochkomma. Werte aus Code besser nie selbst einbauen, sondern als **Parameter** übergeben (nächster Abschnitt); wer doch Queries zusammenbaut: **erst `\` verdoppeln, dann `'` escapen**.
+
+### Parametrisierte Abfragen
+
+Statt Werte in den Query-Text zu bauen (und escapen zu müssen): `@name`-Platzhalter plus Parameter. Jeder Wert wird zu **genau einem Literal** — er kann nie zu Query-Syntax werden (keine Injection).
+
+```csharp
+db.Query("get grain_state where grain_key = @key", new { key = grainKey });
+db.Query("upsert grain_state {grain_key: @k, etag: @next, payload: @p} on grain_key when etag = @expected",
+    new { k = key, next = newEtag, p = payload, expected = oldEtag });
+db.Query("get users where name in @names", new { names = new[] { "a", "b" } });
+db.Query("get users where name = @name", new Dictionary<string, object?> { ["name"] = "x" });
+```
+
+- Nur an **Wert-Positionen**: WHERE-Werte, Upsert-Werte, `in @liste`, `when`-Bedingung. Nicht für Tabellen-/Spaltennamen (`get @table` → `SYNTAX_ERROR`).
+- Namen sind case-insensitive; derselbe Platzhalter darf mehrfach vorkommen; gilt für alle Statements eines Batches.
+- `@` in einem String-Literal (`'mail@x.com'`) ist kein Platzhalter.
+- Typen: `string`, `char`, Zahlen, `bool`, `null`, `DateTime`/`DateTimeOffset`(UTC)/`DateOnly`/`TimeOnly`, `byte[]` (→ Base64 für Blob), Listen davon (→ `[...]`). Andere Typen → `ToString()` als String.
+- Fehler → `PARAMETER_ERROR` (mit Position), bevor irgendetwas ausgeführt wird: fehlender Parameter, überzähliger Parameter, NaN/Infinity, verschachtelte Liste, Name doppelt (nur Groß/Klein verschieden).
+- Ausgeführt und ins WAL geschrieben wird die gebundene Query (Werte als escapte Literale) — Replay parst exakt denselben Text.
+- Die typisierte API (`db.Table<T>()`) nutzt intern Parameter.
+- HTTP: JSON-Body `{"query": "...", "parameters": {...}}` (siehe HTTP API).
 
 ---
 
@@ -394,6 +435,27 @@ get users ## inline comment ## where active = true
 
 ---
 
+### Multi-Query & Transaktionen
+
+```
+## Batch: 3 Queries → 3 Responses (positional)
+get users; get orders; describe users
+
+## Transaktion: alles oder nichts, echter Rollback
+atomic;
+upsert accounts {_id: 1, balance: 50};
+upsert accounts {_id: 2, balance: 150};
+commit
+```
+
+- `atomic` und `commit` stehen je in einem eigenen Segment (eigenes Semikolon), keine Verschachtelung.
+- **In `atomic` sind nur `upsert`, `delete`, `get` und `describe` erlaubt** — Schema-Änderungen (`create`, `add column`, `purge`, …), Backup/Restore und Auth-Befehle → `SYNTAX_ERROR`, weil ein Rollback sie nicht rückgängig machen kann. Tabellen/Indizes vorher anlegen (für Tabelle + Unique-Index atomar: `unique`-Modifier in `create table`).
+- `get` / `describe` in der Transaktion sehen die eigenen, noch nicht committeten Writes.
+- Jeder Fehler (inkl. `CONDITION_FAILED` / `EXPECTATION_FAILED`) rollt alles zurück; die Antwort ist dann ein einzelner Fehler mit `transaction rolled back: …`.
+- Bei Erfolg endet die Response-Liste mit einem Transaction-Marker (`Operation = transaction`, `Affected` = Summe).
+
+---
+
 ### CREATE DATABASE
 
 ```
@@ -409,7 +471,7 @@ Datenbankname kommt aus dem `X-SproutDB-Database` Header (HTTP) bzw. wird bei In
 
 ```
 create table NAME
-create table NAME (spalte1 typ [größe] [strict] [default wert], ...)
+create table NAME (spalte1 typ [größe] [strict] [default wert] [unique], ...)
 create table NAME (...) ttl DURATION
 create table NAME (...) ttl DURATION with chunk_size N
 create table NAME (...) with chunk_size N
@@ -426,6 +488,12 @@ create table events (name string) ttl 7d with chunk_size 1000
 
 - `chunk_size` steuert Slot-Preallokation (100–1.000.000). Default: Database → Engine (10.000)
 - Reihenfolge: Columns → TTL → with chunk_size
+- Modifier `strict` / `default` / `unique` in beliebiger Reihenfolge
+- `unique` legt den Unique-Index **in derselben Anweisung** an wie die Tabelle (kein Zeitfenster „Tabelle ohne Index“, anders als `create table` + `create index unique`). Verhalten wie `create index unique` (NULLs erlaubt). Nicht für `blob`/`array` (`TYPE_MISMATCH`). Unique-Indizes werden vom Auto-Index-System nie entfernt.
+
+```
+create table grain_state (grain_key string 64 strict unique, etag string 32, payload blob)
+```
 
 ---
 
@@ -452,10 +520,48 @@ upsert sessions [{token: 'a', ttl: 1h}, {token: 'b', ttl: 7d}]
 **Verhalten:**
 - Ohne `_id` und ohne `on` → Insert (neue ID wird auto-generiert)
 - Mit `_id` im Body → implizit `on _id`, Update wenn ID existiert
-- Mit `on COLUMN` → Lookup by Column-Wert: Update wenn gefunden, Insert wenn nicht
+- Mit `on COLUMN` → Lookup by Column-Wert: Update wenn gefunden, Insert wenn nicht. **Hat COLUMN einen Index (z.B. `unique`), läuft der Lookup über den B-Tree (O(log n)) — sonst über einen Scan aller Rows (O(n)).** Für Upsert-Keys daher immer einen (Unique-)Index anlegen.
 - `_id` kann NICHT frei gewählt werden — immer auto-generiert bei Insert
-- TTL-Feld `ttl: DURATION` setzt Row-Ablaufzeit (`0` = kein TTL)
+- `{spalte: null}` leert die Spalte (nur bei nullable Spalten, sonst `NOT_NULLABLE`)
+- TTL-Feld `ttl: DURATION` setzt Row-Ablaufzeit (`0` = keine Row-TTL, siehe [TTL](#ttl))
 - Bulk-Limit: Default 100 Records pro Upsert (konfigurierbar)
+- Antwort: `data` enthält die geschriebenen Rows inkl. `_id`. Blob-Spalten erscheinen dort als Byte-Länge (`long`), nicht als Base64 — den Inhalt liefert erst `get`
+
+#### Bedingtes Upsert (`when`) — Compare-and-Set
+
+```
+## Update nur, wenn die gespeicherte Row die Bedingung erfüllt (optimistic concurrency / ETag)
+upsert grain_state {grain_key: 'k', etag: 'E2', payload: '...'} on grain_key when etag = 'E1'
+
+## Nur Insert — schlägt fehl, wenn die Row schon existiert
+upsert grain_state {grain_key: 'k', etag: 'E1'} on grain_key when not exists
+
+## Nur Update — kein Insert, wenn die Row fehlt
+upsert grain_state {grain_key: 'k', etag: 'E2'} on grain_key when exists
+
+## Volle WHERE-Grammatik, auch mit implizitem on _id
+upsert grain_state {grain_key: 'k', etag: 'E2'} on grain_key when etag in ['E1', 'E1b'] and payload is not null
+upsert grain_state {_id: 42, etag: 'E2'} when etag = 'E1'
+
+## Grabstein mit TTL
+upsert grain_state {grain_key: 'k', payload: null, etag: 'E2', ttl: 7d} on grain_key when etag = 'E1'
+```
+
+| Klausel | Row existiert, Bedingung wahr | Row existiert, Bedingung falsch | Row existiert nicht |
+|---|---|---|---|
+| `when <where-ausdruck>` | Update | `CONDITION_FAILED` | `CONDITION_FAILED` |
+| `when exists` | Update | – | `CONDITION_FAILED` |
+| `when not exists` | `CONDITION_FAILED` | – | Insert |
+| ohne `when` | Update | – | Insert |
+
+- Die Bedingung wird gegen die **gespeicherte** Row ausgewertet, die `on` (bzw. `_id`) findet — nicht gegen die neuen Werte.
+- **Atomar:** Prüfung und Write laufen im Single-Writer im selben Schritt. Gilt embedded wie über HTTP mit beliebig vielen Clients/Prozessen — von zwei Writern mit demselben erwarteten ETag gewinnt genau einer.
+- **Fehlerantwort `CONDITION_FAILED`:** `data` enthält die **komplette aktuelle Row** (wie `get`), damit der Aufrufer den gespeicherten ETag ohne zweiten Read kennt. Fehlt die Row, ist `data` leer. Die Fehlerposition zeigt auf `when`.
+- **TTL:** Eine abgelaufene Row gilt als nicht vorhanden (auch wenn der Cleanup sie noch nicht gelöscht hat). `when not exists` räumt sie dann frei — sie wird physisch gelöscht — und fügt eine echte neue Row mit neuer `_id` ein, genau als wäre der Cleanup schon gelaufen.
+- **In `atomic`:** `CONDITION_FAILED` rollt die ganze Transaktion zurück. `data` zeigt die Row so, wie sie **nach** dem Rollback gespeichert ist (nicht den Zwischenstand der Transaktion).
+- **Nur Einzel-Records:** `when` bei Bulk-Upsert → `SYNTAX_ERROR` (mehrere bedingte Writes → `atomic` mit einzelnen Upserts).
+- `when` braucht `on` oder `_id` im Record, sonst `SYNTAX_ERROR`. `when not exists` geht nur mit `on` (eine Row kann nicht mit explizitem `_id` angelegt werden).
+- `exists` / `not exists` sind nur am Query-Ende Keywords — eine Spalte namens `exists` bleibt im Ausdruck nutzbar (`when exists = true`).
 
 ---
 
@@ -620,6 +726,7 @@ get orders after '517' limit 500      ## nächste Seite
 
 ```
 delete TABLE where WHERE
+delete TABLE where WHERE expect N
 ```
 
 **WHERE ist Pflicht** (kein versehentliches Löschen aller Rows).
@@ -627,7 +734,14 @@ delete TABLE where WHERE
 ```
 delete users where active = false
 delete sessions where created < '2024-01-01 00:00:00.0000'
+
+## Bedingtes Delete: nur löschen, wenn genau 1 Row passt (ETag-Check)
+delete grain_state where grain_key = 'k' and etag = 'E1' expect 1
 ```
+
+- `expect N` — passt eine andere Anzahl Rows als N, wird **nichts** gelöscht und `EXPECTATION_FAILED` zurückgegeben (Meldung nennt die gefundene Anzahl). In `atomic` rollt das die Transaktion zurück.
+- Mit `expect` gelten abgelaufene TTL-Rows als nicht vorhanden: Sie werden weder gezählt noch gelöscht (das macht der TTL-Cleanup).
+- Ohne `expect` meldet ein Delete einen Fehlschlag nur über `affected = 0`.
 
 ---
 
@@ -728,7 +842,13 @@ upsert sessions {token: 'abc', ttl: 1h}
 purge ttl sessions
 ```
 
-Einheiten: `m` (Minuten), `h` (Stunden), `d` (Tage). Background-Cleanup läuft periodisch.
+Einheiten: `s` (Sekunden), `m` (Minuten), `h` (Stunden), `d` (Tage).
+
+**Verhalten (darauf kann man sich verlassen):**
+- Abgelaufene Rows sind **sofort unsichtbar** für `get` — auch bevor der Background-Cleanup sie physisch löscht (Cleanup läuft periodisch, Default alle 5 Minuten).
+- Für `upsert … on COL` gilt eine abgelaufene Row ebenfalls als nicht vorhanden: Trifft `on` eine abgelaufene, noch nicht aufgeräumte Row, wird sie freigeräumt (physisch gelöscht) und der Record als **neue Row mit neuer `_id`** eingefügt — sie wird nie mit alten Werten „wiederbelebt“.
+- **Jeder Upsert setzt die Ablaufzeit neu:** mit `ttl: X` gilt die Row-TTL X ab jetzt; ohne `ttl`-Feld (oder mit `ttl: 0`) gilt wieder die Tabellen-TTL — bzw. gar keine, wenn die Tabelle keine hat. Ein Update ohne `ttl` hebt eine Row-TTL also auf.
+- `purge ttl TABLE` entfernt die Tabellen-TTL.
 
 ---
 
@@ -898,7 +1018,15 @@ Wenn eine Tabelle keinen eigenen chunk_size hat (0), wird der Database-chunk_siz
 ### Endpoint
 ```
 POST /sproutdb/query
-Content-Type: text/plain
+Content-Type: text/plain           ← Body = die Query
+Content-Type: application/json     ← Body = {"query": "...", "parameters": {...}}
+```
+
+Mit JSON-Body werden `@name`-Platzhalter aus `parameters` gebunden (siehe [Parametrisierte Abfragen](#parametrisierte-abfragen)). Werte: String, Zahl, `true`/`false`, `null` oder ein Array davon — Objekte → 400.
+
+```json
+{"query": "upsert grain_state {grain_key: @k, etag: @next} on grain_key when etag = @expected",
+ "parameters": {"k": "user/42", "next": "E2", "expected": "E1"}}
 ```
 
 ### Request Headers
@@ -926,7 +1054,7 @@ Response ist **immer ein JSON Array** von `SproutResponse` Objekten:
 | Status | Wann |
 |---|---|
 | 200 | Query ausgeführt (Fehler stehen in den individuellen Responses) |
-| 400 | Leerer Body oder fehlender Database-Header |
+| 400 | Leerer Body, fehlender Database-Header oder ungültiger JSON-Body |
 | 401 | Auth fehlend/ungültig (nur bei Auth-Middleware-Prüfung) |
 | 403 | Keine Berechtigung (nur bei Auth-Middleware-Prüfung) |
 
@@ -1022,6 +1150,10 @@ sub.Dispose(); // unsubscribe
 | `WHERE_REQUIRED` | DELETE braucht WHERE |
 | `PROTECTED_NAME` | Name mit `_` Prefix (System-reserviert) |
 | `UNIQUE_VIOLATION` | Unique-Index verletzt |
+| `ID_NOT_FOUND` | Upsert mit `_id`, die nicht existiert |
+| `CONDITION_FAILED` | `upsert … when …`: Bedingung nicht erfüllt — `data` enthält die aktuelle Row (leer, wenn keine) |
+| `EXPECTATION_FAILED` | `delete … expect N`: andere Anzahl passender Rows, nichts gelöscht |
+| `PARAMETER_ERROR` | `@name`-Parameter fehlt, ist überzählig oder nicht darstellbar — nichts ausgeführt |
 | `AUTH_REQUIRED` | Kein API-Key angegeben |
 | `AUTH_INVALID` | API-Key ungültig |
 | `PERMISSION_DENIED` | Keine Berechtigung |
@@ -1053,10 +1185,24 @@ sub.Dispose(); // unsubscribe
 - **Index-File**: `_index` — Slot-basiert (20B Header + 8B pro Slot), ID → Place Mapping
 - **Schema-File**: `_schema.bin` — Binär, Column-Definitionen + ChunkSize
 - **Meta-File**: `_meta.bin` pro Database — CreatedTicks + ChunkSize
-- **WAL**: Query-Strings + Sequence Numbers, human-readable, idempotent Replay
+- **WAL**: Query-Strings + Sequence Numbers, human-readable, idempotent Replay (Auto-IDs werden mitgeschrieben, ein Replay-Insert bekommt dieselbe `_id`). Transaktionen: alle Einträge teilen eine groupId und werden erst durch einen abschließenden `commit`-Eintrag gültig — Replay überspringt Gruppen ohne Marker (zurückgerollt oder durch Crash unterbrochen)
 - **TTL-File**: `_ttl` — 16B pro Slot (ExpiresAt + RowTtlDuration)
 - **B-Tree**: `.btree` Files für manuelle und Auto-Indizes
 - **Blob/Array**: `{col}_{id}.blob` / `{col}_{id}.array` — Einzeldateien pro Row
+- **Slot-Wiederverwendung**: Gelöschte Slots werden neu belegt, sobald ≥ 20 % der Slots frei sind (Backfill). Eine Tabelle mit ständigem Delete + Insert wächst also nicht unbegrenzt — sie pendelt sich bei ca. Rows / 0,8 Slots ein. `shrink table` ist nur nötig, um Dateien nach großen Löschaktionen physisch zu verkleinern.
+
+### Dauerhaftigkeit (WAL + Group Commit)
+
+Jeder Write wird **vor** der Ausführung ins WAL geschrieben (OS-Buffer) und dann sofort bestätigt. Das `fsync` auf die Platte passiert gesammelt im Hintergrund (Group Commit), Default alle 50 ms (`WalSyncInterval`).
+
+| Ereignis | Was geht verloren? |
+|---|---|
+| Prozess-Absturz (Exception, Kill, OOM) | **Nichts** — das WAL liegt bereits im OS-Cache und wird beim nächsten Start replayed |
+| Stromausfall / OS-Crash | Bestätigte Writes der letzten ≤ `WalSyncInterval` (Default ≤ 50 ms) |
+
+- `WalSyncInterval = TimeSpan.Zero` → `fsync` vor jeder Antwort (auch pro Transaktion). Dann ist jeder bestätigte Write auch bei Stromausfall sicher — kostet aber deutlich Durchsatz (ein `fsync` pro Write statt pro Batch).
+- Konfiguration: `AddSproutDB(o => o.WalSyncInterval = TimeSpan.Zero)` bzw. `SproutDB:WalSyncIntervalMs` in der appsettings.
+- Zusätzlich flusht der Flush-Cycle (`FlushInterval`, Default 5 s) die Datenfiles und leert danach das WAL.
 
 ### Auto-Index
 
@@ -1086,6 +1232,36 @@ app.MapSproutDBAdmin();     // Blazor Admin UI
 
 app.Run();
 ```
+
+### Remote-Client (gleiche Schnittstelle wie embedded)
+
+Ein Server wie oben, beliebig viele Clients (z.B. mehrere Orleans-Silos) — embedded oder remote ist nur eine Frage der Registrierung:
+
+```csharp
+// Embedded:  builder.Services.AddSproutDB(o => o.DataDirectory = "/data/sproutdb");
+// Remote:
+builder.Services.AddSproutDBClient(o =>
+{
+    o.BaseAddress = new Uri("https://db.example.com/");
+    o.ApiKey = "sdb_ak_...";          // nur wenn der Server Auth hat
+});
+
+// Code bleibt gleich — ISproutServer ist jetzt ein SproutClient
+var db = server.GetOrCreateDatabase("shop");   // bzw. SelectDatabase (wirft, wenn es sie nicht gibt)
+db.Query("get users where email = @e", new { e = email });
+await db.QueryAsync("upsert gs {k: @k, etag: @n} on k when etag = @o", new { k, n, o });
+db.Table<User>("users").Where(u => u.Active).ToList();
+using var sub = db.OnChange("users", r => …);   // SignalR, braucht MapSproutDBHub() am Server
+
+// Ohne DI:
+using var client = new SproutClient(new SproutClientOptions { BaseAddress = new Uri("https://db.example.com/") });
+```
+
+- Läuft über `POST /sproutdb/query` (`MapSproutDB()`); Parameter und typisierte API binden clientseitig, der Server sieht fertige Queries.
+- `QueryAsync`: das Token greift nur bis die Anfrage gesendet ist — danach wird auf die Antwort gewartet, damit `OperationCanceledException` weiterhin „nichts ausgeführt“ bedeutet.
+- `OnChange`: eine SignalR-Verbindung pro Abo (automatischer Reconnect, Abo wird erneuert).
+- Row-Werte kommen als JSON-Primitive: `string`, `long` (bzw. `ulong`), `double`, `bool`, `null`, `List<object?>` — `_id` immer `ulong`. Die typisierte API konvertiert passend.
+- **Nur am Server:** `GetDatabases()`, `Migrate(...)` (Migrations beim Server registrieren) und `SaveQuery(...)` → `NotSupportedException`.
 
 ### Mit Auth und Migrations
 ```csharp

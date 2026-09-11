@@ -106,49 +106,6 @@ internal sealed class WalFile : IDisposable
     }
 
     /// <summary>
-    /// Marks all entries with the given groupId as rolled back by overwriting
-    /// the groupId to its negative value.
-    /// </summary>
-    public void MarkGroupRolledBack(long groupId)
-    {
-        if (groupId <= 0) return;
-
-        lock (_lock)
-        {
-            if (_disposed)
-                throw new ObjectDisposedException(nameof(WalFile));
-
-            _fs.Seek(0, SeekOrigin.Begin);
-            var headerBuf = new byte[HeaderSize];
-
-            while (_fs.Position < _fs.Length)
-            {
-                var entryStart = _fs.Position;
-                if (_fs.Read(headerBuf, 0, HeaderSize) != HeaderSize) break;
-
-                var len = BinaryPrimitives.ReadInt32LittleEndian(headerBuf.AsSpan(16));
-                var entryGroupId = BinaryPrimitives.ReadInt64LittleEndian(headerBuf.AsSpan(20));
-
-                if (entryGroupId == groupId)
-                {
-                    var negGroupBuf = new byte[8];
-                    BinaryPrimitives.WriteInt64LittleEndian(negGroupBuf, -groupId);
-                    _fs.Seek(entryStart + 20, SeekOrigin.Begin);
-                    _fs.Write(negGroupBuf);
-                    _fs.Seek(entryStart + HeaderSize + len, SeekOrigin.Begin);
-                }
-                else
-                {
-                    _fs.Seek(len, SeekOrigin.Current);
-                }
-            }
-
-            _fs.Flush(flushToDisk: false);
-            _dirty = true;
-        }
-    }
-
-    /// <summary>
     /// Truncates the WAL file and resets sequence counter.
     /// </summary>
     public void Truncate()

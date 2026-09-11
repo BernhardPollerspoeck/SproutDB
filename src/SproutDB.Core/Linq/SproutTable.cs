@@ -10,6 +10,7 @@ public sealed class SproutTable<T> where T : class, ISproutEntity, new()
     private readonly string _tableName;
 
     private string? _whereClause;
+    private ParameterCollector _whereParameters = new();
     private List<string>? _selectColumns;
     private string? _orderByColumn;
     private bool _orderByDescending;
@@ -27,8 +28,15 @@ public sealed class SproutTable<T> where T : class, ISproutEntity, new()
 
     public SproutTable<T> Where(Expression<Func<T, bool>> predicate)
     {
-        _whereClause = SproutExpressionVisitor.ConvertWhere(predicate);
+        SetWhere(predicate);
         return this;
+    }
+
+    private void SetWhere(Expression<Func<T, bool>> predicate)
+    {
+        // Fresh collector: a replaced where clause must not leave unused parameters behind
+        _whereParameters = new ParameterCollector();
+        _whereClause = SproutExpressionVisitor.ConvertWhere(predicate, _whereParameters);
     }
 
     public SproutTable<T> Select(Expression<Func<T, object>> selector)
@@ -68,7 +76,7 @@ public sealed class SproutTable<T> where T : class, ISproutEntity, new()
     public SproutResponse Run()
     {
         var query = BuildGetQuery();
-        return _db.Query(query)[0];
+        return _db.Query(query, _whereParameters.Values)[0];
     }
 
     public List<T> ToList()
@@ -89,7 +97,7 @@ public sealed class SproutTable<T> where T : class, ISproutEntity, new()
     public T? FirstOrDefault(Expression<Func<T, bool>>? predicate = null)
     {
         if (predicate is not null)
-            _whereClause = SproutExpressionVisitor.ConvertWhere(predicate);
+            SetWhere(predicate);
 
         _limit = 1;
         var response = Run();
@@ -116,42 +124,74 @@ public sealed class SproutTable<T> where T : class, ISproutEntity, new()
 
     // ── Upsert operations ───────────────────────────────────────
 
+    // Values always travel as parameters (@p0, @p1, …) — never as hand-built literals.
+
     public SproutResponse Upsert(T record)
     {
-        var fields = TypeMapper.SerializeToUpsertFields(record);
-        return _db.Query($"upsert {_tableName} {fields}")[0];
+        var parameters = new ParameterCollector();
+        var fields = TypeMapper.SerializeToUpsertFields(record, parameters);
+        return _db.Query($"upsert {_tableName} {fields}", parameters.Values)[0];
     }
 
     public SproutResponse Upsert(object record)
     {
-        var fields = TypeMapper.SerializeToUpsertFields(record);
-        return _db.Query($"upsert {_tableName} {fields}")[0];
+        var parameters = new ParameterCollector();
+        var fields = TypeMapper.SerializeToUpsertFields(record, parameters);
+        return _db.Query($"upsert {_tableName} {fields}", parameters.Values)[0];
     }
 
     public SproutResponse Upsert(T record, Expression<Func<T, object>> on)
     {
-        var fields = TypeMapper.SerializeToUpsertFields(record);
+        var parameters = new ParameterCollector();
+        var fields = TypeMapper.SerializeToUpsertFields(record, parameters);
         var onColumn = SproutExpressionVisitor.ConvertMemberName<T, object>(on);
-        return _db.Query($"upsert {_tableName} {fields} on {onColumn}")[0];
+        return _db.Query($"upsert {_tableName} {fields} on {onColumn}", parameters.Values)[0];
+    }
+
+    /// <summary>
+    /// Conditional upsert: writes only if <paramref name="when"/> holds for the
+    /// stored row found via <paramref name="on"/>. Otherwise the response carries
+    /// <c>CONDITION_FAILED</c> and the current row in <c>Data</c> (empty if missing).
+    /// </summary>
+    public SproutResponse Upsert(T record, Expression<Func<T, object>> on, Expression<Func<T, bool>> when)
+    {
+        var parameters = new ParameterCollector();
+        var fields = TypeMapper.SerializeToUpsertFields(record, parameters);
+        var onColumn = SproutExpressionVisitor.ConvertMemberName<T, object>(on);
+        var condition = SproutExpressionVisitor.ConvertWhere(when, parameters);
+        return _db.Query($"upsert {_tableName} {fields} on {onColumn} when {condition}", parameters.Values)[0];
+    }
+
+    /// <summary>
+    /// With <paramref name="ifNotExists"/> = true: inserts only if no row matches
+    /// <paramref name="on"/>, otherwise <c>CONDITION_FAILED</c> with the existing row.
+    /// </summary>
+    public SproutResponse Upsert(T record, Expression<Func<T, object>> on, bool ifNotExists)
+    {
+        if (!ifNotExists)
+            return Upsert(record, on);
+
+        var parameters = new ParameterCollector();
+        var fields = TypeMapper.SerializeToUpsertFields(record, parameters);
+        var onColumn = SproutExpressionVisitor.ConvertMemberName<T, object>(on);
+        return _db.Query($"upsert {_tableName} {fields} on {onColumn} when not exists", parameters.Values)[0];
     }
 
     public SproutResponse Upsert(IEnumerable<T> records, Expression<Func<T, object>> on)
     {
-        var sb = new StringBuilder();
-        sb.Append($"upsert {_tableName} [");
-        var first = true;
-        foreach (var record in records)
-        {
-            if (!first) sb.Append(", ");
-            first = false;
-            sb.Append(TypeMapper.SerializeToUpsertFields(record));
-        }
-        sb.Append(']');
-        sb.Append($" on {SproutExpressionVisitor.ConvertMemberName<T, object>(on)}");
-        return _db.Query(sb.ToString())[0];
+        var parameters = new ParameterCollector();
+        var query = BuildBulkUpsert(records, parameters)
+            + $" on {SproutExpressionVisitor.ConvertMemberName<T, object>(on)}";
+        return _db.Query(query, parameters.Values)[0];
     }
 
     public SproutResponse Upsert(IEnumerable<T> records)
+    {
+        var parameters = new ParameterCollector();
+        return _db.Query(BuildBulkUpsert(records, parameters), parameters.Values)[0];
+    }
+
+    private string BuildBulkUpsert(IEnumerable<T> records, ParameterCollector parameters)
     {
         var sb = new StringBuilder();
         sb.Append($"upsert {_tableName} [");
@@ -160,18 +200,31 @@ public sealed class SproutTable<T> where T : class, ISproutEntity, new()
         {
             if (!first) sb.Append(", ");
             first = false;
-            sb.Append(TypeMapper.SerializeToUpsertFields(record));
+            sb.Append(TypeMapper.SerializeToUpsertFields(record, parameters));
         }
         sb.Append(']');
-        return _db.Query(sb.ToString())[0];
+        return sb.ToString();
     }
 
     // ── Delete ──────────────────────────────────────────────────
 
     public SproutResponse Delete(Expression<Func<T, bool>> predicate)
     {
-        var whereClause = SproutExpressionVisitor.ConvertWhere(predicate);
-        return _db.Query($"delete {_tableName} where {whereClause}")[0];
+        var parameters = new ParameterCollector();
+        var whereClause = SproutExpressionVisitor.ConvertWhere(predicate, parameters);
+        return _db.Query($"delete {_tableName} where {whereClause}", parameters.Values)[0];
+    }
+
+    /// <summary>
+    /// Deletes only if exactly <paramref name="expect"/> rows match — otherwise nothing
+    /// is deleted and the response carries <c>EXPECTATION_FAILED</c>.
+    /// </summary>
+    public SproutResponse Delete(Expression<Func<T, bool>> predicate, int expect)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(expect);
+        var parameters = new ParameterCollector();
+        var whereClause = SproutExpressionVisitor.ConvertWhere(predicate, parameters);
+        return _db.Query($"delete {_tableName} where {whereClause} expect {expect}", parameters.Values)[0];
     }
 
     // ── Query string builder ────────────────────────────────────

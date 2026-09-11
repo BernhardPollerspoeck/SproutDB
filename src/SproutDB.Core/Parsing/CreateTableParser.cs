@@ -151,11 +151,12 @@ internal static class CreateTableParser
             }
         }
 
-        // Optional modifiers: strict / default (any order)
+        // Optional modifiers: strict / default / unique (any order)
         var strict = false;
         string? defaultValue = null;
+        var unique = false;
 
-        for (var i = 0; i < 2; i++)
+        for (var i = 0; i < 3; i++)
         {
             if (ctx.MatchKeyword("strict"))
             {
@@ -165,6 +166,18 @@ internal static class CreateTableParser
             {
                 defaultValue = ParseDefaultValue(ctx);
                 if (ctx.HasErrors) return null!;
+            }
+            else if (ctx.IsKeyword(ctx.Peek(), "unique"))
+            {
+                if (colType is ColumnType.Blob or ColumnType.Array)
+                {
+                    // Caller checks ctx.HasErrors and discards the definition
+                    ctx.AddError(ctx.Peek(), ErrorCodes.TYPE_MISMATCH,
+                        $"'unique' is not supported on {ColumnTypes.GetName(colType)} columns");
+                    break;
+                }
+                ctx.Advance();
+                unique = true;
             }
             else
             {
@@ -179,6 +192,7 @@ internal static class CreateTableParser
             Size = size,
             Strict = strict,
             Default = defaultValue,
+            Unique = unique,
             ElementType = elementType,
             ElementSize = elementSize,
         };

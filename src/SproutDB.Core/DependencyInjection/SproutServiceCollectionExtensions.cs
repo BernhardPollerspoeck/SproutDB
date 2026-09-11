@@ -52,6 +52,26 @@ public static class SproutServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers a <see cref="Client.SproutClient"/> for a SproutDB server reached over
+    /// HTTP, as <see cref="ISproutServer"/> — the remote alternative to <c>AddSproutDB</c>.
+    /// Code using <see cref="ISproutServer"/> / <see cref="ISproutDatabase"/> works unchanged.
+    /// </summary>
+    public static IServiceCollection AddSproutDBClient(
+        this IServiceCollection services,
+        Action<Client.SproutClientOptions> configure)
+    {
+        var options = new Client.SproutClientOptions();
+        configure(options);
+        if (options.BaseAddress is null)
+            throw new ArgumentException("SproutClientOptions.BaseAddress is required.", nameof(configure));
+
+        services.AddSingleton(options);
+        services.AddSingleton(sp => new Client.SproutClient(sp.GetRequiredService<Client.SproutClientOptions>()));
+        services.AddSingleton<ISproutServer>(sp => sp.GetRequiredService<Client.SproutClient>());
+        return services;
+    }
+
+    /// <summary>
     /// Enables authentication for SproutDB.
     /// Must be called after <see cref="AddSproutDB"/>.
     /// </summary>

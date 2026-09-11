@@ -44,6 +44,32 @@ public class TtlTests : IDisposable
     }
 
     [Fact]
+    public void CreateTable_WithTtl_Seconds()
+    {
+        var result = _engine.ExecuteOne("create table temp (key string 64) ttl 30s", "shop");
+        Assert.Null(result.Errors);
+    }
+
+    [Fact]
+    public void Upsert_RowTtl_Seconds_StoresDurationInSeconds()
+    {
+        _engine.ExecuteOne("create table temp (key string 64)", "shop");
+        _engine.ExecuteOne("upsert temp {key: 'a', ttl: 45s}", "shop");
+
+        var r = _engine.ExecuteOne("get temp select key, _ttl", "shop");
+        var row = Assert.Single(r.Data ?? []);
+        Assert.Equal(45L, row["_ttl"]);
+    }
+
+    [Fact]
+    public void CreateTable_WithTtl_InvalidUnit_ListsSeconds()
+    {
+        var result = _engine.ExecuteOne("create table temp (key string 64) ttl 30x", "shop");
+        Assert.Equal(SproutOperation.Error, result.Operation);
+        Assert.Contains("s (seconds)", result.Errors?[0].Message ?? "");
+    }
+
+    [Fact]
     public void CreateTable_WithTtl_CreatesTtlFile()
     {
         _engine.ExecuteOne("create table sessions (token string 64) ttl 24h", "shop");
@@ -258,6 +284,44 @@ public class TtlTests : IDisposable
         engine.Dispose();
         if (Directory.Exists(tempDir))
             Directory.Delete(tempDir, true);
+    }
+
+    [Fact]
+    public void BackgroundCleanup_DeletesBlobAndArrayFiles()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"sproutdb-test-ttl-bg-{Guid.NewGuid()}");
+        var settings = new SproutEngineSettings
+        {
+            DataDirectory = tempDir,
+            TtlCleanupInterval = TimeSpan.FromMilliseconds(100),
+        };
+        try
+        {
+            using var engine = new SproutEngine(settings);
+            engine.ExecuteOne("create database", "shop");
+            engine.ExecuteOne("create table files (name string 64, data blob, tags array string 10)", "shop");
+            engine.ExecuteOne($"upsert files {{name: 'a', data: '{Convert.ToBase64String([1, 2, 3])}', tags: ['x'], ttl: 1s}}", "shop");
+
+            var tableDir = Path.Combine(tempDir, "shop", "files");
+            Assert.Single(Directory.GetFiles(tableDir, "*.blob"));
+            Assert.Single(Directory.GetFiles(tableDir, "*.array"));
+
+            // Wait until the row expired and a cleanup pass removed it
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < deadline
+                && (Directory.GetFiles(tableDir, "*.blob").Length > 0 || Directory.GetFiles(tableDir, "*.array").Length > 0))
+            {
+                Thread.Sleep(100);
+            }
+
+            Assert.Empty(Directory.GetFiles(tableDir, "*.blob"));
+            Assert.Empty(Directory.GetFiles(tableDir, "*.array"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, true);
+        }
     }
 
     // ── Count aggregate with TTL ──────────────────────────────

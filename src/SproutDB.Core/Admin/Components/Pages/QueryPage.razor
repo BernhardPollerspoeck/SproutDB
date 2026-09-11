@@ -140,8 +140,16 @@
         }
         else if (Tab.LastResponse is not null)
         {
-            <div class="query-stats @(_statsFlash ? "stats-flash" : "")">
-                <span class="stat-ok">&#10003;</span>
+            var failed = Tab.LastResponse.Operation == SproutOperation.Error;
+            <div class="query-stats @(_statsFlash ? "stats-flash" : "") @(failed ? "stats-error" : "")">
+                @if (failed)
+                {
+                    <span class="stat-fail">&#10007;</span>
+                }
+                else
+                {
+                    <span class="stat-ok">&#10003;</span>
+                }
                 <span><span class="stat-value">@FormatElapsed(Tab.ElapsedMs)</span> <span class="stat-label">time</span></span>
                 <span><span class="stat-value">@Tab.RowCount</span> <span class="stat-label">rows</span></span>
                 <span><span class="stat-value">@FormatBytes(Tab.PayloadBytes)</span> <span class="stat-label">size</span></span>
@@ -213,6 +221,35 @@
             @if (!string.IsNullOrEmpty(Tab.LastResponse.AnnotatedQuery))
             {
                 <pre class="error-annotated">@Tab.LastResponse.AnnotatedQuery</pre>
+            }
+            @if (Tab.DisplayData is { Count: > 0 } currentRows && Tab.Columns.Count > 0)
+            {
+                <!-- e.g. CONDITION_FAILED carries the row as it is stored now -->
+                <div class="error-rows-label">@(currentRows.Count == 1 ? "Current row" : "Current rows")</div>
+                <div class="error-rows">
+                    <table class="results-table">
+                        <thead>
+                            <tr>
+                                @foreach (var col in Tab.Columns)
+                                {
+                                    <th><div class="th-content">@col.Name <span class="th-type">@col.Type</span></div></th>
+                                }
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in currentRows)
+                            {
+                                <tr>
+                                    @foreach (var col in Tab.Columns)
+                                    {
+                                        row.TryGetValue(col.Name, out var cellValue);
+                                        <td class="@GetCellClass(col, cellValue)">@FormatCell(cellValue)</td>
+                                    }
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
             }
         </div>
     }
@@ -703,7 +740,8 @@
 
         Tab.LastResponse = response;
         Tab.ElapsedMs = sw.Elapsed.TotalMilliseconds;
-        Tab.RowCount = responses.Sum(r => r.Data?.Count ?? r.Affected);
+        // Rows attached to an error (CONDITION_FAILED: the current row) were not returned by the query
+        Tab.RowCount = responses.Sum(r => r.Operation == SproutOperation.Error ? 0 : (r.Data?.Count ?? r.Affected));
         Tab.PayloadBytes = responses.Sum(r => EstimatePayload(r));
 
         RebuildColumns(response, query);
@@ -986,8 +1024,8 @@
         if (long.TryParse(input, out _) || ulong.TryParse(input, out _) || double.TryParse(input, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _))
             return input;
 
-        // Quote as string, escaping inner single quotes
-        var escaped = input.Replace("'", "\\'");
+        // Quote as string, escaping backslashes and inner single quotes
+        var escaped = SproutDB.Core.Parsing.StringLiteral.Escape(input);
         return $"'{escaped}'";
     }
 
@@ -1177,8 +1215,8 @@
         EnsureSavedQueriesTable();
 
         var collapsed = CollapseQuery(QueryText);
-        var escapedName = _saveName.Replace("'", "\\'");
-        var escapedQuery = collapsed.Replace("'", "\\'");
+        var escapedName = SproutDB.Core.Parsing.StringLiteral.Escape(_saveName);
+        var escapedQuery = SproutDB.Core.Parsing.StringLiteral.Escape(collapsed);
 
         Engine.ExecuteInternal(
             $"upsert _saved_queries {{ name: '{escapedName}', query: '{escapedQuery}', pinned: false }} on name",
@@ -1224,7 +1262,7 @@
     {
         if (string.IsNullOrEmpty(selectedDatabase)) return;
 
-        var escapedName = entry.Name.Replace("'", "\\'");
+        var escapedName = SproutDB.Core.Parsing.StringLiteral.Escape(entry.Name);
         Engine.ExecuteInternal($"delete _saved_queries where name = '{escapedName}'", selectedDatabase);
         LoadSavedQueries();
     }
@@ -1234,7 +1272,7 @@
         if (string.IsNullOrEmpty(selectedDatabase)) return;
 
         var newPinned = !entry.Pinned;
-        var escapedName = entry.Name.Replace("'", "\\'");
+        var escapedName = SproutDB.Core.Parsing.StringLiteral.Escape(entry.Name);
         Engine.ExecuteInternal(
             $"upsert _saved_queries {{ name: '{escapedName}', pinned: {(newPinned ? "true" : "false")} }} on name",
             selectedDatabase);
@@ -1506,10 +1544,17 @@
             if (parts[i].Equals("from", StringComparison.OrdinalIgnoreCase) && i + 1 < parts.Length)
                 return parts[i + 1];
         }
-        if (parts.Length >= 2 && parts[0].Equals("get", StringComparison.OrdinalIgnoreCase)
+        if (parts.Length >= 2
+            && (parts[0].Equals("get", StringComparison.OrdinalIgnoreCase)
+                || parts[0].Equals("upsert", StringComparison.OrdinalIgnoreCase)
+                || parts[0].Equals("delete", StringComparison.OrdinalIgnoreCase))
             && !parts[1].Equals("from", StringComparison.OrdinalIgnoreCase))
         {
-            return parts[1];
+            // 'upsert t{k: 1}' — the record may follow the table name without a space
+            var end = parts[1].IndexOfAny(['{', '[']);
+            if (end < 0)
+                return parts[1];
+            return end > 0 ? parts[1][..end] : null;
         }
         return null;
     }

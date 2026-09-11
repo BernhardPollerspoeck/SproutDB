@@ -203,6 +203,9 @@ internal static class GetParser
         if (!ParseTrailingClauses(ctx, ref where, ref isCount, ref groupBy, ref orderBy, ref limit, ref page, ref size, ref after, ref afterCursorToken))
             return ctx.Fail();
 
+        if (DescribeMisplacedClause(ctx, followClauses is not null) is { } misplaced)
+            return ctx.Error(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, misplaced);
+
         ctx.ExpectEof();
         if (ctx.HasErrors) return ctx.Fail();
 
@@ -261,6 +264,54 @@ internal static class GetParser
             PostFollowComputedSelect = postFollowComputed,
             PostFollowLiteralSelect = postFollowLiterals,
         });
+    }
+
+    /// <summary>
+    /// Called when a GET query has tokens left after all clauses were parsed.
+    /// Recognizes clauses that are out of place (SQL habits like 'select' after
+    /// 'where') or repeated, and returns a message explaining the fix — or null
+    /// to fall back to the generic "expected end of query".
+    /// </summary>
+    private static string? DescribeMisplacedClause(ParserContext ctx, bool hasFollow)
+    {
+        var token = ctx.Peek();
+
+        var isSelect = ctx.IsKeyword(token, "select");
+        var isExcludeSelect = token.Type == TokenType.Minus && ctx.IsKeyword(ctx.PeekAt(1), "select");
+        if (isSelect || isExcludeSelect)
+        {
+            var kw = isSelect ? "select" : "-select";
+            return hasFollow
+                ? $"'{kw}' after 'follow' must come directly after the last follow clause, and only once"
+                : $"'{kw}' must come directly after the table name, before 'where', 'order by', 'limit' etc. — e.g. get users select name, email where active = true";
+        }
+
+        if (token.Type != TokenType.Identifier)
+            return null;
+
+        if (ctx.IsKeyword(token, "distinct"))
+            return "'distinct' must come directly after the select list — e.g. get users select city distinct where active = true";
+
+        if (ctx.IsKeyword(token, "sum") || ctx.IsKeyword(token, "avg")
+            || ctx.IsKeyword(token, "min") || ctx.IsKeyword(token, "max"))
+        {
+            return "aggregate functions must come directly after the table name — e.g. get orders sum total where paid = true";
+        }
+
+        if (ctx.IsKeyword(token, "follow"))
+            return "'follow' clauses must stand together, before the 'select' that follows them";
+
+        // Trailing clauses are parsed in any order, each once — seeing one here means it repeats
+        if (ctx.IsKeyword(token, "where"))
+            return "'where' may appear only once — combine conditions with 'and' / 'or'";
+
+        foreach (var clause in (ReadOnlySpan<string>)["order", "group", "limit", "page", "count", "after"])
+        {
+            if (ctx.IsKeyword(token, clause))
+                return $"'{(clause is "order" or "group" ? clause + " by" : clause)}' may appear only once";
+        }
+
+        return null;
     }
 
     private static AggregateFunction? TryMatchAggregate(ParserContext ctx)
@@ -618,8 +669,7 @@ internal static class GetParser
         {
             case TokenType.StringLiteral:
                 ctx.Advance();
-                // Strip quotes and unescape \'
-                return ctx.Input.Substring(token.Start + 1, token.Length - 2).Replace("\\'", "'");
+                return StringLiteral.Unescape(ctx.Input, token);
 
             case TokenType.IntegerLiteral:
                 ctx.Advance();

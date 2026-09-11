@@ -5,9 +5,12 @@ namespace SproutDB.Core.Linq;
 
 internal static class SproutExpressionVisitor
 {
-    internal static string ConvertWhere<T>(Expression<Func<T, bool>> predicate)
+    /// <param name="parameters">
+    /// Collects the values as placeholders; null inlines them as literals.
+    /// </param>
+    internal static string ConvertWhere<T>(Expression<Func<T, bool>> predicate, ParameterCollector? parameters = null)
     {
-        return VisitExpression(predicate.Body);
+        return VisitExpression(predicate.Body, parameters);
     }
 
     internal static List<string> ConvertSelect<T, TResult>(Expression<Func<T, TResult>> selector)
@@ -61,30 +64,30 @@ internal static class SproutExpressionVisitor
         throw new SproutQueryException($"Expression must be a property accessor, got: {body.NodeType}");
     }
 
-    private static string VisitExpression(Expression expr)
+    private static string VisitExpression(Expression expr, ParameterCollector? parameters)
     {
         return expr switch
         {
-            BinaryExpression binary => VisitBinary(binary),
-            UnaryExpression { NodeType: ExpressionType.Not } unary => VisitNot(unary),
-            MethodCallExpression method => VisitMethodCall(method),
+            BinaryExpression binary => VisitBinary(binary, parameters),
+            UnaryExpression { NodeType: ExpressionType.Not } unary => VisitNot(unary, parameters),
+            MethodCallExpression method => VisitMethodCall(method, parameters),
             _ => throw new SproutQueryException($"Unsupported expression type: {expr.NodeType}"),
         };
     }
 
-    private static string VisitBinary(BinaryExpression binary)
+    private static string VisitBinary(BinaryExpression binary, ParameterCollector? parameters)
     {
         if (binary.NodeType == ExpressionType.AndAlso)
-            return $"{VisitExpression(binary.Left)} and {VisitExpression(binary.Right)}";
+            return $"{VisitExpression(binary.Left, parameters)} and {VisitExpression(binary.Right, parameters)}";
 
         if (binary.NodeType == ExpressionType.OrElse)
-            return $"{VisitExpression(binary.Left)} or {VisitExpression(binary.Right)}";
+            return $"{VisitExpression(binary.Left, parameters)} or {VisitExpression(binary.Right, parameters)}";
 
         var column = ExtractColumnName(binary.Left);
-        var value = ExtractValue(binary.Right);
+        var raw = ExtractValue(binary.Right);
 
         // Handle null comparisons
-        if (value == "null")
+        if (raw is null)
         {
             return binary.NodeType switch
             {
@@ -93,6 +96,8 @@ internal static class SproutExpressionVisitor
                 _ => throw new SproutQueryException("null can only be used with == or !="),
             };
         }
+
+        var value = ParameterCollector.Render(raw, parameters);
 
         var op = binary.NodeType switch
         {
@@ -108,17 +113,17 @@ internal static class SproutExpressionVisitor
         return $"{column} {op} {value}";
     }
 
-    private static string VisitNot(UnaryExpression unary)
+    private static string VisitNot(UnaryExpression unary, ParameterCollector? parameters)
     {
-        return $"not {VisitExpression(unary.Operand)}";
+        return $"not {VisitExpression(unary.Operand, parameters)}";
     }
 
-    private static string VisitMethodCall(MethodCallExpression method)
+    private static string VisitMethodCall(MethodCallExpression method, ParameterCollector? parameters)
     {
         if (method.Object is MemberExpression member && method.Method.DeclaringType == typeof(string))
         {
             var column = TypeMapper.ToColumnName(member.Member.Name);
-            var arg = ExtractValue(method.Arguments[0]);
+            var arg = ParameterCollector.Render(ExtractValue(method.Arguments[0]), parameters);
 
             return method.Method.Name switch
             {
@@ -143,51 +148,21 @@ internal static class SproutExpressionVisitor
         throw new SproutQueryException($"Expected property accessor, got: {expr.NodeType}");
     }
 
-    private static string ExtractValue(Expression expr)
+    /// <summary>
+    /// Evaluates a constant or captured variable to its CLR value.
+    /// </summary>
+    private static object? ExtractValue(Expression expr)
     {
         if (expr is UnaryExpression { NodeType: ExpressionType.Convert } convert)
             return ExtractValue(convert.Operand);
 
         if (expr is ConstantExpression constant)
-            return FormatConstant(constant.Value);
+            return constant.Value;
 
         // Captured variable (closure)
         if (expr is MemberExpression)
-        {
-            var value = Expression.Lambda(expr).Compile().DynamicInvoke();
-            return FormatConstant(value);
-        }
+            return Expression.Lambda(expr).Compile().DynamicInvoke();
 
         throw new SproutQueryException($"Expected constant or captured variable, got: {expr.NodeType}");
-    }
-
-    private static string FormatConstant(object? value)
-    {
-        if (value is null) return "null";
-
-        return value switch
-        {
-            string s => $"'{EscapeString(s)}'",
-            bool b => b ? "true" : "false",
-            sbyte v => v.ToString(CultureInfo.InvariantCulture),
-            byte v => v.ToString(CultureInfo.InvariantCulture),
-            short v => v.ToString(CultureInfo.InvariantCulture),
-            ushort v => v.ToString(CultureInfo.InvariantCulture),
-            int v => v.ToString(CultureInfo.InvariantCulture),
-            uint v => v.ToString(CultureInfo.InvariantCulture),
-            long v => v.ToString(CultureInfo.InvariantCulture),
-            ulong v => v.ToString(CultureInfo.InvariantCulture),
-            float v => v.ToString(CultureInfo.InvariantCulture),
-            double v => v.ToString(CultureInfo.InvariantCulture),
-            DateOnly d => $"'{d:yyyy-MM-dd}'",
-            TimeOnly t => $"'{t:HH:mm:ss}'",
-            DateTime dt => $"'{dt:yyyy-MM-dd HH:mm:ss}'",
-            _ => $"'{EscapeString(value.ToString() ?? "")}'",
-        };
-    }
-
-    private static string EscapeString(string value)
-    {
-        return value.Replace("'", "\\'");
     }
 }

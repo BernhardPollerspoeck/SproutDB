@@ -221,11 +221,11 @@ For those curious about the internals:
 
 **Column-per-File Storage** — Each column is stored in its own memory-mapped file with fixed-size entries. A query that only needs `name` and `age` only reads `name.col` and `age.col` — the other columns are never touched. Schema changes are file operations: `add column` creates a new file, `purge column` deletes one. No table rebuilds, no downtime.
 
-**Write Path** — All writes go through a single-writer queue (`Channel<T>`). Every write is appended to a write-ahead log and fsynced before the response goes back to the client. If the process crashes, the WAL is replayed on startup — idempotent, no data loss. The WAL stores the original query strings, so it's human-readable and format-stable across engine updates.
+**Write Path** — All writes go through a single-writer queue (`Channel<T>`). Every write is appended to a write-ahead log before it is applied, then acknowledged. The WAL is fsynced in the background as a group commit (default every 50 ms, `WalSyncInterval`). If the process crashes, nothing is lost: the WAL is still in the OS cache and gets replayed on startup — idempotent. On a power loss or OS crash, acknowledged writes from the last sync interval can be lost; set `WalSyncInterval = TimeSpan.Zero` to fsync before every response instead (durable, but much lower throughput). The WAL stores the original query strings, so it's human-readable and format-stable across engine updates.
 
 **Read Path** — Reads are lock-free and fully parallel, working directly on memory-mapped files. There's no buffer pool and no cache layer — the OS page cache handles everything. Hot data stays in RAM automatically, cold data gets paged in on demand.
 
-**Auto-Indexing** — B-Tree index files sit next to column files (`email.btree` next to `email.col`). The engine monitors query patterns and builds indexes when usage frequency is high, selectivity is high, and the table is read-heavy. Index creation runs in the write queue so there are no concurrency issues. B-Tree updates on writes are O(log n) — negligible compared to the WAL fsync.
+**Auto-Indexing** — B-Tree index files sit next to column files (`email.btree` next to `email.col`). The engine monitors query patterns and builds indexes when usage frequency is high, selectivity is high, and the table is read-heavy. Index creation runs in the write queue so there are no concurrency issues. B-Tree updates on writes are O(log n) — negligible compared to the WAL append.
 
 ---
 

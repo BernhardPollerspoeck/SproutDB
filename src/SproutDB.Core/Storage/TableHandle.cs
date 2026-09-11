@@ -362,9 +362,10 @@ internal sealed class TableHandle : IDisposable
     public string GetBlobPath(string columnName, long id)
         => Path.Combine(_tablePath, $"{columnName}_{id}.blob");
 
-    public void WriteBlobFile(string columnName, long id, byte[] data)
+    public void WriteBlobFile(string columnName, long id, byte[] data, TransactionJournal? journal = null)
     {
         var path = GetBlobPath(columnName, id);
+        journal?.RecordFileChange(path);
         File.WriteAllBytes(path, data);
     }
 
@@ -374,11 +375,14 @@ internal sealed class TableHandle : IDisposable
         return File.ReadAllBytes(path);
     }
 
-    public void DeleteBlobFile(string columnName, long id)
+    public void DeleteBlobFile(string columnName, long id, TransactionJournal? journal = null)
     {
         var path = GetBlobPath(columnName, id);
         if (File.Exists(path))
+        {
+            journal?.RecordFileChange(path);
             File.Delete(path);
+        }
     }
 
     // ── Array file helpers ───────────────────────────────────
@@ -386,9 +390,10 @@ internal sealed class TableHandle : IDisposable
     public string GetArrayPath(string columnName, long id)
         => Path.Combine(_tablePath, $"{columnName}_{id}.array");
 
-    public void WriteArrayFile(string columnName, long id, byte[] data)
+    public void WriteArrayFile(string columnName, long id, byte[] data, TransactionJournal? journal = null)
     {
         var path = GetArrayPath(columnName, id);
+        journal?.RecordFileChange(path);
         File.WriteAllBytes(path, data);
     }
 
@@ -398,11 +403,14 @@ internal sealed class TableHandle : IDisposable
         return File.ReadAllBytes(path);
     }
 
-    public void DeleteArrayFile(string columnName, long id)
+    public void DeleteArrayFile(string columnName, long id, TransactionJournal? journal = null)
     {
         var path = GetArrayPath(columnName, id);
         if (File.Exists(path))
+        {
+            journal?.RecordFileChange(path);
             File.Delete(path);
+        }
     }
 
     public long GetStorageSizeBytes()

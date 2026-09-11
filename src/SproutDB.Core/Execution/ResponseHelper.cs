@@ -15,12 +15,14 @@ internal static class ResponseHelper
         };
     }
 
-    public static SproutResponse Errors(string query, List<SproutError> errors)
+    public static SproutResponse Errors(string query, List<SproutError> errors,
+        List<Dictionary<string, object?>>? data = null)
     {
         return new SproutResponse
         {
             Operation = SproutOperation.Error,
             Errors = errors,
+            Data = data,
             AnnotatedQuery = BuildAnnotatedQuery(query, errors),
         };
     }
@@ -105,6 +107,8 @@ internal static class ResponseHelper
                 Nullable = col.IsNullable,
                 Default = col.Default,
                 Strict = col.Strict,
+                Indexed = col.Unique,
+                IsUnique = col.Unique,
             });
         }
 

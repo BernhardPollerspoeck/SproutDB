@@ -32,6 +32,7 @@ internal static class CreateTableExecutor
                 Nullable = col.IsNullable,
                 Default = col.Default,
                 Strict = col.Strict,
+                IsUnique = col.Unique,
                 ElementType = col.ElementType.HasValue ? ColumnTypes.GetName(col.ElementType.Value) : null,
                 ElementSize = col.ElementSize,
             });
@@ -65,6 +66,17 @@ internal static class CreateTableExecutor
             CreatePreAllocatedFile(
                 Path.Combine(tablePath, $"{col.Name}.col"),
                 (long)chunkSize * col.EntrySize);
+        }
+
+        // 'unique' columns get their (empty) unique index in the same statement —
+        // no window in which the table exists without it
+        foreach (var col in q.Columns)
+        {
+            if (!col.Unique)
+                continue;
+
+            using var btree = BTreeHandle.Create(Path.Combine(tablePath, $"{col.Name}.btree"), col.Type, col.Size);
+            btree.Flush();
         }
 
         return new SproutResponse

@@ -48,6 +48,21 @@ internal static class UpsertParser
             ctx.Advance();
         }
 
+        // Optional WHEN clause (conditional write)
+        UpsertCondition? when = null;
+        var whenToken = ctx.Peek();
+        if (ctx.IsKeyword(whenToken, "when"))
+        {
+            ctx.Advance();
+            var whenResult = ParseWhen(ctx, whenToken, records, onColumn);
+            if (whenResult is null) return ctx.Fail();
+            when = whenResult;
+
+            if (ctx.IsKeyword(ctx.Peek(), "on"))
+                return ctx.Error(ctx.Peek(), ErrorCodes.SYNTAX_ERROR,
+                    "'on' must come before 'when' — e.g. upsert t {k: 'a', v: 2} on k when v = 1");
+        }
+
         ctx.ExpectEof();
         if (ctx.HasErrors) return ctx.Fail();
 
@@ -57,7 +72,87 @@ internal static class UpsertParser
             Records = records,
             OnColumn = onColumn,
             RowTtlSeconds = rowTtlSeconds,
+            When = when,
         });
+    }
+
+    /// <summary>
+    /// Parses what follows 'when': <c>exists</c>, <c>not exists</c> or a WHERE expression.
+    /// Returns null (with errors added) on failure.
+    /// </summary>
+    private static UpsertCondition? ParseWhen(
+        ParserContext ctx, Token whenToken, List<List<UpsertField>> records, string? onColumn)
+    {
+        if (records.Count > 1)
+        {
+            ctx.AddError(whenToken, ErrorCodes.SYNTAX_ERROR,
+                "'when' is not supported for bulk upsert, use atomic with single upserts");
+            return null;
+        }
+
+        var hasExplicitId = records[0].Exists(f => f.Name == "_id");
+        if (onColumn is null && !hasExplicitId)
+        {
+            ctx.AddError(whenToken, ErrorCodes.SYNTAX_ERROR,
+                "'when' requires an 'on' clause before it (upsert t {…} on k when …) or an _id in the record");
+            return null;
+        }
+
+        // 'exists' / 'not exists' are keywords only when they end the query —
+        // otherwise they are column names inside an expression.
+        if (ctx.IsKeyword(ctx.Peek(), "exists") && ctx.PeekAt(1).Type == TokenType.Eof)
+        {
+            ctx.Advance();
+            return new UpsertCondition
+            {
+                Kind = UpsertConditionKind.Exists,
+                Position = whenToken.Start,
+                Length = whenToken.Length,
+            };
+        }
+
+        if (ctx.IsKeyword(ctx.Peek(), "not") && ctx.IsKeyword(ctx.PeekAt(1), "exists")
+            && ctx.PeekAt(2).Type == TokenType.Eof)
+        {
+            if (hasExplicitId)
+            {
+                ctx.AddError(whenToken, ErrorCodes.SYNTAX_ERROR,
+                    "'when not exists' requires an 'on' clause — a row cannot be inserted with an explicit _id");
+                return null;
+            }
+
+            ctx.Advance();
+            ctx.Advance();
+            return new UpsertCondition
+            {
+                Kind = UpsertConditionKind.NotExists,
+                Position = whenToken.Start,
+                Length = whenToken.Length,
+            };
+        }
+
+        const string expectedCondition = "expected 'exists', 'not exists' or a condition after 'when'";
+        if (ctx.Peek().Type == TokenType.Eof)
+        {
+            ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, expectedCondition);
+            return null;
+        }
+
+        var where = GetParser.ParseWhere(ctx);
+        if (ctx.HasErrors) return null;
+        if (where is null)
+        {
+            ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, expectedCondition);
+            return null;
+        }
+
+        return new UpsertCondition
+        {
+            Kind = UpsertConditionKind.Expression,
+            Where = where,
+            Position = whenToken.Start,
+            Length = whenToken.Length,
+        };
     }
 
     private static (List<List<UpsertField>>, List<long>) ParseBulkRecordsWithTtl(ParserContext ctx)
@@ -242,7 +337,7 @@ internal static class UpsertParser
             return new UpsertValue
             {
                 Kind = UpsertValueKind.String,
-                Raw = ctx.Input.Substring(token.Start + 1, token.Length - 2).Replace("\\'", "'"),
+                Raw = StringLiteral.Unescape(ctx.Input, token),
             };
         }
 

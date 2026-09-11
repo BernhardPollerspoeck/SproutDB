@@ -161,6 +161,16 @@ internal static class QueryParser
                 return innerResult;
             }
 
+            // Only row operations can be rolled back — schema changes, backups and
+            // auth changes are file/system operations the journal cannot undo.
+            if (innerQuery is not (UpsertQuery or DeleteQuery or GetQuery or DescribeQuery))
+            {
+                SkipToCommit(input, segments, ref i);
+                var ctx = new ParserContext(input, segment);
+                return ctx.Error(segment[0], ErrorCodes.SYNTAX_ERROR,
+                    "only upsert, delete, get and describe are allowed inside 'atomic' — schema changes cannot be rolled back (run them before the transaction)");
+            }
+
             innerQueries.Add(innerQuery);
             queryTexts.Add(ExtractSegmentText(input, segment));
             i++;

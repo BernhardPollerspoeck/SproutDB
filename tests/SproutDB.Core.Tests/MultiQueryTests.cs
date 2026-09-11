@@ -134,6 +134,38 @@ public class MultiQueryTests : IDisposable
     }
 
     [Fact]
+    public void Transaction_UnknownColumn_ReportsUnknownColumnWithPosition()
+    {
+        const string query = "atomic; upsert users {name: 'Alice'}; upsert users {name: 'Bob', nope: 1}; commit";
+        var results = _engine.Execute(query, "testdb");
+
+        var error = Assert.Single(results);
+        Assert.Equal(SproutOperation.Error, error.Operation);
+        var detail = Assert.Single(error.Errors ?? []);
+        Assert.Equal("UNKNOWN_COLUMN", detail.Code);
+        Assert.StartsWith("transaction rolled back:", detail.Message);
+        Assert.Contains("'nope'", detail.Message);
+
+        // Position refers to the full input
+        Assert.Equal(query.IndexOf("nope", StringComparison.Ordinal), detail.Position);
+        Assert.Equal(4, detail.Length);
+
+        var users = _engine.ExecuteOne("get users", "testdb");
+        Assert.Equal(0, users.Data?.Count ?? 0);
+    }
+
+    [Fact]
+    public void Transaction_GetWithUnknownColumn_ReportsUnknownColumn()
+    {
+        var results = _engine.Execute(
+            "atomic; upsert users {name: 'Alice'}; get users where nope = 1; commit",
+            "testdb");
+
+        var error = Assert.Single(results);
+        Assert.Equal("UNKNOWN_COLUMN", error.Errors?[0].Code);
+    }
+
+    [Fact]
     public void Transaction_WithoutCommit_ParserError()
     {
         var results = _engine.Execute(

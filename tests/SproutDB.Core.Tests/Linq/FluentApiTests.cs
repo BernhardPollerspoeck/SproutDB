@@ -77,6 +77,26 @@ public class FluentApiTests : IDisposable
     }
 
     [Fact]
+    public void CreateTable_UniqueColumn()
+    {
+        var builder = new CreateTableBuilder(_db, "gs");
+        builder.AddColumn<string>("k", 64, strict: true).Unique()
+               .AddColumn<string>("etag", 16);
+
+        Assert.Equal("create table gs (k string 64 strict unique, etag string 16)", builder.BuildQuery());
+
+        builder.Execute();
+        Assert.True(_db.Query("describe gs")[0].Schema?.Columns.Single(c => c.Name == "k").IsUnique);
+    }
+
+    [Fact]
+    public void CreateTable_UniqueWithoutColumn_Throws()
+    {
+        var builder = new CreateTableBuilder(_db, "gs");
+        Assert.Throws<InvalidOperationException>(() => builder.Unique());
+    }
+
+    [Fact]
     public void CreateTable_NoColumns()
     {
         var builder = new CreateTableBuilder(_db, "empty");

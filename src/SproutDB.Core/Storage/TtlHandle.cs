@@ -56,18 +56,20 @@ internal sealed class TtlHandle : IDisposable
         return _view.ReadInt64(offset);
     }
 
-    public void Write(long place, long expiresAtMs, long rowTtlSeconds)
+    public void Write(long place, long expiresAtMs, long rowTtlSeconds, TransactionJournal? journal = null)
     {
         EnsureCapacity(place + 1);
+        journal?.RecordTtlWrite(this, place);
         var offset = place * ENTRY_SIZE;
         _view.Write(offset, expiresAtMs);
         _view.Write(offset + 8, rowTtlSeconds);
     }
 
-    public void Clear(long place)
+    public void Clear(long place, TransactionJournal? journal = null)
     {
         var offset = place * ENTRY_SIZE;
         if (offset + ENTRY_SIZE > _fileCapacity) return;
+        journal?.RecordTtlWrite(this, place);
         _view.Write(offset, 0L);
         _view.Write(offset + 8, 0L);
     }

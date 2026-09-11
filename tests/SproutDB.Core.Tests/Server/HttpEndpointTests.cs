@@ -134,6 +134,112 @@ public sealed class HttpEndpointTests : IAsyncLifetime
         Assert.Contains(body.Errors, e => e.Code == "DATABASE_EXISTS");
     }
 
+    private async Task<(HttpResponseMessage Response, List<SproutResponse>? Body)> PostJson(
+        string json, string database = "testdb")
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/sproutdb/query")
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Add("X-SproutDB-Database", database);
+
+        var response = await Client.SendAsync(request);
+        if (response.StatusCode != HttpStatusCode.OK)
+            return (response, null);
+        return (response, await response.Content.ReadFromJsonAsync<List<SproutResponse>>(JsonOptions));
+    }
+
+    [Fact]
+    public async Task JsonBody_WithParameters_BindsValues()
+    {
+        await PostQuery("create database");
+        await PostQuery("create table gs (k string 64, n slong, ok bool)");
+
+        var (_, insert) = await PostJson("""
+            {"query": "upsert gs {k: @k, n: @n, ok: @ok}", "parameters": {"k": "x'; purge table gs; ##", "n": -5, "ok": true}}
+            """);
+        Assert.Null(insert?[0].Errors);
+
+        var (response, get) = await PostJson("""
+            {"query": "get gs select k, n where k in @keys", "parameters": {"keys": ["x'; purge table gs; ##", "other"]}}
+            """);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var row = Assert.Single(get?[0].Data ?? []);
+        Assert.Equal("x'; purge table gs; ##", row["k"]?.ToString());
+        Assert.Equal("-5", row["n"]?.ToString());
+    }
+
+    [Fact]
+    public async Task JsonBody_WithoutParameters_Works()
+    {
+        await PostQuery("create database");
+
+        var (response, body) = await PostJson("""{"query": "create table t (k string 10)"}""");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Null(body?[0].Errors);
+    }
+
+    [Fact]
+    public async Task JsonBody_MissingParameter_ReturnsParameterError()
+    {
+        await PostQuery("create database");
+        await PostQuery("create table gs (k string 64)");
+
+        var (response, body) = await PostJson("""{"query": "get gs where k = @key", "parameters": {}}""");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("PARAMETER_ERROR", body?[0].Errors?[0].Code);
+    }
+
+    [Theory]
+    [InlineData("not json")]
+    [InlineData("""{"parameters": {}}""")]
+    [InlineData("""{"query": "get gs", "parameters": [1]}""")]
+    [InlineData("""{"query": "get gs where k = @k", "parameters": {"k": {"nested": 1}}}""")]
+    public async Task JsonBody_Invalid_Returns400(string json)
+    {
+        var (response, _) = await PostJson(json);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ConditionalUpsert_ConcurrentClients_ExactlyOneWins()
+    {
+        await PostQuery("create database");
+        await PostQuery("create table gs (k string 64, etag string 16)");
+        await PostQuery("create index unique gs.k");
+        await PostQuery("upsert gs {k: 'a', etag: 'E1'}");
+
+        var host = _host ?? throw new InvalidOperationException("Test not initialized");
+        var clients = Enumerable.Range(0, 6).Select(_ => host.GetTestClient()).ToList();
+
+        var results = await Task.WhenAll(clients.Select(async (client, i) =>
+        {
+            var request = new HttpRequestMessage(HttpMethod.Post, "/sproutdb/query")
+            {
+                Content = new StringContent(
+                    $"upsert gs {{k: 'a', etag: 'W{i}'}} on k when etag = 'E1'", Encoding.UTF8, "text/plain"),
+            };
+            request.Headers.Add("X-SproutDB-Database", "testdb");
+            var response = await client.SendAsync(request);
+            var list = await response.Content.ReadFromJsonAsync<List<SproutResponse>>(JsonOptions);
+            return list is { Count: > 0 } ? list[0] : null;
+        }));
+
+        foreach (var client in clients)
+            client.Dispose();
+
+        Assert.Equal(1, results.Count(r => r is not null && r.Errors is null));
+        Assert.Equal(5, results.Count(r => r?.Errors?[0].Code == "CONDITION_FAILED"));
+
+        // Losers get the stored row, incl. the winner's etag
+        var winnerEtag = results.First(r => r is not null && r.Errors is null)?.Data?[0]["etag"]?.ToString();
+        var loser = results.First(r => r?.Errors is not null);
+        Assert.Equal(winnerEtag, loser?.Data?[0]["etag"]?.ToString());
+    }
+
     [Fact]
     public async Task UnknownDatabase_ReturnsError()
     {

@@ -550,7 +550,7 @@
             var def = col.Default.Trim();
             // Wrap string defaults in quotes if not already quoted
             if (col.Type == "string" && !def.StartsWith('\''))
-                def = $"'{def}'";
+                def = $"'{SproutDB.Core.Parsing.StringLiteral.Escape(def)}'";
             parts.Add($"default {def}");
         }
 
@@ -601,7 +601,7 @@
         {
             var def = _newColumn.Default.Trim();
             if (_newColumn.Type == "string" && !def.StartsWith('\''))
-                def = $"'{def}'";
+                def = $"'{SproutDB.Core.Parsing.StringLiteral.Escape(def)}'";
             query += $" default {def}";
         }
 

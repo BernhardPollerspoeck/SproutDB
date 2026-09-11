@@ -39,7 +39,10 @@ internal static class TypeMapper
         return obj;
     }
 
-    internal static string SerializeToUpsertFields(object obj)
+    /// <param name="parameters">
+    /// Collects the values as placeholders; null inlines them as literals.
+    /// </param>
+    internal static string SerializeToUpsertFields(object obj, ParameterCollector? parameters = null)
     {
         var sb = new StringBuilder();
         sb.Append('{');
@@ -62,37 +65,11 @@ internal static class TypeMapper
 
             sb.Append(colName);
             sb.Append(": ");
-            sb.Append(FormatValue(value, prop.PropertyType));
+            sb.Append(ParameterCollector.Render(value, parameters));
         }
 
         sb.Append('}');
         return sb.ToString();
-    }
-
-    private static string FormatValue(object? value, Type propertyType)
-    {
-        if (value is null)
-            return "null";
-
-        var underlying = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
-
-        if (underlying == typeof(string)) return $"'{EscapeString((string)value)}'";
-        if (underlying == typeof(bool)) return (bool)value ? "true" : "false";
-        if (underlying == typeof(sbyte)) return ((sbyte)value).ToString(CultureInfo.InvariantCulture);
-        if (underlying == typeof(byte)) return ((byte)value).ToString(CultureInfo.InvariantCulture);
-        if (underlying == typeof(short)) return ((short)value).ToString(CultureInfo.InvariantCulture);
-        if (underlying == typeof(ushort)) return ((ushort)value).ToString(CultureInfo.InvariantCulture);
-        if (underlying == typeof(int)) return ((int)value).ToString(CultureInfo.InvariantCulture);
-        if (underlying == typeof(uint)) return ((uint)value).ToString(CultureInfo.InvariantCulture);
-        if (underlying == typeof(long)) return ((long)value).ToString(CultureInfo.InvariantCulture);
-        if (underlying == typeof(ulong)) return ((ulong)value).ToString(CultureInfo.InvariantCulture);
-        if (underlying == typeof(float)) return ((float)value).ToString(CultureInfo.InvariantCulture);
-        if (underlying == typeof(double)) return ((double)value).ToString(CultureInfo.InvariantCulture);
-        if (underlying == typeof(DateOnly)) return $"'{((DateOnly)value).ToString("yyyy-MM-dd")}'";
-        if (underlying == typeof(TimeOnly)) return $"'{((TimeOnly)value).ToString("HH:mm:ss")}'";
-        if (underlying == typeof(DateTime)) return $"'{((DateTime)value).ToString("yyyy-MM-dd HH:mm:ss")}'";
-
-        return $"'{EscapeString(value.ToString() ?? "")}'";
     }
 
     private static object ConvertValue(object value, Type targetType)
@@ -116,10 +93,5 @@ internal static class TypeMapper
     {
         if (!type.IsValueType) return true;
         return Nullable.GetUnderlyingType(type) is not null;
-    }
-
-    private static string EscapeString(string value)
-    {
-        return value.Replace("'", "\\'");
     }
 }

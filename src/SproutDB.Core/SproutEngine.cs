@@ -178,14 +178,18 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     /// Returns one SproutResponse per query/transaction.
     /// </summary>
     public List<SproutResponse> Execute(string query, string database)
+        => Execute(query, database, null);
+
+    /// <summary>
+    /// Executes a query with <c>@name</c> placeholders bound to <paramref name="parameters"/>.
+    /// Each value becomes exactly one literal (never query syntax); the bound query is
+    /// what runs and what the WAL stores. A missing, unused or unrenderable parameter
+    /// fails with <c>PARAMETER_ERROR</c> before anything runs.
+    /// </summary>
+    public List<SproutResponse> Execute(string query, string database, IReadOnlyDictionary<string, object?>? parameters)
     {
-        var dbName = LowercaseName(database);
-
-        if (!IsValidName(dbName))
-            return [ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR,
-                $"invalid database name '{database}'")];
-
-        var dbPath = Path.Combine(_dataDirectory, dbName);
+        if (!TryPrepare(ref query, database, parameters, out var dbName, out var dbPath, out var early))
+            return early;
 
         // Parse all queries on caller thread (stateless)
         var parseResults = QueryParser.ParseMulti(query);
@@ -223,7 +227,12 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             }
             else
             {
-                responses.Add(ExecuteSingle(query, dbName, dbPath, parsedQuery));
+                // The WAL must hold only this statement — the full input may
+                // contain further statements (or a trailing ';') that the
+                // single-statement replay parser rejects.
+                var statementText = parseResult.OriginalText ?? query;
+                var single = ExecuteSingleAsync(query, statementText, dbName, dbPath, parsedQuery, CancellationToken.None);
+                responses.Add(single.IsCompleted ? single.Result : single.AsTask().GetAwaiter().GetResult());
             }
         }
 
@@ -231,28 +240,121 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     }
 
     /// <summary>
-    /// Routes and executes a single parsed query (or transaction block).
+    /// Asynchronous <see cref="Execute(string, string, IReadOnlyDictionary{string, object?}?)"/>:
+    /// reads complete synchronously, writes are awaited without blocking a thread
+    /// while they wait in the single-writer queue.
+    /// <paramref name="cancellationToken"/> only cancels writes the writer has not
+    /// started yet: an <see cref="OperationCanceledException"/> means no write of this
+    /// call was executed. Once one has run, the rest of the batch runs too.
     /// </summary>
-    private SproutResponse ExecuteSingle(string query, string dbName, string dbPath, IQuery parsedQuery)
+    public ValueTask<List<SproutResponse>> ExecuteAsync(string query, string database,
+        IReadOnlyDictionary<string, object?>? parameters = null, CancellationToken cancellationToken = default)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return ValueTask.FromCanceled<List<SproutResponse>>(cancellationToken);
+
+        if (!TryPrepare(ref query, database, parameters, out var dbName, out var dbPath, out var early))
+            return new ValueTask<List<SproutResponse>>(early);
+
+        return ExecuteBatchAsync(query, dbName, dbPath, QueryParser.ParseMulti(query), cancellationToken);
+    }
+
+    private async ValueTask<List<SproutResponse>> ExecuteBatchAsync(string query, string dbName, string dbPath,
+        List<ParseResult> parseResults, CancellationToken cancellationToken)
+    {
+        var responses = new List<SproutResponse>(parseResults.Count);
+
+        using var lease = _scopes.Acquire(dbPath);
+        EnsureReplayed(dbPath, dbName);
+
+        // After the first write has run, cancelling would leave the caller not knowing
+        // what ran — so only statements up to the first write are cancellable.
+        var token = cancellationToken;
+
+        foreach (var parseResult in parseResults)
+        {
+            if (!parseResult.Success || parseResult.Query is not { } parsedQuery)
+            {
+                responses.Add(ResponseHelper.ParseError(parseResult));
+                continue;
+            }
+
+            if (parsedQuery is TransactionQuery txQuery)
+            {
+                responses.AddRange(await EnqueueWriteList(
+                    () => ExecuteTransaction(query, dbName, dbPath, txQuery), token).ConfigureAwait(false));
+                token = CancellationToken.None;
+            }
+            else
+            {
+                var statementText = parseResult.OriginalText ?? query;
+                responses.Add(await ExecuteSingleAsync(query, statementText, dbName, dbPath, parsedQuery, token)
+                    .ConfigureAwait(false));
+                if (parsedQuery is not (GetQuery or DescribeQuery))
+                    token = CancellationToken.None;
+            }
+        }
+
+        return responses;
+    }
+
+    /// <summary>
+    /// Binds parameters and validates the database name. On failure <paramref name="early"/>
+    /// holds the error response to return.
+    /// </summary>
+    private bool TryPrepare(ref string query, string database, IReadOnlyDictionary<string, object?>? parameters,
+        out string dbName, out string dbPath, out List<SproutResponse> early)
+    {
+        dbName = "";
+        dbPath = "";
+        early = [];
+
+        if (!QueryParameters.TryBind(query, parameters, out var bound, out var bindError))
+        {
+            early = [bindError ?? ResponseHelper.Error(query, ErrorCodes.PARAMETER_ERROR, "invalid parameters")];
+            return false;
+        }
+        query = bound;
+
+        dbName = LowercaseName(database);
+        if (!IsValidName(dbName))
+        {
+            early = [ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR, $"invalid database name '{database}'")];
+            return false;
+        }
+
+        dbPath = Path.Combine(_dataDirectory, dbName);
+        return true;
+    }
+
+    /// <summary>
+    /// Routes and executes a single parsed query. Reads complete synchronously;
+    /// writes complete when the single writer has run them.
+    /// <paramref name="query"/> is the full input (error positions refer to it),
+    /// <paramref name="statementText"/> is this statement alone (WAL + audit).
+    /// </summary>
+    private ValueTask<SproutResponse> ExecuteSingleAsync(string query, string statementText, string dbName, string dbPath,
+        IQuery parsedQuery, CancellationToken cancellationToken)
     {
         // Auth queries bypass normal routing and write protection
         if (SproutAuthService.IsAuthQuery(parsedQuery))
-            return PostWrite(() => ExecuteAuthQuery(query, parsedQuery));
+            return new ValueTask<SproutResponse>(EnqueueWrite(() => ExecuteAuthQuery(query, parsedQuery), cancellationToken));
 
         // Reads bypass the channel → run directly on caller thread
         if (parsedQuery is GetQuery getQuery)
-            return ExecuteGet(query, dbName, dbPath, getQuery);
+            return new ValueTask<SproutResponse>(ExecuteGet(query, dbName, dbPath, getQuery));
 
         if (parsedQuery is DescribeQuery describeQuery)
-            return ExecuteDescribe(query, dbName, dbPath, describeQuery);
+            return new ValueTask<SproutResponse>(ExecuteDescribe(query, dbName, dbPath, describeQuery));
 
         // Write protection: block writes to _-prefixed system entities
         var protectionError = CheckWriteProtection(query, parsedQuery, dbName);
         if (protectionError is not null)
-            return protectionError;
+            return new ValueTask<SproutResponse>(protectionError);
 
         // All mutations go through the writer channel
-        return PostWrite(() => ExecuteWrite(query, dbName, dbPath, parsedQuery));
+        return new ValueTask<SproutResponse>(EnqueueWrite(
+            () => ExecuteWrite(query, statementText, dbName, dbPath, parsedQuery), cancellationToken));
     }
 
     /// <summary>
@@ -287,20 +389,44 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             return ExecuteDescribe(query, dbName, dbPath, describeQuery);
 
         // No protection check — internal writes bypass protection
-        return PostWrite(() => ExecuteWrite(query, dbName, dbPath, parsedQuery));
+        return PostWrite(() => ExecuteWrite(query, query, dbName, dbPath, parsedQuery));
     }
 
     // ── Writer channel ──────────────────────────────────────
 
     private SproutResponse PostWrite(Func<SproutResponse> work)
+        => EnqueueWrite(work, CancellationToken.None).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Queues <paramref name="work"/> for the single writer. The task completes with
+    /// its result, or is cancelled if <paramref name="cancellationToken"/> fired
+    /// before the writer started it (then it never ran).
+    /// </summary>
+    internal Task<SproutResponse> EnqueueWrite(Func<SproutResponse> work, CancellationToken cancellationToken)
     {
+        if (cancellationToken.IsCancellationRequested)
+            return Task.FromCanceled<SproutResponse>(cancellationToken);
+
         var tcs = new TaskCompletionSource<SproutResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var action = new Action(tcs, work);
+        var action = new Action(tcs, work, cancellationToken);
         if (!_writeChannel.Writer.TryWrite(action))
-            return ResponseHelper.Error("", ErrorCodes.SYNTAX_ERROR, "engine is shutting down");
+            return Task.FromResult(ResponseHelper.Error("", ErrorCodes.SYNTAX_ERROR, "engine is shutting down"));
 
-        return tcs.Task.GetAwaiter().GetResult();
+        return tcs.Task;
+    }
+
+    private async Task<List<SproutResponse>> EnqueueWriteList(Func<List<SproutResponse>> work, CancellationToken cancellationToken)
+    {
+        List<SproutResponse>? listResult = null;
+        var completion = await EnqueueWrite(() =>
+        {
+            listResult = work();
+            return new SproutResponse { Operation = SproutOperation.Transaction }; // dummy
+        }, cancellationToken).ConfigureAwait(false);
+
+        // Shutdown: the dummy was never produced, the error response came back instead
+        return listResult ?? [completion];
     }
 
     private List<SproutResponse> PostWriteList(Func<List<SproutResponse>> work)
@@ -325,6 +451,12 @@ public sealed class SproutEngine : ISproutServer, IDisposable
     {
         await foreach (var action in _writeChannel.Reader.ReadAllAsync())
         {
+            if (action.Cancellation.IsCancellationRequested)
+            {
+                action.Completion.TrySetCanceled(action.Cancellation);
+                continue;
+            }
+
             try
             {
                 var result = action.Work();
@@ -339,15 +471,17 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
     /// <summary>
     /// Executes a mutating query on the writer thread.
+    /// <paramref name="query"/> is used for error annotation, <paramref name="statementText"/>
+    /// is what gets persisted (WAL, audit log).
     /// </summary>
-    private SproutResponse ExecuteWrite(string query, string dbName, string dbPath, IQuery parsedQuery)
+    private SproutResponse ExecuteWrite(string query, string statementText, string dbName, string dbPath, IQuery parsedQuery)
     {
         if (parsedQuery is CreateDatabaseQuery cdbq)
         {
             var r = ExecuteCreateDatabase(query, dbName, dbPath, cdbq);
             if (r.Errors is null)
             {
-                LogAudit(dbName, query, "create_database");
+                LogAudit(dbName, statementText, "create_database");
                 _changeNotifier.Enqueue(dbName, "_schema", r);
             }
             return r;
@@ -358,7 +492,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             var r = ExecutePurgeDatabase(query, dbName, dbPath);
             if (r.Errors is null)
             {
-                LogAudit(dbName, query, "purge_database");
+                LogAudit(dbName, statementText, "purge_database");
                 _changeNotifier.Enqueue(dbName, "_schema", r);
             }
             return r;
@@ -375,16 +509,32 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             return ResponseHelper.Error(query, ErrorCodes.UNKNOWN_DATABASE,
                 $"database '{dbName}' does not exist");
 
-        // WAL append before mutation
-        ulong resolvedId = ResolveIdForWal(parsedQuery, dbPath);
+        // WAL append before mutation. Upsert/delete append from inside the executor,
+        // after validation (incl. 'when' / 'expect') — rejected writes never reach the
+        // WAL, so replay can apply every entry unconditionally.
+        // The upsert executor passes the _id it is about to write (replayed as-is).
         var wal = _walManager.GetOrOpen(dbPath);
-        wal.Append(query, resolvedId);
+        var walAppended = false;
+        void AppendWal(ulong resolvedId)
+        {
+            wal.Append(statementText, resolvedId);
+            walAppended = true;
+        }
+
+        SproutResponse result;
+        if (parsedQuery is UpsertQuery or DeleteQuery)
+        {
+            result = Dispatch(query, dbName, dbPath, parsedQuery, beforeWrite: AppendWal);
+        }
+        else
+        {
+            AppendWal(0);
+            result = Dispatch(query, dbName, dbPath, parsedQuery);
+        }
 
         // Immediate fsync if group commit is disabled
-        if (_walSyncInterval == TimeSpan.Zero)
+        if (walAppended && _walSyncInterval == TimeSpan.Zero)
             wal.SyncToDisk();
-
-        var result = Dispatch(query, dbName, dbPath, parsedQuery);
 
         // Track write metrics for index columns
         if (result.Errors is null)
@@ -398,18 +548,15 @@ public sealed class SproutEngine : ISproutServer, IDisposable
                     foreach (var f in rec)
                         _indexMetrics.RecordWrite(tablePath, f.Name);
             }
-            else if (parsedQuery is CreateIndexQuery ciq)
+            else
             {
-                var tablePath = Path.Combine(dbPath, ciq.Table);
-                _indexMetrics.MarkManual(tablePath, ciq.Column);
-                var manualMetrics = _indexMetrics.GetOrCreate(tablePath, ciq.Column);
-                manualMetrics.IndexCreatedAt ??= DateTime.UtcNow;
+                MarkManualIndexes(dbPath, parsedQuery);
             }
 
             // Audit log for schema changes
             var operation = GetSchemaOperation(parsedQuery);
             if (operation is not null)
-                LogAudit(dbName, query, operation);
+                LogAudit(dbName, statementText, operation);
 
             // Change notifications (non-blocking enqueue)
             var tableName = GetTableNameForNotify(parsedQuery);
@@ -451,49 +598,79 @@ public sealed class SproutEngine : ISproutServer, IDisposable
                 return [protectionError];
         }
 
-        // 2. WAL append write queries with shared groupId (reads skip WAL)
-        for (var idx = 0; idx < txQuery.Queries.Count; idx++)
-        {
-            var innerQuery = txQuery.Queries[idx];
-            if (innerQuery is GetQuery or DescribeQuery)
-                continue;
-            var innerQueryText = txQuery.QueryTexts[idx];
-            ulong resolvedId = ResolveIdForWal(innerQuery, dbPath);
-            wal.Append(innerQueryText, resolvedId, groupId);
-        }
-
-        // 3. Execute all queries sequentially
+        // 2. Execute all queries sequentially. Each write is appended to the WAL
+        //    (shared groupId) right before it runs, so its auto-ID is resolved
+        //    against the state the previous statements left behind. The group
+        //    only counts on replay once the commit marker follows (step 3) —
+        //    a rollback simply never writes it.
+        var hasWalEntries = false;
         try
         {
             for (var idx = 0; idx < txQuery.Queries.Count; idx++)
             {
                 var innerQuery = txQuery.Queries[idx];
-                var innerQueryText = txQuery.QueryTexts[idx];
 
-                // Reads execute directly (no journal needed, they don't mutate)
+                // Inner queries are annotated against the full input: their
+                // error positions were produced by parsing the whole block.
                 SproutResponse result;
                 if (innerQuery is GetQuery gq)
                 {
-                    result = ExecuteGet(innerQueryText, dbName, dbPath, gq);
+                    // Reads execute directly (no journal needed, they don't mutate)
+                    result = ExecuteGet(query, dbName, dbPath, gq);
                     Interlocked.Increment(ref _totalReads);
                 }
                 else if (innerQuery is DescribeQuery dq)
                 {
-                    result = ExecuteDescribe(innerQueryText, dbName, dbPath, dq);
+                    result = ExecuteDescribe(query, dbName, dbPath, dq);
                     Interlocked.Increment(ref _totalReads);
                 }
                 else
                 {
-                    result = Dispatch(innerQueryText, dbName, dbPath, innerQuery, journal);
+                    var statementText = txQuery.QueryTexts[idx];
+                    void AppendWal(ulong resolvedId)
+                    {
+                        wal.Append(statementText, resolvedId, groupId);
+                        hasWalEntries = true;
+                    }
+
+                    // Upsert/delete append after their own validation (see ExecuteWrite)
+                    if (innerQuery is UpsertQuery or DeleteQuery)
+                    {
+                        result = Dispatch(query, dbName, dbPath, innerQuery, journal, AppendWal);
+                    }
+                    else
+                    {
+                        AppendWal(0);
+                        result = Dispatch(query, dbName, dbPath, innerQuery, journal);
+                    }
                 }
 
                 if (result.Errors is not null && result.Errors.Count > 0)
                 {
-                    // Rollback: undo all MMF changes via journal, mark WAL group
+                    // Rollback: undo all MMF changes via journal. The WAL group
+                    // stays without commit marker and is skipped on replay.
                     journal.Rollback();
-                    wal.MarkGroupRolledBack(groupId);
-                    return [ResponseHelper.Error(query, result.Errors[0].Code,
-                        $"transaction rolled back: {result.Errors[0].Message}")];
+                    var first = result.Errors[0];
+
+                    // CONDITION_FAILED reports the row that failed the check. It was read
+                    // inside the transaction — re-read it so the caller sees what is
+                    // actually stored after the rollback.
+                    var data = result.Data;
+                    if (first.Code == ErrorCodes.CONDITION_FAILED && innerQuery is UpsertQuery failedUpsert)
+                    {
+                        var table = ResolveTable(dbPath, failedUpsert.Table);
+                        data = table is not null && UpsertExecutor.ReadCurrentRow(table, failedUpsert) is { } row
+                            ? [row]
+                            : [];
+                    }
+
+                    return [ResponseHelper.Errors(query, [new SproutError
+                    {
+                        Code = first.Code,
+                        Message = $"transaction rolled back: {first.Message}",
+                        Position = first.Position,
+                        Length = first.Length,
+                    }], data)];
                 }
 
                 results.Add(result);
@@ -520,25 +697,28 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         }
         catch (Exception ex)
         {
-            // Unexpected error — rollback via journal
+            // Unexpected error — rollback via journal (no commit marker)
             journal.Rollback();
-            wal.MarkGroupRolledBack(groupId);
             return [ResponseHelper.Error(query, ErrorCodes.SYNTAX_ERROR,
                 $"transaction rolled back: {ex.Message}")];
         }
 
-        // 4. Success — flush WAL
-        if (_walSyncInterval == TimeSpan.Zero)
-            wal.SyncToDisk();
+        // 3. Success — commit marker makes the group count on replay, then flush
+        if (hasWalEntries)
+        {
+            wal.Append(WalCommitMarker, 0, groupId);
+            if (_walSyncInterval == TimeSpan.Zero)
+                wal.SyncToDisk();
+        }
 
-        // 5. Dispatch change notifications
+        // 4. Dispatch change notifications
         foreach (var (table, response) in pendingNotifications)
             _changeNotifier.Enqueue(dbName, table, response);
 
-        // 6. Audit log
+        // 5. Audit log
         LogAudit(dbName, query, "transaction");
 
-        // 7. Append Transaction marker as last entry
+        // 6. Append Transaction marker as last entry
         results.Add(new SproutResponse
         {
             Operation = SproutOperation.Transaction,
@@ -832,7 +1012,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
     private static string EscapeString(string value)
     {
-        return value.Replace("'", "\\'");
+        return StringLiteral.Escape(value);
     }
 
     // ── Index metrics persistence ──────────────────────────
@@ -931,6 +1111,12 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
     // ── WAL replay ──────────────────────────────────────────
 
+    /// <summary>
+    /// Query text of the WAL entry that closes a successful transaction group.
+    /// Replay applies a group (groupId &gt; 0) only if this marker is present.
+    /// </summary>
+    internal const string WalCommitMarker = "commit";
+
     private void ReplayWal(string dbPath, string dbName)
     {
         var walPath = Path.Combine(dbPath, "_wal");
@@ -943,32 +1129,21 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         if (entries.Count == 0)
             return;
 
-        // Determine which group IDs are rolled back (negative groupId)
-        // and which are incomplete (groupId > 0 but no corresponding entries
-        // that would indicate a commit — incomplete groups are also skipped)
-        var rolledBackGroups = new HashSet<long>();
-        var groupEntries = new Dictionary<long, List<WalEntry>>();
-
+        // Transaction groups count only if their commit marker made it into the
+        // WAL. Rolled back or interrupted (crash) groups have none.
+        var committedGroups = new HashSet<long>();
         foreach (var entry in entries)
         {
-            if (entry.GroupId < 0)
-            {
-                rolledBackGroups.Add(-entry.GroupId);
-            }
-            else if (entry.GroupId > 0)
-            {
-                if (!groupEntries.ContainsKey(entry.GroupId))
-                    groupEntries[entry.GroupId] = [];
-                groupEntries[entry.GroupId].Add(entry);
-            }
+            if (entry.GroupId > 0 && entry.Query == WalCommitMarker)
+                committedGroups.Add(entry.GroupId);
         }
 
         foreach (var entry in entries)
         {
-            // Skip rolled-back transaction entries
+            // Negative groupId: rolled back by an older engine version
             if (entry.GroupId < 0)
                 continue;
-            if (entry.GroupId > 0 && rolledBackGroups.Contains(entry.GroupId))
+            if (entry.GroupId > 0 && (!committedGroups.Contains(entry.GroupId) || entry.Query == WalCommitMarker))
                 continue;
 
             var parseResult = QueryParser.Parse(entry.Query);
@@ -977,23 +1152,29 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
             var replayQuery = parseResult.Query;
 
-            // Inject resolved ID for auto-ID upserts during replay
-            if (entry.ResolvedId > 0 && replayQuery is UpsertQuery upsert
-                && upsert.Records.Count == 1
-                && !upsert.Records[0].Exists(f => f.Name == "_id"))
+            // Auto-ID upserts get the ID they were assigned originally. Not
+            // injected as an explicit _id field: that would require the row to
+            // exist (ID_NOT_FOUND) and clash with an 'on' clause.
+            if (replayQuery is UpsertQuery upsert)
             {
-                upsert.Records[0].Insert(0, new UpsertField
-                {
-                    Name = "_id",
-                    Value = new UpsertValue
-                    {
-                        Kind = UpsertValueKind.Integer,
-                        Raw = entry.ResolvedId.ToString(),
-                    },
-                });
+                if (entry.ResolvedId > 0)
+                    upsert.ReplayId = entry.ResolvedId;
+
+                // 'when' held when the write ran (rejected writes never reach the
+                // WAL). Re-checking could skip a write whose row only partly reached
+                // the disk before a crash.
+                upsert.IsReplay = true;
+            }
+            else if (replayQuery is DeleteQuery delete)
+            {
+                delete.IsReplay = true;
             }
 
             Dispatch(entry.Query, dbName, dbPath, replayQuery);
+
+            // Index metrics are persisted on flush only — a crash before the first
+            // flush would otherwise bring manual indexes back as auto (purgeable) ones
+            MarkManualIndexes(dbPath, replayQuery);
         }
 
         // Flush MMFs to disk, then truncate WAL
@@ -1081,6 +1262,7 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             }
             else if (table.HasBTree(key.Column)
                      && !metrics.IsManual
+                     && !IsUniqueColumn(table, key.Column) // a constraint, not just an optimization
                      && AutoIndexEvaluator.ShouldRemove(metrics, _settings.AutoIndex, now))
             {
                 var purgeQuery = $"purge index {tableName}.{key.Column}";
@@ -1098,6 +1280,46 @@ public sealed class SproutEngine : ISproutServer, IDisposable
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Marks indexes the user created ('create index', 'unique' columns) as manual —
+    /// the evaluator never purges those. Only indexes that exist are marked: replay
+    /// also runs DDL that failed originally (DDL is logged before it executes).
+    /// </summary>
+    private void MarkManualIndexes(string dbPath, IQuery parsedQuery)
+    {
+        switch (parsedQuery)
+        {
+            case CreateIndexQuery ciq:
+                MarkManualIfIndexed(dbPath, ciq.Table, ciq.Column);
+                break;
+            case CreateTableQuery ctq:
+                foreach (var col in ctq.Columns)
+                {
+                    if (col.Unique)
+                        MarkManualIfIndexed(dbPath, ctq.Table, col.Name);
+                }
+                break;
+        }
+    }
+
+    private void MarkManualIfIndexed(string dbPath, string tableName, string column)
+    {
+        if (ResolveTable(dbPath, tableName) is not { } table || !table.HasBTree(column))
+            return;
+
+        _indexMetrics.MarkManual(Path.Combine(dbPath, tableName), column);
+    }
+
+    private static bool IsUniqueColumn(Storage.TableHandle table, string column)
+    {
+        foreach (var col in table.Schema.Columns)
+        {
+            if (col.Name == column)
+                return col.IsUnique;
+        }
+        return false;
     }
 
     private async Task RunWalSyncCycle(TimeSpan interval)
@@ -1190,47 +1412,21 @@ public sealed class SproutEngine : ISproutServer, IDisposable
         var maxBatch = _settings.TtlCleanupBatchSize;
 
         // Collect expired rows
-        var expired = new List<long>(); // places
+        var expired = new List<(ulong Id, long Place)>();
         target.Index.ForEachUsed((id, place) =>
         {
             if (expired.Count >= maxBatch) return;
 
             var expiresAt = ttl.ReadExpiresAt(place);
             if (expiresAt > 0 && nowMs > expiresAt)
-                expired.Add(place);
+                expired.Add((id, place));
         });
 
-        // Delete expired rows
-        foreach (var place in expired)
-        {
-            // Remove from B-Trees
-            foreach (var col in target.Schema.Columns)
-            {
-                if (target.HasBTree(col.Name))
-                {
-                    var colHandle = target.GetColumn(col.Name);
-                    if (!colHandle.IsNullAtPlace(place))
-                    {
-                        var val = colHandle.ReadValue(place);
-                        if (val is not null)
-                        {
-                            var encoded = colHandle.EncodeValueToBytes(val.ToString() ?? "");
-                            target.GetBTree(col.Name).Remove(encoded, place);
-                        }
-                    }
-                }
-            }
-
-            // Free slot
-            target.Index.FreeSlot(place);
-
-            // Clear TTL
-            ttl.Clear(place);
-
-            // Null out columns
-            foreach (var col in target.Schema.Columns)
-                target.GetColumn(col.Name).WriteNull(place);
-        }
+        // Delete expired rows — same path as 'delete', incl. blob/array files.
+        // Not WAL-logged: an expired row is still expired after a replay, so a
+        // lost cleanup pass is simply repeated.
+        foreach (var (id, place) in expired)
+            DeleteExecutor.DeleteRow(target, id, place, journal: null);
     }
 
     // ── WAL ID resolution ────────────────────────────────────
@@ -1242,26 +1438,6 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             or RenameColumnQuery or AlterColumnQuery or DeleteQuery
             or CreateIndexQuery or PurgeIndexQuery or PurgeTtlQuery
             or ShrinkTableQuery or ShrinkDatabaseQuery;
-    }
-
-    /// <summary>
-    /// For auto-ID upserts, reads the next ID that will be assigned.
-    /// This ID is stored in the WAL entry so replay is idempotent.
-    /// Returns 0 for non-upsert or explicit-ID upsert queries.
-    /// </summary>
-    private ulong ResolveIdForWal(IQuery query, string dbPath)
-    {
-        if (query is not UpsertQuery upsert)
-            return 0;
-
-        if (upsert.Records.Count != 1 || upsert.Records[0].Exists(f => f.Name == "_id"))
-            return 0;
-
-        var tablePath = Path.Combine(dbPath, upsert.Table);
-        if (!_tableCache.TryGetTable(tablePath, out var table) || table is null)
-            return 0;
-
-        return table.Index.ReadNextId();
     }
 
     // ── Query dispatch ───────────────────────────────────────
@@ -1359,22 +1535,28 @@ public sealed class SproutEngine : ISproutServer, IDisposable
             });
     }
 
+    /// <param name="beforeWrite">
+    /// Upsert/delete only: called by the executor once the write passed validation,
+    /// right before the first mutation (used to append the WAL entry). The argument
+    /// is the _id a single-record upsert writes, 0 otherwise.
+    /// </param>
     private SproutResponse Dispatch(string query, string dbName, string dbPath, IQuery parsedQuery,
-        Storage.TransactionJournal? journal = null)
+        Storage.TransactionJournal? journal = null, Action<ulong>? beforeWrite = null)
     {
+        System.Action? deleteHook = beforeWrite is null ? null : () => beforeWrite(0);
         return parsedQuery switch
         {
             CreateDatabaseQuery q => ExecuteCreateDatabase(query, dbName, dbPath, q),
             CreateTableQuery q => ExecuteCreateTable(query, dbName, dbPath, q),
             GetQuery q => ExecuteWithTable(query, dbPath, q.Table, table => GetExecutor.Execute(query, table, q, _settings.DefaultPageSize, q.Follow is not null ? name => ResolveTable(dbPath, name) : null)),
-            UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table, table => UpsertExecutor.Execute(query, table, q, _settings.BulkLimit, journal)),
+            UpsertQuery q => ExecuteWithTable(query, dbPath, q.Table, table => UpsertExecutor.Execute(query, table, q, _settings.BulkLimit, journal, beforeWrite)),
             AddColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => AddColumnExecutor.Execute(query, table, q)),
             PurgeColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => PurgeColumnExecutor.Execute(query, table, q)),
             PurgeTableQuery q => ExecutePurgeTable(query, dbPath, q),
             PurgeDatabaseQuery => ExecutePurgeDatabase(query, dbName, dbPath),
             RenameColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => RenameColumnExecutor.Execute(query, table, q)),
             AlterColumnQuery q => ExecuteWithTable(query, dbPath, q.Table, table => AlterColumnExecutor.Execute(query, table, q)),
-            DeleteQuery q => ExecuteWithTable(query, dbPath, q.Table, table => DeleteExecutor.Execute(query, table, q, journal)),
+            DeleteQuery q => ExecuteWithTable(query, dbPath, q.Table, table => DeleteExecutor.Execute(query, table, q, journal, deleteHook)),
             CreateIndexQuery q => ExecuteWithTable(query, dbPath, q.Table, table => CreateIndexExecutor.Execute(query, table, q)),
             PurgeIndexQuery q => ExecuteWithTable(query, dbPath, q.Table, table => PurgeIndexExecutor.Execute(query, table, q)),
             PurgeTtlQuery q => ExecuteWithTable(query, dbPath, q.Table, table => ExecutePurgeTtl(query, table, q)),
@@ -1831,5 +2013,10 @@ public sealed class SproutEngine : ISproutServer, IDisposable
 
     // ── Action record ────────────────────────────────────────
 
-    private sealed record Action(TaskCompletionSource<SproutResponse> Completion, Func<SproutResponse> Work);
+    /// <param name="Cancellation">
+    /// Checked when the writer picks the action up: a cancelled action is skipped
+    /// (never executed). Once work has started it runs to completion.
+    /// </param>
+    private sealed record Action(TaskCompletionSource<SproutResponse> Completion, Func<SproutResponse> Work,
+        CancellationToken Cancellation = default);
 }

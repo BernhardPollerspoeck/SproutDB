@@ -38,6 +38,19 @@ public sealed class CreateTableBuilder
     }
 
     /// <summary>
+    /// Makes the most recently added column unique — its unique index is created
+    /// together with the table (<c>create table t (col … unique)</c>).
+    /// </summary>
+    public CreateTableBuilder Unique()
+    {
+        if (_columns.Count == 0)
+            throw new InvalidOperationException("Unique() must follow an AddColumn call.");
+
+        _columns[^1] = _columns[^1] with { Unique = true };
+        return this;
+    }
+
+    /// <summary>
     /// Builds the query string and executes it.
     /// </summary>
     public SproutResponse Execute()
@@ -82,6 +95,9 @@ public sealed class CreateTableBuilder
                     sb.Append(" default ");
                     sb.Append(col.Default);
                 }
+
+                if (col.Unique)
+                    sb.Append(" unique");
             }
             sb.Append(')');
         }
@@ -89,5 +105,8 @@ public sealed class CreateTableBuilder
         return sb.ToString();
     }
 
-    private sealed record ColumnDef(string Name, string TypeName, int Size, bool Strict, string? Default);
+    private sealed record ColumnDef(string Name, string TypeName, int Size, bool Strict, string? Default)
+    {
+        public bool Unique { get; init; }
+    }
 }

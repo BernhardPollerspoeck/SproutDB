@@ -28,9 +28,25 @@ internal static class SproutEndpoints
 
     private static async Task<IResult> HandleQuery(HttpContext context, SproutEngine engine)
     {
-        // 1. Read query body
+        // 1. Read query body: text/plain = the query itself,
+        //    application/json = {"query": "...", "parameters": {"name": value, ...}}
         using var reader = new StreamReader(context.Request.Body);
-        var query = await reader.ReadToEndAsync();
+        var body = await reader.ReadToEndAsync();
+
+        var query = body;
+        if (context.Request.HasJsonContentType())
+        {
+            if (!TryReadJsonRequest(body, out var jsonQuery, out var parameters, out var jsonError))
+                return Results.BadRequest(new { error = jsonError });
+
+            // Bind before anything else looks at the query (auth checks included)
+            if (!QueryParameters.TryBind(jsonQuery, parameters, out var bound, out var bindError))
+            {
+                var error = bindError ?? ResponseHelper.Error(jsonQuery, ErrorCodes.PARAMETER_ERROR, "invalid parameters");
+                return Results.Json(new[] { error }, JsonOptions, statusCode: StatusCodes.Status200OK);
+            }
+            query = bound;
+        }
 
         if (string.IsNullOrWhiteSpace(query))
             return Results.BadRequest(new { error = "Request body must contain a query" });
@@ -133,9 +149,11 @@ internal static class SproutEndpoints
         }
 
         // 4. Auth queries don't need database header — use "_system"
+        // Async execution: request threads don't block while writes wait in the writer
+        // queue. No cancellation token — a client disconnect must not skip a write.
         if (isAuthQuery)
         {
-            var responses = engine.Execute(query, "_system");
+            var responses = await engine.ExecuteAsync(query, "_system");
             return Results.Json(responses, JsonOptions, statusCode: StatusCodes.Status200OK);
         }
 
@@ -148,8 +166,98 @@ internal static class SproutEndpoints
 
         var database = dbHeaderValue.ToString();
 
-        var normalResponses = engine.Execute(query, database);
+        var normalResponses = await engine.ExecuteAsync(query, database);
         return Results.Json(normalResponses, JsonOptions, statusCode: StatusCodes.Status200OK);
+    }
+
+    /// <summary>
+    /// Parses a JSON request <c>{"query": "...", "parameters": {...}}</c>. Parameter
+    /// values: string, number, true/false, null or an array of those.
+    /// </summary>
+    private static bool TryReadJsonRequest(string body, out string query,
+        out Dictionary<string, object?>? parameters, out string error)
+    {
+        query = "";
+        parameters = null;
+        error = "";
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("query", out var queryElement)
+                || queryElement.ValueKind != JsonValueKind.String)
+            {
+                error = "JSON body must be an object with a string property 'query'";
+                return false;
+            }
+            query = queryElement.GetString() ?? "";
+
+            if (root.TryGetProperty("parameters", out var paramsElement) && paramsElement.ValueKind != JsonValueKind.Null)
+            {
+                if (paramsElement.ValueKind != JsonValueKind.Object)
+                {
+                    error = "'parameters' must be a JSON object";
+                    return false;
+                }
+
+                parameters = new Dictionary<string, object?>();
+                foreach (var prop in paramsElement.EnumerateObject())
+                {
+                    if (!TryConvertJsonValue(prop.Value, out var value))
+                    {
+                        error = $"parameter '{prop.Name}': objects are not supported as values";
+                        return false;
+                    }
+                    parameters[prop.Name] = value;
+                }
+            }
+
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            error = $"invalid JSON: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static bool TryConvertJsonValue(JsonElement element, out object? value)
+    {
+        value = null;
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.String:
+                value = element.GetString();
+                return true;
+            case JsonValueKind.True:
+                value = true;
+                return true;
+            case JsonValueKind.False:
+                value = false;
+                return true;
+            case JsonValueKind.Null:
+                return true;
+            case JsonValueKind.Number:
+                if (element.TryGetInt64(out var l)) value = l;
+                else if (element.TryGetUInt64(out var ul)) value = ul;
+                else if (element.TryGetDecimal(out var dec)) value = dec;
+                else value = element.GetDouble();
+                return true;
+            case JsonValueKind.Array:
+                var list = new List<object?>();
+                foreach (var item in element.EnumerateArray())
+                {
+                    if (!TryConvertJsonValue(item, out var itemValue))
+                        return false;
+                    list.Add(itemValue);
+                }
+                value = list;
+                return true;
+            default:
+                return false;
+        }
     }
 
     /// <summary>
