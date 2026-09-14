@@ -95,11 +95,18 @@ internal static class GetExecutor
 
             foreach (var col in q.OrderBy)
             {
-                // alias.column references a followed table — the projection
-                // produces rows keyed by "alias.column", so the sort key will
-                // exist on the row even though the base table doesn't have it.
-                if (q.Follow is not null && col.Name.Contains('.'))
+                // With follow the sort runs on the joined rows (before the post-follow
+                // projection) — the key must exist there: base projection, followed
+                // columns ("alias.col"), post-follow select/computed aliases.
+                if (q.Follow is not null)
+                {
+                    if (DescribeJoinedOrderByError(q, table, tableResolver, col.Name) is { } joinedMessage)
+                    {
+                        validationErrors ??= [];
+                        validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = joinedMessage, Position = col.Position, Length = col.Length });
+                    }
                     continue;
+                }
 
                 if (!IsVirtualColumn(col.Name) && !table.HasColumn(col.Name)
                     && (computedAliases is null || !computedAliases.Contains(col.Name)))
@@ -112,12 +119,10 @@ internal static class GetExecutor
                 // The sort runs on the projected rows — a column that exists in the table
                 // but not in the result would silently not sort at all. Reject it instead.
                 // Exceptions where sorting is correct (or moot) without the column:
-                //  - no follow restriction here: with follow the post-follow projection has
-                //    its own keys, checked via the dot-notation skip above
                 //  - count: no rows are returned, ordering is irrelevant
                 //  - 'order by _id [desc] limit N': served by the top-N fast path
                 //  - 'after' cursor paging: orders by _id by construction
-                if (q.Follow is not null || q.IsCount)
+                if (q.IsCount)
                     continue;
 
                 var servedByIdFastPath = col.Name == "_id" && q.OrderBy.Count == 1
@@ -134,6 +139,27 @@ internal static class GetExecutor
                         Length = col.Length,
                     });
                 }
+            }
+        }
+
+        // Validate order by on grouped results — the rows only carry the group columns,
+        // 'count' or the aggregate, and literals. Anything else would silently not sort.
+        if (q.OrderBy is not null && q.GroupBy is not null)
+        {
+            foreach (var col in q.OrderBy)
+            {
+                if (IsGroupedResultKey(q, col.Name))
+                    continue;
+
+                var produced = q.Aggregate.HasValue ? $"'{q.AggregateAlias ?? AggregateName(q.Aggregate.Value)}'" : "'count'";
+                validationErrors ??= [];
+                validationErrors.Add(new SproutError
+                {
+                    Code = ErrorCodes.UNKNOWN_COLUMN,
+                    Message = $"'order by {col.Name}' requires '{col.Name}' in the result — group by returns only the group columns and {produced}",
+                    Position = col.Position,
+                    Length = col.Length,
+                });
             }
         }
 
@@ -210,14 +236,30 @@ internal static class GetExecutor
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{follow.TargetColumn}' does not exist on '{follow.TargetTable}'", Position = follow.TargetColumnPosition, Length = follow.TargetColumnLength });
                 }
 
-                // Record this follow's alias for subsequent follows
-                aliasToTable[follow.Alias] = follow.TargetTable;
+                // Record this follow's alias for subsequent follows (semi/anti add no
+                // columns — the parser already rejects following from them)
+                if (!follow.IsFilterOnly && follow.Alias is not null)
+                    aliasToTable[follow.Alias] = follow.TargetTable;
 
                 // Validate follow where columns
                 if (follow.Where is not null)
                 {
                     var followWhereErrors = WhereEngine.ValidateWhereNode(targetTable, follow.Where);
                     validationErrors = WhereEngine.MergeErrors(validationErrors, followWhereErrors);
+                }
+            }
+        }
+
+        // Validate post-follow select — it projects keys of the joined rows; an unknown
+        // or unselected key used to vanish from the result without a word
+        if (q.Follow is not null && q.PostFollowSelect is not null && tableResolver is not null)
+        {
+            foreach (var col in q.PostFollowSelect)
+            {
+                if (DescribeJoinedRowKeyError(q, table, tableResolver, col.Name) is { } selectMessage)
+                {
+                    validationErrors ??= [];
+                    validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = selectMessage, Position = col.Position, Length = col.Length });
                 }
             }
         }
@@ -231,6 +273,20 @@ internal static class GetExecutor
                 {
                     validationErrors ??= [];
                     validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = $"column '{col.Name}' does not exist", Position = col.Position, Length = col.Length });
+                }
+            }
+        }
+
+        // Validate dedup by columns — like ORDER BY they must be keys of the result rows,
+        // otherwise every row would share the same (null) key and collapse into one
+        if (q.DedupBy is not null)
+        {
+            foreach (var col in q.DedupBy)
+            {
+                if (DescribeDedupColumnError(q, table, tableResolver, col.Name) is { } message)
+                {
+                    validationErrors ??= [];
+                    validationErrors.Add(new SproutError { Code = ErrorCodes.UNKNOWN_COLUMN, Message = message, Position = col.Position, Length = col.Length });
                 }
             }
         }
@@ -275,7 +331,7 @@ internal static class GetExecutor
         // matching row. Produces the same rows as the sort+limit slow path.
         List<Dictionary<string, object?>> data;
         var topNApplied = false;
-        if (q.Limit is int topN && !q.IsCount && !q.IsDistinct && q.Follow is null
+        if (q.Limit is int topN && !q.IsCount && !q.IsDistinct && q.Follow is null && q.DedupBy is null
             && q.OrderBy is [{ Name: "_id" } idOrder])
         {
             var candidates = CollectTopNById(table, filter, btreeResult, 0, topN, idOrder.Descending, nowMs, out _);
@@ -319,8 +375,10 @@ internal static class GetExecutor
             data = distinct;
         }
 
-        // Order by (already satisfied when the top-N fast path produced the rows)
-        if (q.OrderBy is not null && q.OrderBy.Count > 0 && !topNApplied)
+        // Order by (already satisfied when the top-N fast path produced the rows).
+        // With follow the sort runs after the join instead — it may reference
+        // followed columns (alias.col) that don't exist on the rows yet.
+        if (q.OrderBy is not null && q.OrderBy.Count > 0 && !topNApplied && q.Follow is null)
         {
             var orderColumns = q.OrderBy;
             data.Sort((a, b) =>
@@ -387,6 +445,44 @@ internal static class GetExecutor
         if (q.PostFollowComputedSelect is not null && data.Count > 0)
         {
             ApplyComputedColumns(data, q.PostFollowComputedSelect, table);
+        }
+
+        // Order by for joined results: every base, followed and computed key is on the
+        // row now. Runs before the post-follow projection so unselected sort columns
+        // still work; post-follow select aliases are mapped back to their source key.
+        // Stable, so rows with equal sort keys keep their join order.
+        if (q.Follow is not null && q.OrderBy is { Count: > 0 } joinOrder && data.Count > 1)
+        {
+            var sortKeys = new (string Key, bool Descending)[joinOrder.Count];
+            for (var i = 0; i < joinOrder.Count; i++)
+            {
+                var key = joinOrder[i].Name;
+                if (q.PostFollowSelect is not null && !q.PostFollowExclude)
+                {
+                    foreach (var col in q.PostFollowSelect)
+                    {
+                        if (col.Alias is not null && col.Alias.Equals(key, StringComparison.OrdinalIgnoreCase))
+                        {
+                            key = col.Name;
+                            break;
+                        }
+                    }
+                }
+                sortKeys[i] = (key, joinOrder[i].Descending);
+            }
+
+            data = data.OrderBy(row => row, Comparer<Dictionary<string, object?>>.Create((a, b) =>
+            {
+                foreach (var (key, descending) in sortKeys)
+                {
+                    a.TryGetValue(key, out var valA);
+                    b.TryGetValue(key, out var valB);
+                    var cmp = CompareValues(valA, valB);
+                    if (descending) cmp = -cmp;
+                    if (cmp != 0) return cmp;
+                }
+                return 0;
+            })).ToList();
         }
 
         // Post-follow select/exclude: filter keys on the flat joined result
@@ -456,6 +552,19 @@ internal static class GetExecutor
                     data[i] = projected;
                 }
             }
+        }
+
+        // Dedup by: first row per key in result order (after order by, before count/limit/paging)
+        if (q.DedupBy is not null && data.Count > 1)
+        {
+            var seen = new HashSet<string>();
+            var deduped = new List<Dictionary<string, object?>>(data.Count);
+            foreach (var row in data)
+            {
+                if (seen.Add(BuildDedupKey(row, q.DedupBy)))
+                    deduped.Add(row);
+            }
+            data = deduped;
         }
 
         // Count: return count only
@@ -963,6 +1072,11 @@ internal static class GetExecutor
         // Build a lookup: for each row in the target table, group by the join column value
         var targetIndex = BuildTargetIndex(targetTable, follow.TargetColumn, targetFilter);
 
+        // Semi/anti: filter the current rows by match existence — no expansion, no target columns.
+        // A null source value never matches, so semi drops the row and anti keeps it.
+        if (follow.IsFilterOnly)
+            return FilterByMatch(data, follow, targetIndex, baseTable);
+
         // Resolve target columns for projection (apply follow select if present)
         var targetColumns = new List<(string Name, bool HasAlias, ColumnHandle Handle)>();
         if (follow.Select is not null)
@@ -980,15 +1094,10 @@ internal static class GetExecutor
                 targetColumns.Add((col.Name, false, targetTable.GetColumn(col.Name)));
         }
 
-        var alias = follow.Alias;
+        // The parser requires an alias for every column-producing follow
+        var alias = follow.Alias ?? follow.TargetTable;
         var result = new List<Dictionary<string, object?>>();
-
-        // Base table columns are stored directly ("_id", "name").
-        // Columns from previous follows are stored as "alias.column" ("orders._id").
-        // If SourceTable matches the base query table, use direct key. Otherwise aliased.
-        var sourceKey = follow.SourceTable == baseTable
-            ? follow.SourceColumn
-            : $"{follow.SourceTable}.{follow.SourceColumn}";
+        var sourceKey = ResolveFollowSourceKey(follow, baseTable);
 
         var joinType = follow.JoinType;
         var matchedTargetKeys = joinType is JoinType.Right or JoinType.Outer
@@ -1056,6 +1165,42 @@ internal static class GetExecutor
                     result.Add(flat);
                 }
             }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Base table columns are stored directly ("_id", "name"); columns from previous
+    /// follows as "alias.column" ("orders._id").
+    /// </summary>
+    private static string ResolveFollowSourceKey(FollowClause follow, string baseTable)
+        => follow.SourceTable == baseTable
+            ? follow.SourceColumn
+            : $"{follow.SourceTable}.{follow.SourceColumn}";
+
+    /// <summary>
+    /// Semi (<c>-?&gt;</c>) keeps each row once if the target has a match, anti (<c>-!&gt;</c>)
+    /// keeps it if there is none. Rows are passed through unchanged, in order.
+    /// </summary>
+    private static List<Dictionary<string, object?>> FilterByMatch(
+        List<Dictionary<string, object?>> data,
+        FollowClause follow,
+        Dictionary<string, List<(ulong Id, long Place)>> targetIndex,
+        string baseTable)
+    {
+        var sourceKey = ResolveFollowSourceKey(follow, baseTable);
+        var keepMatched = follow.JoinType is JoinType.Semi;
+        var result = new List<Dictionary<string, object?>>(data.Count);
+
+        foreach (var row in data)
+        {
+            var matched = row.TryGetValue(sourceKey, out var sourceValue)
+                && sourceValue is not null
+                && targetIndex.ContainsKey(sourceValue.ToString() ?? "");
+
+            if (matched == keepMatched)
+                result.Add(row);
         }
 
         return result;
@@ -1231,6 +1376,131 @@ internal static class GetExecutor
         }
         return string.Join("\x1F", parts);
     }
+
+    private static string BuildDedupKey(Dictionary<string, object?> row, List<SelectColumn> columns)
+    {
+        if (columns.Count == 1)
+            return row.TryGetValue(columns[0].Name, out var single) ? single?.ToString() ?? "\0null" : "\0null";
+
+        var parts = new string[columns.Count];
+        for (var i = 0; i < columns.Count; i++)
+            parts[i] = row.TryGetValue(columns[i].Name, out var val) ? val?.ToString() ?? "\0null" : "\0null";
+        return string.Join("\x1F", parts);
+    }
+
+    /// <summary>
+    /// Returns why a 'dedup by' column is not a key of the result rows, or null if it is.
+    /// Mirrors the executor's row shape: base projection, then followed columns
+    /// ("alias.col", or the bare alias of an aliased follow-select column), then the
+    /// post-follow computed columns and projection.
+    /// </summary>
+    private static string? DescribeDedupColumnError(GetQuery q, TableHandle table,
+        Func<string, TableHandle?>? tableResolver, string name)
+    {
+        var notSelected = $"'dedup by {name}' requires '{name}' in the select list";
+
+        if (q.Follow is null)
+        {
+            if (!IsBaseResultCandidate(q, table, name))
+                return $"column '{name}' does not exist";
+            return IsColumnInProjection(q, name) ? null : notSelected;
+        }
+
+        // Explicit post-follow select: only its output names survive
+        if (q.PostFollowSelect is not null && !q.PostFollowExclude)
+        {
+            var listed = q.PostFollowSelect.Exists(c => c.OutputName.Equals(name, StringComparison.OrdinalIgnoreCase))
+                || (q.PostFollowComputedSelect?.Exists(c => c.Alias.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? false)
+                || (q.PostFollowLiteralSelect?.Exists(l => l.Alias.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? false);
+            return listed ? null : notSelected;
+        }
+
+        if (q.PostFollowComputedSelect?.Exists(c => c.Alias.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? false)
+            return null;
+
+        if (q.PostFollowExclude && q.PostFollowSelect is not null
+            && q.PostFollowSelect.Exists(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            return notSelected;
+
+        return DescribeJoinedRowKeyError(q, table, tableResolver, name);
+    }
+
+    /// <summary>
+    /// ORDER BY with follow sorts the joined rows before the post-follow projection, so
+    /// post-follow select/computed/literal aliases count as well as every joined row key.
+    /// </summary>
+    private static string? DescribeJoinedOrderByError(GetQuery q, TableHandle table,
+        Func<string, TableHandle?>? tableResolver, string name)
+    {
+        if ((q.PostFollowSelect is not null && !q.PostFollowExclude
+                && q.PostFollowSelect.Exists(c => c.Alias is not null && c.Alias.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            || (q.PostFollowComputedSelect?.Exists(c => c.Alias.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? false)
+            || (q.PostFollowLiteralSelect?.Exists(l => l.Alias.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? false))
+            return null;
+
+        return DescribeJoinedRowKeyError(q, table, tableResolver, name);
+    }
+
+    /// <summary>
+    /// Returns why <paramref name="name"/> is not a key of the joined rows (after all
+    /// follows, before the post-follow projection), or null if it is. Row shape: the base
+    /// projection, followed columns as "alias.col" (or the bare alias of an aliased
+    /// follow-select column). Semi/anti follows add no keys.
+    /// </summary>
+    private static string? DescribeJoinedRowKeyError(GetQuery q, TableHandle table,
+        Func<string, TableHandle?>? tableResolver, string name)
+    {
+        var follows = q.Follow ?? [];
+        var dot = name.IndexOf('.');
+        if (dot >= 0)
+        {
+            var prefix = name[..dot];
+            var column = name[(dot + 1)..];
+            var follow = follows.FindLast(f => !f.IsFilterOnly && f.Alias == prefix);
+            if (follow is null)
+                return $"column '{name}' is not in the result — '{prefix}' is not the alias of a column-producing follow";
+
+            var inRow = follow.Select is null
+                ? column == "_id" || (tableResolver?.Invoke(follow.TargetTable)?.HasColumn(column) ?? false)
+                : follow.Select.Exists(s => s.Alias is null && s.Name == column);
+            if (inRow)
+                return null;
+
+            return follow.Select is null
+                ? $"column '{column}' does not exist on '{follow.TargetTable}'"
+                : $"column '{name}' is not in the result — add '{column}' to the select of follow '{prefix}'";
+        }
+
+        // Aliased follow-select columns are stored under their bare alias
+        if (follows.Exists(f => !f.IsFilterOnly && f.Select is not null && f.Select.Exists(s => s.Alias == name)))
+            return null;
+
+        if (!IsBaseResultCandidate(q, table, name))
+            return $"column '{name}' does not exist";
+        return IsColumnInProjection(q, name)
+            ? null
+            : $"column '{name}' is not in the joined rows — add it to the select before 'follow'";
+    }
+
+    /// <summary>Keys of a grouped row: group columns, 'count' or the aggregate alias, literals.</summary>
+    private static bool IsGroupedResultKey(GetQuery q, string name)
+    {
+        if (q.GroupBy is not null && q.GroupBy.Exists(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        var produced = q.Aggregate.HasValue ? q.AggregateAlias ?? AggregateName(q.Aggregate.Value) : "count";
+        if (produced.Equals(name, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return q.LiteralSelect?.Exists(l => l.Alias.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? false;
+    }
+
+    /// <summary>A table column, virtual column or base select/computed/literal alias.</summary>
+    private static bool IsBaseResultCandidate(GetQuery q, TableHandle table, string name)
+        => IsVirtualColumn(name) || table.HasColumn(name)
+           || (q.Select?.Exists(c => c.Alias is not null && c.Alias.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? false)
+           || (q.ComputedSelect?.Exists(c => c.Alias.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? false)
+           || (q.LiteralSelect?.Exists(l => l.Alias.Equals(name, StringComparison.OrdinalIgnoreCase)) ?? false);
 
     private static int CompareValues(object? a, object? b)
     {

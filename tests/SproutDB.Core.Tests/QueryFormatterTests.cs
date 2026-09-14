@@ -102,6 +102,22 @@ public class QueryFormatterTests
     }
 
     [Fact]
+    public void Get_SemiFollow_WithoutAlias_WithSubWhere()
+    {
+        var result = SproutQueryFormatter.Format("get users follow users._id -?> orders.user_id where orders.status = 'x' follow users._id -!> roles.user_id");
+        Assert.Equal(
+            "get users\n    follow users._id -?> orders.user_id\n        where orders.status = 'x'\n    follow users._id -!> roles.user_id",
+            result);
+    }
+
+    [Fact]
+    public void Get_DedupBy_OnNewLine()
+    {
+        var result = SproutQueryFormatter.Format("get orders order by amount desc dedup by user_id limit 5");
+        Assert.Equal("get orders\n    order by amount desc\n    dedup by user_id\n    limit 5", result);
+    }
+
+    [Fact]
     public void Get_Where_Then_Follow()
     {
         var result = SproutQueryFormatter.Format("get users where active = true follow users._id -> orders.user_id as orders");

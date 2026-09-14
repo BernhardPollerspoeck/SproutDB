@@ -44,6 +44,13 @@ internal sealed class GetQuery : IQuery
     public List<OrderByColumn>? OrderBy { get; init; }
 
     /// <summary>
+    /// Optional DEDUP BY columns: keeps only the first result row per distinct
+    /// key (in result order, i.e. after ORDER BY). Names refer to result keys.
+    /// Null means no dedup.
+    /// </summary>
+    public List<SelectColumn>? DedupBy { get; init; }
+
+    /// <summary>
     /// Optional row limit. Null means no limit.
     /// </summary>
     public int? Limit { get; init; }
@@ -228,12 +235,17 @@ internal enum JoinType : byte
     Left,   // ->?
     Right,  // ?->
     Outer,  // ?->?
+    Semi,   // -?>  source row once if a target row matches
+    Anti,   // -!>  source row if no target row matches
 }
 
 internal sealed class FollowClause
 {
     /// <summary>Source table name (e.g. "users").</summary>
     public required string SourceTable { get; init; }
+
+    public int SourceTablePosition { get; init; }
+    public int SourceTableLength { get; init; }
 
     /// <summary>Source column name (e.g. "_id").</summary>
     public required string SourceColumn { get; init; }
@@ -253,11 +265,17 @@ internal sealed class FollowClause
     public int TargetColumnPosition { get; init; }
     public int TargetColumnLength { get; init; }
 
-    /// <summary>Join type: Inner (->), Left (->?), Right (?->), Outer (?->?).</summary>
+    /// <summary>Join type: Inner (->), Left (->?), Right (?->), Outer (?->?), Semi (-?>), Anti (-!>).</summary>
     public JoinType JoinType { get; init; }
 
-    /// <summary>Alias for the nested result array (e.g. "orders").</summary>
-    public required string Alias { get; init; }
+    /// <summary>True for semi/anti follows — they filter source rows and add no target columns.</summary>
+    public bool IsFilterOnly => JoinType is JoinType.Semi or JoinType.Anti;
+
+    /// <summary>
+    /// Prefix for the target columns (e.g. "orders"). Always set for column-producing
+    /// follows; optional (null) for semi/anti follows, which add no columns.
+    /// </summary>
+    public string? Alias { get; init; }
 
     /// <summary>Optional SELECT projection for the target table columns.</summary>
     public List<SelectColumn>? Select { get; init; }

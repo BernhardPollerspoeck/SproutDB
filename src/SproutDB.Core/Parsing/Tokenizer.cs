@@ -104,7 +104,7 @@ internal static class Tokenizer
             {
                 var c1 = span[pos + 1];
 
-                // Join arrows: ?->? (4 chars), ?-> (3 chars), ->? (3 chars), -> (2 chars)
+                // Join arrows: ?->? (4 chars), ?-> / ->? / -?> / -!> (3 chars), -> (2 chars)
                 if (c == '?' && c1 == '-' && pos + 2 < span.Length && span[pos + 2] == '>')
                 {
                     if (pos + 3 < span.Length && span[pos + 3] == '?')
@@ -112,6 +112,11 @@ internal static class Tokenizer
                         tokens.Add(new Token(TokenType.ArrowOptBoth, pos, 4)); pos += 4; continue;
                     }
                     tokens.Add(new Token(TokenType.ArrowOptLeft, pos, 3)); pos += 3; continue;
+                }
+                // Semi/anti join arrows: -?> (match exists), -!> (no match)
+                if (c == '-' && (c1 == '?' || c1 == '!') && pos + 2 < span.Length && span[pos + 2] == '>')
+                {
+                    tokens.Add(new Token(c1 == '?' ? TokenType.ArrowSemi : TokenType.ArrowAnti, pos, 3)); pos += 3; continue;
                 }
                 if (c == '-' && c1 == '>')
                 {

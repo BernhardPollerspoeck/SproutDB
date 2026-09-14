@@ -148,8 +148,9 @@ internal static class GetParser
         int? size = null;
         ulong? after = null;
         var afterCursorToken = default(Token);
+        List<SelectColumn>? dedupBy = null;
 
-        if (!ParseTrailingClauses(ctx, ref where, ref isCount, ref groupBy, ref orderBy, ref limit, ref page, ref size, ref after, ref afterCursorToken))
+        if (!ParseTrailingClauses(ctx, ref where, ref isCount, ref groupBy, ref orderBy, ref limit, ref page, ref size, ref after, ref afterCursorToken, ref dedupBy))
             return ctx.Fail();
 
         // Optional: follow (join) clauses — zero or more
@@ -161,6 +162,17 @@ internal static class GetParser
             if (ctx.HasErrors) return ctx.Fail();
             if (followClause is not null)
             {
+                // A semi/anti follow adds no columns — nothing can be followed from it.
+                // The latest follow claiming the source name decides (aliases can be reused).
+                if (followClause.SourceTable != tableName
+                    && followClauses?.FindLast(f => (f.Alias ?? f.TargetTable) == followClause.SourceTable) is { IsFilterOnly: true } filterOnly)
+                {
+                    return ctx.Error(
+                        new Token(TokenType.Identifier, followClause.SourceTablePosition, followClause.SourceTableLength),
+                        ErrorCodes.SYNTAX_ERROR,
+                        $"cannot follow from '{followClause.SourceTable}' — a '{(filterOnly.JoinType is JoinType.Semi ? "-?>" : "-!>")}' follow adds no columns");
+                }
+
                 followClauses ??= [];
                 followClauses.Add(followClause);
             }
@@ -200,7 +212,7 @@ internal static class GetParser
         // ── Trailing clauses (post-follow) ────────────────────────
         // Same clauses again so users can write e.g.
         // "follow ... select ... where ... order by ... limit 50".
-        if (!ParseTrailingClauses(ctx, ref where, ref isCount, ref groupBy, ref orderBy, ref limit, ref page, ref size, ref after, ref afterCursorToken))
+        if (!ParseTrailingClauses(ctx, ref where, ref isCount, ref groupBy, ref orderBy, ref limit, ref page, ref size, ref after, ref afterCursorToken, ref dedupBy))
             return ctx.Fail();
 
         if (DescribeMisplacedClause(ctx, followClauses is not null) is { } misplaced)
@@ -224,6 +236,8 @@ internal static class GetParser
                 conflict = "'after' cannot be combined with 'group by'";
             else if (isDistinct)
                 conflict = "'after' cannot be combined with 'distinct'";
+            else if (dedupBy is not null)
+                conflict = "'after' cannot be combined with 'dedup by'";
             else if (followClauses is not null)
                 conflict = "'after' cannot be combined with 'follow'";
             else if (orderBy is not null
@@ -232,6 +246,20 @@ internal static class GetParser
 
             if (conflict is not null)
                 return ctx.Error(afterCursorToken, ErrorCodes.SYNTAX_ERROR, conflict);
+        }
+
+        // 'dedup by' keeps whole result rows — grouping/aggregation have no rows to keep
+        if (dedupBy is { Count: > 0 })
+        {
+            string? conflict = null;
+            if (groupBy is not null)
+                conflict = "'dedup by' cannot be combined with 'group by'";
+            else if (aggregate is not null)
+                conflict = "'dedup by' cannot be combined with aggregate functions";
+
+            if (conflict is not null)
+                return ctx.Error(new Token(TokenType.Identifier, dedupBy[0].Position, dedupBy[0].Length),
+                    ErrorCodes.SYNTAX_ERROR, conflict);
         }
 
         return ParseResult.Ok(new GetQuery
@@ -244,6 +272,7 @@ internal static class GetParser
             IsDistinct = isDistinct,
             Where = where,
             OrderBy = orderBy,
+            DedupBy = dedupBy,
             Limit = limit,
             IsCount = isCount,
             Page = page,
@@ -305,10 +334,10 @@ internal static class GetParser
         if (ctx.IsKeyword(token, "where"))
             return "'where' may appear only once — combine conditions with 'and' / 'or'";
 
-        foreach (var clause in (ReadOnlySpan<string>)["order", "group", "limit", "page", "count", "after"])
+        foreach (var clause in (ReadOnlySpan<string>)["order", "group", "dedup", "limit", "page", "count", "after"])
         {
             if (ctx.IsKeyword(token, clause))
-                return $"'{(clause is "order" or "group" ? clause + " by" : clause)}' may appear only once";
+                return $"'{(clause is "order" or "group" or "dedup" ? clause + " by" : clause)}' may appear only once";
         }
 
         return null;
@@ -336,7 +365,7 @@ internal static class GetParser
                 && !ctx.IsKeyword(next, "order") && !ctx.IsKeyword(next, "limit")
                 && !ctx.IsKeyword(next, "count") && !ctx.IsKeyword(next, "group")
                 && !ctx.IsKeyword(next, "page") && !ctx.IsKeyword(next, "follow")
-                && !ctx.IsKeyword(next, "after"))
+                && !ctx.IsKeyword(next, "after") && !ctx.IsKeyword(next, "dedup"))
             {
                 ctx.Advance();
                 return fn;
@@ -707,7 +736,7 @@ internal static class GetParser
 
     // ── Select ────────────────────────────────────────────────
 
-    private static readonly string[] SelectStopKeywords = ["distinct", "where", "order", "limit", "count", "group", "page", "follow", "after"];
+    private static readonly string[] SelectStopKeywords = ["distinct", "where", "order", "limit", "count", "group", "page", "follow", "after", "dedup"];
 
     private static (List<SelectColumn> Columns, List<ComputedColumn>? Computed, List<LiteralColumn>? Literals)
         ParseSelectList(ParserContext ctx, bool isExclude)
@@ -1174,7 +1203,7 @@ internal static class GetParser
     {
         return ctx.IsKeyword(token, "order") || ctx.IsKeyword(token, "limit")
             || ctx.IsKeyword(token, "page") || ctx.IsKeyword(token, "follow")
-            || ctx.IsKeyword(token, "after");
+            || ctx.IsKeyword(token, "after") || ctx.IsKeyword(token, "dedup");
     }
 
     // ── Trailing clauses (where/count/group/order/limit/page) ──
@@ -1199,7 +1228,8 @@ internal static class GetParser
         ref int? page,
         ref int? size,
         ref ulong? after,
-        ref Token afterCursorToken)
+        ref Token afterCursorToken,
+        ref List<SelectColumn>? dedupBy)
     {
         while (ctx.Peek().Type != TokenType.Eof)
         {
@@ -1243,6 +1273,19 @@ internal static class GetParser
                     return false;
                 }
                 orderBy = ParseOrderByList(ctx);
+                if (ctx.HasErrors) return false;
+                continue;
+            }
+
+            if (dedupBy is null && ctx.IsKeyword(token, "dedup"))
+            {
+                ctx.Advance();
+                if (!ctx.MatchKeyword("by"))
+                {
+                    ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected 'by' after 'dedup'");
+                    return false;
+                }
+                dedupBy = ParseDedupByList(ctx);
                 if (ctx.HasErrors) return false;
                 continue;
             }
@@ -1350,7 +1393,7 @@ internal static class GetParser
         var srcCol = ctx.GetLowercaseText(srcColToken);
         ctx.Advance();
 
-        // -> / ->? / ?-> / ?->?
+        // -> / ->? / ?-> / ?->? / -?> / -!>
         var arrowToken = ctx.Peek();
         var joinType = arrowToken.Type switch
         {
@@ -1358,14 +1401,17 @@ internal static class GetParser
             TokenType.ArrowOptRight => JoinType.Left,
             TokenType.ArrowOptLeft => JoinType.Right,
             TokenType.ArrowOptBoth => JoinType.Outer,
+            TokenType.ArrowSemi => JoinType.Semi,
+            TokenType.ArrowAnti => JoinType.Anti,
             _ => (JoinType?)null,
         };
         if (joinType is null)
         {
-            ctx.AddError(arrowToken, ErrorCodes.SYNTAX_ERROR, "expected '->', '->?', '?->' or '?->?' after source column");
+            ctx.AddError(arrowToken, ErrorCodes.SYNTAX_ERROR, "expected '->', '->?', '?->', '?->?', '-?>' or '-!>' after source column");
             return null;
         }
         ctx.Advance();
+        var isFilterOnly = joinType is JoinType.Semi or JoinType.Anti;
 
         // target_table.target_col
         var tgtTableToken = ctx.Peek();
@@ -1393,21 +1439,25 @@ internal static class GetParser
         var tgtCol = ctx.GetLowercaseText(tgtColToken);
         ctx.Advance();
 
-        // as alias
-        if (!ctx.MatchKeyword("as"))
+        // as alias — mandatory for column-producing follows, optional for semi/anti
+        // (they add no columns; the alias only names the where prefix)
+        string? alias = null;
+        if (ctx.Peek().Type != TokenType.Eof && ctx.MatchKeyword("as"))
+        {
+            var aliasToken = ctx.Peek();
+            if (aliasToken.Type != TokenType.Identifier)
+            {
+                ctx.AddError(aliasToken, ErrorCodes.SYNTAX_ERROR, "expected alias name after 'as'");
+                return null;
+            }
+            alias = ctx.GetLowercaseText(aliasToken);
+            ctx.Advance();
+        }
+        else if (!isFilterOnly)
         {
             ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR, "expected 'as' after target column");
             return null;
         }
-
-        var aliasToken = ctx.Peek();
-        if (aliasToken.Type != TokenType.Identifier)
-        {
-            ctx.AddError(aliasToken, ErrorCodes.SYNTAX_ERROR, "expected alias name after 'as'");
-            return null;
-        }
-        var alias = ctx.GetLowercaseText(aliasToken);
-        ctx.Advance();
 
         // Optional: select clause for this follow (before where)
         // Lookahead: if select is followed by alias.col (dot notation), it's a post-follow select, not follow-level.
@@ -1415,6 +1465,12 @@ internal static class GetParser
         if (ctx.Peek().Type != TokenType.Eof && ctx.IsKeyword(ctx.Peek(), "select")
             && !IsPostFollowSelect(ctx))
         {
+            if (isFilterOnly)
+            {
+                ctx.AddError(ctx.Peek(), ErrorCodes.SYNTAX_ERROR,
+                    $"'select' is not allowed on a '{(joinType is JoinType.Semi ? "-?>" : "-!>")}' follow — it adds no target columns; select base columns before 'follow'");
+                return null;
+            }
             ctx.Advance(); // consume "select"
             followSelect = ParseFollowSelectList(ctx);
             if (ctx.HasErrors) return null;
@@ -1431,6 +1487,8 @@ internal static class GetParser
         return new FollowClause
         {
             SourceTable = srcTable,
+            SourceTablePosition = srcTableToken.Start,
+            SourceTableLength = srcTableToken.Length,
             SourceColumn = srcCol,
             SourceColumnPosition = srcColToken.Start,
             SourceColumnLength = srcColToken.Length,
@@ -1618,6 +1676,55 @@ internal static class GetParser
     private static bool IsFollowWhereStopToken(ParserContext ctx, Token token)
     {
         return token.Type == TokenType.Identifier && ctx.IsKeyword(token, "follow");
+    }
+
+    /// <summary>
+    /// Parses: col [, alias.col ...] after 'dedup by'. Names refer to result keys,
+    /// so dot notation for followed columns is allowed (same as ORDER BY).
+    /// </summary>
+    private static List<SelectColumn> ParseDedupByList(ParserContext ctx)
+    {
+        var columns = new List<SelectColumn>();
+
+        while (true)
+        {
+            var token = ctx.Peek();
+            if (token.Type != TokenType.Identifier)
+            {
+                ctx.AddError(token, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLUMN_NAME);
+                return columns;
+            }
+
+            var name = ctx.GetLowercaseText(token);
+            var length = token.Length;
+            ctx.Advance();
+
+            if (ctx.Peek().Type == TokenType.Dot)
+            {
+                ctx.Advance();
+                var subToken = ctx.Peek();
+                if (subToken.Type != TokenType.Identifier)
+                {
+                    ctx.AddError(subToken, ErrorCodes.SYNTAX_ERROR, ErrorMessages.EXPECTED_COLUMN_NAME);
+                    return columns;
+                }
+                name = $"{name}.{ctx.GetLowercaseText(subToken)}";
+                length = subToken.Start + subToken.Length - token.Start;
+                ctx.Advance();
+            }
+
+            columns.Add(new SelectColumn(name, token.Start, length));
+
+            if (ctx.Peek().Type == TokenType.Comma)
+            {
+                ctx.Advance();
+                continue;
+            }
+
+            break;
+        }
+
+        return columns;
     }
 
     private static List<OrderByColumn> ParseOrderByList(ParserContext ctx)

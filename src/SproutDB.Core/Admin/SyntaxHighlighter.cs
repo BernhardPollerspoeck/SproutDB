@@ -19,7 +19,7 @@ internal static class SyntaxHighlighter
 
     private static readonly HashSet<string> Clauses = new(StringComparer.OrdinalIgnoreCase)
     {
-        "from", "where", "order", "by", "limit", "offset", "as",
+        "from", "where", "order", "dedup", "by", "limit", "offset", "as",
         "select", "follow", "page", "database", "table", "column",
         "index", "on", "to", "apikey", "set", "when", "exists", "expect",
     };

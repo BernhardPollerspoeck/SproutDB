@@ -7,7 +7,7 @@ public static class SproutQueryFormatter
     private static readonly HashSet<string> GetClauses = new(StringComparer.OrdinalIgnoreCase)
     {
         "where", "select", "order", "group", "limit", "page",
-        "follow", "distinct", "count", "sum", "avg", "min", "max",
+        "follow", "distinct", "count", "sum", "avg", "min", "max", "dedup",
     };
 
     private static readonly HashSet<string> Aggregates = new(StringComparer.OrdinalIgnoreCase)

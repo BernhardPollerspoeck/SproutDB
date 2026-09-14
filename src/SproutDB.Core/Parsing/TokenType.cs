@@ -38,4 +38,6 @@ internal enum TokenType : byte
     ArrowOptLeft,   // ?->  (right join)
     ArrowOptBoth,   // ?->? (outer join)
     Semicolon,
+    ArrowSemi,      // -?>  (semi join)
+    ArrowAnti,      // -!>  (anti join)
 }
