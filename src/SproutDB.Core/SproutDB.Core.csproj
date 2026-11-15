@@ -25,6 +25,10 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.*" />
     <!-- Remote client: OnChange over the /sproutdb/changes hub -->
     <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="11.0.*" />
+    <!-- Admin UI: /_framework/blazor.web.js. Since .NET 10 the SDK adds it only to apps with own .razor
+         files (RequiresAspNetWebAssets). This reference flows to every app that references SproutDB, as
+         package or project; the package's buildTransitive targets serve the script in web apps only. -->
+    <PackageReference Include="Microsoft.AspNetCore.App.Internal.Assets" Version="11.0.*" />
     <ProjectReference Include="../SproutDB.Analyzers/SproutDB.Analyzers.csproj"
                       ReferenceOutputAssembly="false"
                       PrivateAssets="all" />

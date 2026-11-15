@@ -297,7 +297,7 @@ upsert sessions {token: 'abc123', ttl: 1h}
 
 **Backup & Restore** — `backup` writes the whole database into a ZIP file, `restore 'path/to/backup.zip'` brings it back. The Admin UI offers the same as download and upload.
 
-**Admin UI** — `builder.Services.AddSproutDBAdmin()` plus `app.MapSproutDBAdmin()` gives you a built-in web UI at `/sproutdb/admin`: query editor, schema browser, monitoring and API key management.
+**Admin UI** — `builder.Services.AddSproutDBAdmin()` plus `app.MapSproutDBAdmin()` gives you a built-in web UI at `/sproutdb/admin`: query editor, schema browser, monitoring and API key management. The package brings everything the UI needs, the Blazor script `/_framework/blazor.web.js` included: the host app needs no `.razor` files and no extra project settings.
 
 **Remote Client** — `AddSproutDBClient(o => o.BaseAddress = ...)` registers the same `ISproutServer` / `ISproutDatabase` interfaces against a remote SproutDB server over HTTP. Your code stays the same whether the database is embedded or across the network.
 
