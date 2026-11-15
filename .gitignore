@@ -416,3 +416,6 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Automated tests (tests/e2e): results of the last run
+tests/e2e/results/

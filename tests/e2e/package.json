@@ -1,0 +1,11 @@
+{
+  "name": "sproutdb-e2e",
+  "private": true,
+  "description": "Automated smoke and UI tests for the SproutDB sandbox (HTTP API and Admin UI).",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1"
+  }
+}
