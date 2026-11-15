@@ -12,8 +12,6 @@ cd "$(dirname "$0")/.."
 REPO_ROOT="$(pwd)"
 RESULTS="$REPO_ROOT/tests/results"
 SANDBOX_DIR="$REPO_ROOT/sandbox/SproutDB.Sandbox"
-SANDBOX_DLL="$SANDBOX_DIR/bin/Release/net9.0/SproutDB.Sandbox.dll"
-CLIENT_DLL="$REPO_ROOT/sandbox/SproutDB.TestClient/bin/Release/net9.0/SproutDB.TestClient.dll"
 CLIENT_PORT="${SPROUTDB_CLIENT_PORT:-5392}"
 CLIENT_URL="http://127.0.0.1:$CLIENT_PORT"
 
@@ -35,6 +33,11 @@ if ! dotnet build SproutDB.slnx --configuration Release --nologo -v q; then
   echo "The build failed, no tests ran." >> "$RESULTS/report.md"
   exit 1
 fi
+# The build output paths come from MSBuild, so a change of the target framework does not break them.
+target_path() { dotnet msbuild "$1" -getProperty:TargetPath -p:Configuration=Release; }
+SANDBOX_DLL="$(target_path "$SANDBOX_DIR/SproutDB.Sandbox.csproj")"
+CLIENT_DLL="$(target_path "$REPO_ROOT/sandbox/SproutDB.TestClient/SproutDB.TestClient.csproj")"
+export SPROUTDB_SANDBOX_DLL="$SANDBOX_DLL"
 
 echo "== Suite unit: dotnet test"
 unit_status=0

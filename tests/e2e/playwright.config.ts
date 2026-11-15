@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,6 +11,14 @@ const baseURL = `http://127.0.0.1:${port}`;
 const resultsDir = process.env.SPROUTDB_E2E_RESULTS ?? path.join(repoRoot, 'tests/results');
 // The sandbox seeds its garden database on a fresh data directory.
 const dataDir = process.env.SPROUTDB_E2E_DATA ?? mkdtempSync(path.join(os.tmpdir(), 'sproutdb-e2e-'));
+// The sandbox DLL of the Release build. tests/run.sh passes it; otherwise MSBuild names it,
+// so the path follows the project's target framework.
+const sandboxProject = path.join(repoRoot, 'sandbox/SproutDB.Sandbox/SproutDB.Sandbox.csproj');
+const sandboxDll = (process.env.SPROUTDB_SANDBOX_DLL ??= execFileSync(
+  'dotnet',
+  ['msbuild', sandboxProject, '-getProperty:TargetPath', '-p:Configuration=Release'],
+  { encoding: 'utf8' },
+).trim());
 
 export default defineConfig({
   testDir: './tests',
@@ -29,7 +38,7 @@ export default defineConfig({
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } } }],
   webServer: {
-    command: `dotnet "${path.join(repoRoot, 'sandbox/SproutDB.Sandbox/bin/Release/net9.0/SproutDB.Sandbox.dll')}" --urls=${baseURL} --data="${dataDir}"`,
+    command: `dotnet "${sandboxDll}" --urls=${baseURL} --data="${dataDir}"`,
     cwd: path.join(repoRoot, 'sandbox/SproutDB.Sandbox'),
     // Development serves the Admin UI's static web assets (CSS, JS) from the build output.
     env: { ASPNETCORE_ENVIRONMENT: 'Development' },

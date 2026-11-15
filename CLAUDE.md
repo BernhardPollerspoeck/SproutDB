@@ -7,7 +7,7 @@
 
 ## Automated Tests
 
-`bash tests/run.sh` runs all automated tests (also the command in `.connbridge/autotest.json`). It builds `SproutDB.slnx` in Release and runs three suites one after the other; every suite runs even if an earlier one failed, and any failed test makes the exit code non-zero. No Docker, no root; needs .NET 9 SDK, Node.js and curl.
+`bash tests/run.sh` runs all automated tests (also the command in `.connbridge/autotest.json`). It builds `SproutDB.slnx` in Release and runs three suites one after the other; every suite runs even if an earlier one failed, and any failed test makes the exit code non-zero. No Docker, no root; needs the .NET SDK of the projects' target framework, Node.js and curl.
 
 1. **Unit and integration tests** (xUnit, `tests/SproutDB.Core.Tests`): `dotnet test SproutDB.slnx`, the same as the CI. Alone: `dotnet test SproutDB.slnx`.
 2. **End-to-end test client** (`sandbox/SproutDB.TestClient`) against the sandbox, started on `http://127.0.0.1:5392` (`SPROUTDB_CLIENT_PORT`): scenario `features`, then `stream` with a hard kill of the sandbox after 3 s, a restart on the same data and `verify` (WAL replay keeps every acknowledged write).
