@@ -14,9 +14,8 @@ public class InProcessChangeTests : IDisposable
             "create table users (name string 100, email string 200)",
             "testdb");
 
-        // Wait for any pending change events from setup to be dispatched
-        // before tests subscribe their callbacks.
-        Thread.Sleep(100);
+        // Let the change events from setup be dispatched before tests subscribe their callbacks.
+        DrainChangeEvents();
     }
 
     public void Dispose()
@@ -35,7 +34,7 @@ public class InProcessChangeTests : IDisposable
 
         _engine.ExecuteOne("upsert users {name: 'John', email: 'john@test.com'}", "testdb");
 
-        WaitForDispatch();
+        DrainChangeEvents();
 
         Assert.Single(received);
         Assert.Equal(SproutOperation.Upsert, received[0].Operation);
@@ -47,14 +46,14 @@ public class InProcessChangeTests : IDisposable
     {
         var db = _engine.SelectDatabase("testdb");
         _engine.ExecuteOne("upsert users {name: 'John', email: 'john@test.com'}", "testdb");
-        WaitForDispatch(); // let upsert event drain before subscribing
+        DrainChangeEvents(); // let the upsert event be dispatched before subscribing
 
         var received = new List<SproutResponse>();
         db.OnChange("users", r => received.Add(r));
 
         _engine.ExecuteOne("delete users where _id = 1", "testdb");
 
-        WaitForDispatch();
+        DrainChangeEvents();
 
         Assert.Single(received);
         Assert.Equal(SproutOperation.Delete, received[0].Operation);
@@ -69,7 +68,7 @@ public class InProcessChangeTests : IDisposable
 
         _engine.ExecuteOne("get users", "testdb");
 
-        WaitForDispatch();
+        DrainChangeEvents();
 
         Assert.Empty(received);
     }
@@ -85,7 +84,7 @@ public class InProcessChangeTests : IDisposable
             "create table orders (product string 100)",
             "testdb");
 
-        WaitForDispatch();
+        DrainChangeEvents();
 
         Assert.Single(received);
         Assert.Equal(SproutOperation.CreateTable, received[0].Operation);
@@ -102,7 +101,7 @@ public class InProcessChangeTests : IDisposable
 
         _engine.ExecuteOne("add column users.score sint", "testdb");
 
-        WaitForDispatch();
+        DrainChangeEvents();
 
         // Both the table callback and the _schema callback should fire
         Assert.Single(tableReceived);
@@ -117,12 +116,12 @@ public class InProcessChangeTests : IDisposable
         var sub = db.OnChange("users", r => received.Add(r));
 
         _engine.ExecuteOne("upsert users {name: 'John', email: 'john@test.com'}", "testdb");
-        WaitForDispatch();
+        DrainChangeEvents();
 
         sub.Dispose();
 
         _engine.ExecuteOne("upsert users {name: 'Jane', email: 'jane@test.com'}", "testdb");
-        WaitForDispatch();
+        DrainChangeEvents();
 
         Assert.Single(received);
     }
@@ -139,7 +138,7 @@ public class InProcessChangeTests : IDisposable
 
         _engine.ExecuteOne("upsert users {name: 'John'}", "otherdb");
 
-        WaitForDispatch();
+        DrainChangeEvents();
 
         Assert.Empty(received);
     }
@@ -154,7 +153,7 @@ public class InProcessChangeTests : IDisposable
         // Upsert to non-existent table → should error, no notification
         _engine.ExecuteOne("upsert nonexistent {name: 'John'}", "testdb");
 
-        WaitForDispatch();
+        DrainChangeEvents();
 
         Assert.Empty(received);
     }
@@ -167,22 +166,26 @@ public class InProcessChangeTests : IDisposable
 
         _engine.ExecuteOne("create database", "newdb");
 
-        WaitForDispatch(() => received.Count > 0);
+        DrainChangeEvents();
 
         Assert.Single(received);
         Assert.Equal(SproutOperation.CreateDatabase, received[0].Operation);
     }
 
-    private static void WaitForDispatch(Func<bool>? condition = null, int timeoutMs = 2000)
+    /// <summary>
+    /// Waits until every change event enqueued so far has been dispatched to the callbacks.
+    /// The engine enqueues its events before a write returns, and the notifier dispatches
+    /// them in order on a single loop: once a marker enqueued now has arrived, all earlier
+    /// events have been delivered. A fixed sleep is not enough on machines with few cores,
+    /// where the first dispatch can take far longer than 100 ms.
+    /// </summary>
+    private void DrainChangeEvents()
     {
-        if (condition is null)
+        using var drained = new ManualResetEventSlim();
+        using (_engine.ChangeNotifier.Subscribe("__drain", "__drain", _ => drained.Set()))
         {
-            Thread.Sleep(100);
-            return;
+            _engine.ChangeNotifier.Enqueue("__drain", "__drain", new SproutResponse { Operation = SproutOperation.Upsert });
+            Assert.True(drained.Wait(TimeSpan.FromSeconds(10)), "change events were not dispatched within 10 s");
         }
-
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        while (!condition() && sw.ElapsedMilliseconds < timeoutMs)
-            Thread.Sleep(10);
     }
 }
