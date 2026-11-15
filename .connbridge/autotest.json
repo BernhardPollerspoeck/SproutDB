@@ -1,5 +1,5 @@
 {
-  "command": "bash tests/e2e/run.sh",
-  "results": "tests/e2e/results",
-  "timeoutMinutes": 15
+  "command": "bash tests/run.sh",
+  "results": "tests/results",
+  "timeoutMinutes": 20
 }

@@ -1,12 +1,15 @@
 import { defineConfig, devices } from '@playwright/test';
+import { mkdtempSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
-// Started by run.sh, which builds the sandbox and passes a fresh data directory.
+// Started by tests/run.sh, which builds the sandbox first and passes the results and data directories.
+const repoRoot = path.resolve(__dirname, '../..');
 const port = process.env.SPROUTDB_E2E_PORT ?? '5391';
 const baseURL = `http://127.0.0.1:${port}`;
-const repoRoot = path.resolve(__dirname, '../..');
-const resultsDir = process.env.SPROUTDB_E2E_RESULTS ?? path.join(__dirname, 'results');
-const dataDir = process.env.SPROUTDB_E2E_DATA ?? path.join(resultsDir, 'data');
+const resultsDir = process.env.SPROUTDB_E2E_RESULTS ?? path.join(repoRoot, 'tests/results');
+// The sandbox seeds its garden database on a fresh data directory.
+const dataDir = process.env.SPROUTDB_E2E_DATA ?? mkdtempSync(path.join(os.tmpdir(), 'sproutdb-e2e-'));
 
 export default defineConfig({
   testDir: './tests',

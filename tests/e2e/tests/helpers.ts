@@ -1,7 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import path from 'node:path';
 
-const resultsDir = process.env.SPROUTDB_E2E_RESULTS ?? path.join(__dirname, '..', 'results');
+const resultsDir = process.env.SPROUTDB_E2E_RESULTS ?? path.join(__dirname, '../../results');
 
 /** The sandbox's master key (sandbox/SproutDB.Sandbox/Program.cs). */
 export const masterKey = 'sdb_ak_1234';
