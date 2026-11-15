@@ -16,7 +16,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '11.0.x'
 
       - name: Restore
         run: dotnet restore SproutDB.slnx
@@ -39,7 +39,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '11.0.x'
 
       - name: Pack
         run: dotnet pack src/SproutDB.Core/SproutDB.Core.csproj --configuration Release -p:VersionSuffix= -p:Version=$(grep -oP '(?<=<VersionPrefix>)[^<]+' src/SproutDB.Core/SproutDB.Core.csproj).${{ github.run_number }} --output ./nupkg
