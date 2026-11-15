@@ -1,9 +1,9 @@
 // Writes tests/results/report.md: per suite the passed, failed and skipped tests, then the failures.
-// Usage: node write-report.mjs <resultsDir> <unitExitCode> <clientExitCode> <e2eExitCode>
+// Usage: node write-report.mjs <resultsDir> <unitExitCode> <clientExitCode> <e2eExitCode> <packageExitCode>
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-const [, , resultsDir, unitExit, clientExit, e2eExit] = process.argv;
+const [, , resultsDir, unitExit, clientExit, e2eExit, packageExit] = process.argv;
 const suites = [];
 const stripAnsi = (s) => s.replace(/\u001b\[[0-9;]*m/g, '');
 const cell = (s) => s.replaceAll('|', '\\|');
@@ -39,9 +39,9 @@ const cell = (s) => s.replaceAll('|', '\\|');
   suites.push({ name: 'End-to-end test client (sandbox/SproutDB.TestClient)', exit: clientExit, passed, failed: failures.length, skipped: 0, failures });
 }
 
-// 3. Playwright: its JSON report
-{
-  const file = path.join(resultsDir, 'results.json');
+// 3. and 4. Playwright: their JSON reports
+const playwrightSuite = (name, exit, reportFile) => {
+  const file = path.join(resultsDir, reportFile);
   const counts = { passed: 0, failed: 0, skipped: 0 };
   const failures = [];
   const walk = (suite, titles) => {
@@ -64,7 +64,17 @@ const cell = (s) => s.replaceAll('|', '\\|');
   if (existsSync(file)) {
     for (const suite of JSON.parse(readFileSync(file, 'utf8')).suites ?? []) walk(suite, []);
   }
-  suites.push({ name: 'HTTP smoke and Admin UI tests (Playwright)', exit: e2eExit, ...counts, failures });
+  return { name, exit, ...counts, failures };
+};
+suites.push(playwrightSuite('HTTP smoke and Admin UI tests (Playwright)', e2eExit, 'results.json'));
+
+// 4. The app on the SproutDB package: without a Playwright report, packing or building failed.
+{
+  const suite = playwrightSuite('Admin UI in an app on the SproutDB package (Playwright)', packageExit, 'package-results.json');
+  if (packageExit !== '0' && !existsSync(path.join(resultsDir, 'package-results.json'))) {
+    suite.failures.push('packing SproutDB or building the app failed, see `package/build.log`');
+  }
+  suites.push(suite);
 }
 
 const result = (s) => (s.exit === '0' ? 'passed' : s.failed > 0 ? 'failed' : `failed (exit code ${s.exit})`);
@@ -83,7 +93,8 @@ for (const s of suites.filter((x) => x.failures.length > 0)) {
 }
 lines.push(
   'Screenshots are grouped by feature in the subfolders of this folder. Videos and traces of failed',
-  'Playwright tests are under `test-output`, the TRX files under `unit`, the client log under `client`.',
+  'Playwright tests are under `test-output`, the TRX files under `unit`, the client log under `client`,',
+  'the build log of the app on the SproutDB package under `package`.',
   '',
 );
 writeFileSync(path.join(resultsDir, 'report.md'), lines.join('\n'));

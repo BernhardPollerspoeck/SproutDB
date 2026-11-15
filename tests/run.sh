@@ -4,8 +4,12 @@
 #   2. client   the end-to-end test client (sandbox/SproutDB.TestClient) against a started sandbox:
 #               "features", then "stream" + hard kill of the sandbox + restart + "verify" (WAL replay)
 #   3. e2e      Playwright: HTTP smoke tests and Admin UI tests in headless Chromium (tests/e2e)
+#   4. package  packs SproutDB into a local package folder, builds and publishes a minimal app against
+#               the package (tests/package-app) and runs Playwright against its Admin UI, built
+#               (Development) and published (Production)
 # Every suite runs even if an earlier one failed; any failure makes the exit code non-zero.
-# Results: tests/results (report.md, screenshots by feature, TRX, client logs, videos/traces of failures)
+# Results: tests/results (report.md, screenshots by feature, TRX, client logs, the package app's
+#          build log, videos/traces of failures)
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -94,7 +98,20 @@ e2e_status=0
   SPROUTDB_E2E_RESULTS="$RESULTS" SPROUTDB_E2E_DATA="$WORK/e2e-data" npx playwright test
 ) || e2e_status=$?
 
-node tests/write-report.mjs "$RESULTS" "$unit_status" "$client_status" "$e2e_status" || true
+echo "== Suite package: the Admin UI in an app that uses the SproutDB NuGet package"
+mkdir -p "$RESULTS/package"
+package_status=0
+(
+  if ! bash tests/package-app/build.sh "$WORK/package-app" > "$RESULTS/package/build.log" 2>&1; then
+    tail -n 20 "$RESULTS/package/build.log"
+    echo "packing SproutDB or building the app failed, see package/build.log"
+    exit 1
+  fi
+  cd tests/e2e &&
+  SPROUTDB_E2E_RESULTS="$RESULTS" SPROUTDB_PACKAGE_APP_DIR="$WORK/package-app" npx playwright test --config playwright.package.config.ts
+) || package_status=$?
+
+node tests/write-report.mjs "$RESULTS" "$unit_status" "$client_status" "$e2e_status" "$package_status" || true
 cat "$RESULTS/report.md"
 
-[ "$unit_status" -eq 0 ] && [ "$client_status" -eq 0 ] && [ "$e2e_status" -eq 0 ]
+[ "$unit_status" -eq 0 ] && [ "$client_status" -eq 0 ] && [ "$e2e_status" -eq 0 ] && [ "$package_status" -eq 0 ]
