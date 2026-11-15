@@ -7,7 +7,6 @@ test.describe('Admin UI: Schema', () => {
     await expect(page.getByText('Select a database')).toBeVisible();
     await page.locator('.schema-toolbar .query-db-select').selectOption('garden');
     await expect(page.locator('.schema-table-name', { hasText: /^plants$/ })).toBeVisible();
-    await screenshot(page, 'schema', '1-garden-tables');
   });
 
   test('expands a table and lists its columns', async ({ page }) => {
@@ -15,7 +14,7 @@ test.describe('Admin UI: Schema', () => {
     await page.locator('.schema-toolbar .query-db-select').selectOption('garden');
     await page.locator('.schema-table-header').filter({ has: page.locator('.schema-table-name', { hasText: /^plants$/ }) }).click();
     await expect(page.locator('.schema-columns').first()).toContainText('species');
-    await screenshot(page, 'schema', '2-plants-columns');
+    await screenshot(page, 'schema', '1-table-columns');
   });
 });
 
@@ -40,6 +39,5 @@ test.describe('Admin UI: Administration', () => {
     await openAdmin(page, '/sproutdb/admin/settings');
     await page.locator('.admin-card', { hasText: 'Export Database' }).click();
     await expect(page.locator('.admin-panel-header')).toContainText('Export Database');
-    await screenshot(page, 'admin', '2-export-panel');
   });
 });
