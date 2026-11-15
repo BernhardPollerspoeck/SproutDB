@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Razor">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -22,9 +22,9 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.*" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="11.0.*" />
     <!-- Remote client: OnChange over the /sproutdb/changes hub -->
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.*" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="11.0.*" />
     <ProjectReference Include="../SproutDB.Analyzers/SproutDB.Analyzers.csproj"
                       ReferenceOutputAssembly="false"
                       PrivateAssets="all" />
