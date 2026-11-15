@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- A minimal app that hosts SproutDB from the NuGet package, as a consumer would.
+       Built by tests/package-app/build.sh against a package packed from this repository;
+       not part of SproutDB.slnx. -->
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SproutDB" Version="$(SproutDBPackageVersion)" />
+  </ItemGroup>
+
+</Project>

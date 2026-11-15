@@ -1,0 +1,5 @@
+{
+  "command": "bash tests/run.sh",
+  "results": "tests/results",
+  "timeoutMinutes": 20
+}

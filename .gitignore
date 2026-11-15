@@ -416,3 +416,6 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Automated tests (tests/run.sh): results of the last run
+tests/results/
